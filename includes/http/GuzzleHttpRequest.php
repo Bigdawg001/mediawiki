@@ -19,11 +19,14 @@
  */
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Handler\CurlHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\MessageFormatter;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
+use MediaWiki\Status\Status;
 use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\StreamInterface;
 use Psr\Log\NullLogger;
 
 /**
@@ -43,7 +46,9 @@ use Psr\Log\NullLogger;
 class GuzzleHttpRequest extends MWHttpRequest {
 	public const SUPPORTS_FILE_POSTS = true;
 
+	/** @var callable|null */
 	protected $handler = null;
+	/** @var StreamInterface|null */
 	protected $sink = null;
 	/** @var array */
 	protected $guzzleOptions = [ 'http_errors' => false ];
@@ -53,12 +58,12 @@ class GuzzleHttpRequest extends MWHttpRequest {
 	 *
 	 * @param string $url Url to use. If protocol-relative, will be expanded to an http:// URL
 	 * @param array $options (optional) extra params to pass (see HttpRequestFactory::create())
-	 * @param string $caller The method making this request, for profiling
+	 * @param string $caller The method making this request, for profiling @phan-mandatory-param
 	 * @param Profiler|null $profiler An instance of the profiler for profiling, or null
 	 * @throws Exception
 	 */
 	public function __construct(
-		$url, array $options = [], $caller = __METHOD__, Profiler $profiler = null
+		$url, array $options = [], $caller = __METHOD__, ?Profiler $profiler = null
 	) {
 		parent::__construct( $url, $options, $caller, $profiler );
 
@@ -88,7 +93,6 @@ class GuzzleHttpRequest extends MWHttpRequest {
 	 * This function overrides any 'sink' or 'callback' constructor option.
 	 *
 	 * @param callable|null $callback
-	 * @throws InvalidArgumentException
 	 */
 	public function setCallback( $callback ) {
 		$this->sink = null;
@@ -103,7 +107,6 @@ class GuzzleHttpRequest extends MWHttpRequest {
 	 * option to override the 'callback' constructor option.
 	 *
 	 * @param callable|null $callback
-	 * @throws InvalidArgumentException
 	 */
 	protected function doSetCallback( $callback ) {
 		if ( !$this->sink ) {
@@ -187,7 +190,7 @@ class GuzzleHttpRequest extends MWHttpRequest {
 				// TODO {error} will be 'NULL' on success which is unfortunate, but
 				//   doesn't seem fixable without a custom formatter. Same for using
 				//   PSR-3 variable replacement instead of raw strings.
-				'[{ts}] {method} {uri} HTTP/{version} - {code} {error}'
+				'{method} {uri} HTTP/{version} - {code} {error}'
 			) ), 'logger' );
 		}
 
@@ -270,11 +273,8 @@ class GuzzleHttpRequest extends MWHttpRequest {
 		parent::prepare();
 	}
 
-	/**
-	 * @return bool
-	 */
-	protected function usingCurl() {
-		return ( $this->handler && is_a( $this->handler, 'GuzzleHttp\Handler\CurlHandler' ) ) ||
+	protected function usingCurl(): bool {
+		return $this->handler instanceof CurlHandler ||
 			( !$this->handler && extension_loaded( 'curl' ) );
 	}
 

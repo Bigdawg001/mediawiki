@@ -1,7 +1,13 @@
 <?php
 
+namespace MediaWiki\Tests\Parser;
+
+use MediaWiki\Parser\Parser;
+use MediaWiki\Parser\StripState;
+use MediaWikiIntegrationTestCase;
+
 /**
- * @covers StripState
+ * @covers \MediaWiki\Parser\StripState
  */
 class StripStateTest extends MediaWikiIntegrationTestCase {
 	protected function setUp(): void {

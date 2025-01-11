@@ -1,21 +1,24 @@
 <?php
 
 use MediaWiki\MainConfigSchema;
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Settings\Config\ConfigSchemaAggregator;
 use MediaWiki\Settings\Source\ReflectionSchemaSource;
 use Symfony\Component\Yaml\Yaml;
 use Wikimedia\StaticArrayWriter;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
 
 // Tell Setup.php to load the config schema from MainConfigSchema rather than
 // any generated file, so we can use this script to re-generate a broken schema file.
 define( 'MW_USE_CONFIG_SCHEMA_CLASS', 1 );
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script that generates configuration schema files:
  * - includes/MainConfigNames.php: name constants for config settings
- * - includes/config-vars.php: dummy variable declarations for config settings
+ * - docs/config-vars.php: dummy variable declarations for config settings
  * - includes/config-schema.php: an optimized config schema for use by Setup.php
  * - docs/config-schema.yaml: a JSON Schema of the config settings
  *
@@ -23,12 +26,13 @@ define( 'MW_USE_CONFIG_SCHEMA_CLASS', 1 );
  */
 class GenerateConfigSchema extends Maintenance {
 
-	/** @var string */
 	private const DEFAULT_NAMES_PATH = __DIR__ . '/../includes/MainConfigNames.php';
 	private const DEFAULT_VARS_PATH = __DIR__ . '/../docs/config-vars.php';
 	private const DEFAULT_ARRAY_PATH = __DIR__ . '/../includes/config-schema.php';
 	private const DEFAULT_SCHEMA_PATH = __DIR__ . '/../docs/config-schema.yaml';
 	private const STDOUT = 'php://stdout';
+
+	/** @var array */
 	private $settingsArray;
 
 	public function __construct() {
@@ -71,6 +75,10 @@ class GenerateConfigSchema extends Maintenance {
 			false,
 			true
 		);
+	}
+
+	public function canExecuteWithoutLocalSettings(): bool {
+		return true;
 	}
 
 	public function getDbType() {
@@ -229,7 +237,7 @@ class GenerateConfigSchema extends Maintenance {
 			" * the respective config setting.\n" .
 			" *\n" .
 			" * @note this class is generated automatically by maintenance/generateConfigSchema.php\n" .
-			" * @since 1.38\n" .
+			" * @since 1.39\n" .
 			" */\n";
 
 		$code .= "class MainConfigNames {\n";
@@ -355,5 +363,7 @@ class GenerateConfigSchema extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = GenerateConfigSchema::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

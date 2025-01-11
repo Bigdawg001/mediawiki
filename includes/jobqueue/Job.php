@@ -1,7 +1,5 @@
 <?php
 /**
- * Job queue task base code.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,22 +16,23 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @defgroup JobQueue JobQueue
  */
 
+use MediaWiki\Http\Telemetry;
+use MediaWiki\Json\FormatJson;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\PageReference;
 use MediaWiki\Title\Title;
 
 /**
- * Class to both describe a background job and handle jobs.
- * To push jobs onto queues, use MediaWikiServices::getInstance()->getJobQueueGroup()->push();
+ * Describe and execute a background job.
  *
- * Job objects are constructed by the job queue, and must have an appropriate
- * constructor signature; see IJobSpecification.
+ * Callers should use JobQueueGroup to enqueue jobs for deferred execution.
+ *
+ * See [the architecture doc](@ref jobqueuearch) for more information.
  *
  * @stable to extend
- *
+ * @since 1.6
  * @ingroup JobQueue
  */
 abstract class Job implements RunnableJob {
@@ -68,7 +67,6 @@ abstract class Job implements RunnableJob {
 	 *
 	 * @param string $command Job command
 	 * @param array|PageReference $params Job parameters
-	 * @throws InvalidArgumentException
 	 * @return Job
 	 */
 	public static function factory( $command, $params = [] ) {
@@ -111,7 +109,9 @@ abstract class Job implements RunnableJob {
 		}
 
 		$this->command = $command;
-		$this->params = $params + [ 'requestId' => WebRequest::getRequestId() ];
+		$this->params = $params + [
+			'requestId' => Telemetry::getInstance()->getRequestId(),
+		];
 
 		if ( $this->title === null ) {
 			// Set this field for access via getTitle().
@@ -380,7 +380,7 @@ abstract class Job implements RunnableJob {
 					foreach ( $value as $k => $v ) {
 						$json = FormatJson::encode( $v );
 						if ( $json === false || mb_strlen( $json ) > 512 ) {
-							$filteredValue[$k] = gettype( $v ) . '(...)';
+							$filteredValue[$k] = get_debug_type( $v ) . '(...)';
 						} else {
 							$filteredValue[$k] = $v;
 						}
@@ -391,7 +391,7 @@ abstract class Job implements RunnableJob {
 						$value = "array(" . count( $value ) . ")";
 					}
 				} elseif ( is_object( $value ) && !method_exists( $value, '__toString' ) ) {
-					$value = "object(" . get_class( $value ) . ")";
+					$value = get_debug_type( $value );
 				}
 
 				$flatValue = (string)$value;

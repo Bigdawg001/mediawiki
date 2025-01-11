@@ -2,12 +2,14 @@
 
 namespace MediaWiki\Tests\Rest\Handler\Helper;
 
+use Exception;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\ExistingPageRecord;
 use MediaWiki\Permissions\Authority;
 use MediaWiki\Rest\Handler\Helper\PageContentHelper;
 use MediaWiki\Rest\HttpException;
+use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\Response;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
@@ -26,26 +28,17 @@ class PageContentHelperTest extends MediaWikiIntegrationTestCase {
 
 	protected function setUp(): void {
 		parent::setUp();
-
-		// Clean up these tables after each test
-		$this->tablesUsed = [
-			'page',
-			'revision',
-			'comment',
-			'text',
-			'content'
-		];
 	}
 
 	/**
 	 * @param array $params
 	 * @param Authority|null $authority
 	 * @return PageContentHelper
-	 * @throws \Exception
+	 * @throws Exception
 	 */
 	private function newHelper(
 		array $params = [],
-		Authority $authority = null
+		?Authority $authority = null
 	): PageContentHelper {
 		$helper = new PageContentHelper(
 			new ServiceOptions(
@@ -57,7 +50,10 @@ class PageContentHelperTest extends MediaWikiIntegrationTestCase {
 			),
 			$this->getServiceContainer()->getRevisionLookup(),
 			$this->getServiceContainer()->getTitleFormatter(),
-			$this->getServiceContainer()->getPageStore()
+			$this->getServiceContainer()->getPageStore(),
+			$this->getServiceContainer()->getTitleFactory(),
+			$this->getServiceContainer()->getConnectionProvider(),
+			$this->getServiceContainer()->getChangeTagsStore()
 		);
 
 		$authority = $authority ?: $this->mockRegisteredUltimateAuthority();
@@ -65,18 +61,11 @@ class PageContentHelperTest extends MediaWikiIntegrationTestCase {
 		return $helper;
 	}
 
-	/**
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getRole()
-	 */
 	public function testGetRole() {
 		$helper = $this->newHelper();
 		$this->assertSame( SlotRecord::MAIN, $helper->getRole() );
 	}
 
-	/**
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getTitleText()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getPage()
-	 */
 	public function testGetTitle() {
 		$this->getExistingTestPage( 'Foo' );
 
@@ -90,10 +79,6 @@ class PageContentHelperTest extends MediaWikiIntegrationTestCase {
 		);
 	}
 
-	/**
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getTargetRevision()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getContent()
-	 */
 	public function testGetTargetRevisionAndContent() {
 		$page = $this->getExistingTestPage( __METHOD__ );
 		$rev = $page->getRevisionRecord();
@@ -112,16 +97,22 @@ class PageContentHelperTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getTitleText()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getPage()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::isAccessible()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::hasContent()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getTargetRevision()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getContent()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getLastModified()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getETag()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::checkAccess()
+	 * Ensure we can load the page with title "0" (T353687).
 	 */
+	public function testT353687() {
+		$page = $this->getExistingTestPage( '0' );
+		$rev = $page->getRevisionRecord();
+
+		$helper = $this->newHelper( [ 'title' => $page->getTitle()->getPrefixedDBkey() ] );
+
+		// Key assertion: this should not throw!
+		$helper->checkAccess();
+
+		$targetRev = $helper->getTargetRevision();
+		$this->assertInstanceOf( RevisionRecord::class, $targetRev );
+		$this->assertSame( $rev->getId(), $targetRev->getId() );
+	}
+
 	public function testNoTitle() {
 		$helper = $this->newHelper();
 
@@ -147,17 +138,58 @@ class PageContentHelperTest extends MediaWikiIntegrationTestCase {
 		}
 	}
 
+	public static function provideBadTitle() {
+		yield [ '_' ];
+		yield [ '::Hello' ];
+		yield [ 'Special:Blankpage' ];
+	}
+
 	/**
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getTitleText()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getPage()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::isAccessible()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::hasContent()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getTargetRevision()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getContent()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getLastModified()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getETag()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::checkAccess()
+	 * @dataProvider provideBadTitle
 	 */
+	public function testBadTitle( $badTitle ) {
+		$helper = $this->newHelper( [ 'title' => $badTitle ] );
+
+		$this->assertNotNull( $helper->getTitleText() );
+		$this->assertNull( $helper->getPage() );
+
+		$this->assertFalse( $helper->hasContent() );
+		$this->assertNull( $helper->getTargetRevision() );
+
+		try {
+			$helper->getContent();
+			$this->fail( 'Expected HttpException' );
+		} catch ( HttpException $ex ) {
+			$this->assertSame( 404, $ex->getCode() );
+		}
+
+		try {
+			$helper->checkAccess();
+			$this->fail( 'Expected HttpException' );
+		} catch ( HttpException $ex ) {
+			$this->assertSame( 404, $ex->getCode() );
+		}
+	}
+
+	public function testCheckHasContent() {
+		$page = $this->getNonexistingTestPage( __METHOD__ )->getDBkey();
+		$helper = $this->newHelper( [ 'title' => $page ] );
+
+		$this->expectException( LocalizedHttpException::class );
+		$this->expectExceptionCode( 404 );
+
+		$helper->checkHasContent();
+	}
+
+	public function testCheckAccessPermission() {
+		$helper = $this->newHelper();
+
+		$this->expectException( LocalizedHttpException::class );
+		$this->expectExceptionCode( 403 );
+
+		$helper->checkAccessPermission();
+	}
+
 	public function testNonExistingPage() {
 		$page = $this->getNonexistingTestPage( __METHOD__ );
 		$title = $page->getTitle();
@@ -189,19 +221,6 @@ class PageContentHelperTest extends MediaWikiIntegrationTestCase {
 		}
 	}
 
-	/**
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getTitleText()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getPage()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::isAccessible()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::hasContent()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getTargetRevision()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getContent()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getLastModified()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getETag()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::checkAccess()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::useDefaultSystemMessage()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getDefaultSystemMessage()
-	 */
 	public function testForbidenPage() {
 		$page = $this->getExistingTestPage( __METHOD__ );
 		$title = $page->getTitle();
@@ -228,23 +247,9 @@ class PageContentHelperTest extends MediaWikiIntegrationTestCase {
 		}
 	}
 
-	/**
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::hasContent()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::useDefaultSystemMessage()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getDefaultSystemMessage()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getTitleText()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getPage()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::isAccessible()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::hasContent()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getTargetRevision()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getContent()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getLastModified()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getETag()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::checkAccess()
-	 */
 	public function testForbiddenMessagePage() {
 		$page = $this->getNonexistingTestPage(
-			Title::newFromText( 'MediaWiki:Logouttext' )
+			Title::makeTitle( NS_MEDIAWIKI, 'Logouttext' )
 		);
 		$title = $page->getTitle();
 		$helper = $this->newHelper(
@@ -267,23 +272,9 @@ class PageContentHelperTest extends MediaWikiIntegrationTestCase {
 		$helper->checkAccess();
 	}
 
-	/**
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::hasContent()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::useDefaultSystemMessage()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getDefaultSystemMessage()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getTitleText()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getPage()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::isAccessible()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::hasContent()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getTargetRevision()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getContent()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getLastModified()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getETag()
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::checkAccess()
-	 */
 	public function testMessagePage() {
 		$page = $this->getNonexistingTestPage(
-			Title::newFromText( 'MediaWiki:Logouttext' )
+			Title::makeTitle( NS_MEDIAWIKI, 'Logouttext' )
 		);
 		$title = $page->getTitle();
 		$helper = $this->newHelper(
@@ -305,18 +296,34 @@ class PageContentHelperTest extends MediaWikiIntegrationTestCase {
 		$helper->checkAccess();
 	}
 
+	public static function provideRedirectsAllowed() {
+		yield [ [], true ];
+		yield [ [ 'redirect' => true ], true ];
+		yield [ [ 'redirect' => false ], false ];
+	}
+
 	/**
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::getParamSettings()
+	 * @dataProvider provideRedirectsAllowed
 	 */
+	public function testRedirectsAllowed( array $params, bool $allowRedirect ) {
+		$page = $this->getNonexistingTestPage(
+			Title::makeTitle( NS_MEDIAWIKI, 'Logouttext' )
+		);
+		$title = $page->getTitle();
+		$helper = $this->newHelper(
+			$params + [ 'title' => $title->getPrefixedDBkey() ],
+			$this->mockAnonUltimateAuthority()
+		);
+
+		$this->assertSame( $allowRedirect, $helper->getRedirectsAllowed() );
+	}
+
 	public function testParameterSettings() {
 		$helper = $this->newHelper();
 		$settings = $helper->getParamSettings();
 		$this->assertArrayHasKey( 'title', $settings );
 	}
 
-	/**
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::setCacheControl()
-	 */
 	public function testCacheControl() {
 		$helper = $this->newHelper();
 
@@ -332,9 +339,6 @@ class PageContentHelperTest extends MediaWikiIntegrationTestCase {
 		$this->assertStringContainsString( 'max-age=5', $response->getHeaderLine( 'Cache-Control' ) );
 	}
 
-	/**
-	 * @covers \MediaWiki\Rest\Handler\PageContentHelper::constructMetadata()
-	 */
 	public function testConstructMetadata() {
 		$page = $this->getExistingTestPage( __METHOD__ );
 		$title = $page->getTitle();

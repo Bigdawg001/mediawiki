@@ -17,14 +17,14 @@ function TextParamMixin() {
 }
 
 /**
- * @return {Mixed}
+ * @return {any}
  */
 TextParamMixin.prototype.getApiValue = function () {
 	return this.getValue();
 };
 
 /**
- * @param {Mixed|undefined} newValue
+ * @param {any|undefined} newValue
  */
 TextParamMixin.prototype.setApiValue = function ( newValue ) {
 	if ( newValue === undefined ) {
@@ -42,15 +42,13 @@ TextParamMixin.prototype.setApiValue = function ( newValue ) {
  * @return {jQuery.Promise}
  */
 TextParamMixin.prototype.apiCheckValid = function ( shouldSuppressErrors ) {
-	var that = this;
-	return this.getValidity().then( function () {
-		return $.Deferred().resolve( true ).promise();
-	}, function () {
-		return $.Deferred().resolve( false ).promise();
-	} ).done( function ( ok ) {
+	return this.getValidity().then(
+		() => $.Deferred().resolve( true ).promise(),
+		() => $.Deferred().resolve( false ).promise()
+	).done( ( ok ) => {
 		ok = ok || shouldSuppressErrors;
-		that.setIcon( ok ? null : 'alert' );
-		that.setTitle( ok ? '' : mw.message( 'apisandbox-alert-field' ).plain() );
+		this.setIcon( ok ? null : 'alert' );
+		this.setTitle( ok ? '' : mw.message( 'apisandbox-alert-field' ).plain() );
 	} );
 };
 

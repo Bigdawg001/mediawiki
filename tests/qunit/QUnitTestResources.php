@@ -9,7 +9,6 @@ return [
 			'tests/qunit/data/sinonjs-local.js',
 			'resources/lib/sinonjs/sinon.js',
 		],
-		'targets' => [ 'desktop', 'mobile' ],
 	],
 
 	'mediawiki.qunit-testrunner' => [
@@ -20,7 +19,6 @@ return [
 			'mediawiki.page.ready',
 			'sinonjs',
 		],
-		'targets' => [ 'desktop', 'mobile' ],
 	],
 
 	'mediawiki.language.testdata' => [
@@ -49,8 +47,18 @@ return [
 			'tests/qunit/resources/startup/mw.loader.test.js',
 			'tests/qunit/resources/startup/mw.requestIdleCallback.test.js',
 			'tests/qunit/resources/startup/jscompat.test.js',
-			'tests/qunit/resources/jquery.color.test.js',
-			'tests/qunit/resources/jquery.colorUtil.test.js',
+			[
+				'name' => 'tests/qunit/resources/startup/clientprefs.js',
+				'callback' => static function () {
+					return 'mw.clientprefs = function ( document, $VARS ) { '
+						. strtr(
+							file_get_contents( MW_INSTALL_PATH . '/resources/src/startup/clientprefs.js' ),
+							[ '__COOKIE_PREFIX__' => '' ]
+						)
+						. '};';
+				}
+			],
+			'tests/qunit/resources/startup/clientprefs.test.js',
 			'tests/qunit/resources/jquery.highlightText.test.js',
 			'tests/qunit/resources/jquery.lengthLimit.test.js',
 			'tests/qunit/resources/jquery.makeCollapsible.test.js',
@@ -62,11 +70,7 @@ return [
 			'tests/qunit/resources/mediawiki.base/track.test.js',
 			'tests/qunit/resources/mediawiki.jqueryMsg.test.js',
 			'tests/qunit/resources/mediawiki.messagePoster/factory.test.js',
-			'tests/qunit/resources/mediawiki.String/byteLength.test.js',
-			'tests/qunit/resources/mediawiki.String/charAt.test.js',
-			'tests/qunit/resources/mediawiki.String/lcFirst.test.js',
-			'tests/qunit/resources/mediawiki.String/ucFirst.test.js',
-			'tests/qunit/resources/mediawiki.String/trimByteLength.test.js',
+			'tests/qunit/resources/mediawiki.String.test.js',
 			'tests/qunit/resources/mediawiki.storage.test.js',
 			'tests/qunit/resources/mediawiki.template.test.js',
 			'tests/qunit/resources/mediawiki.template.mustache.test.js',
@@ -95,7 +99,9 @@ return [
 			'tests/qunit/resources/mediawiki.rcfilters/dm.SavedQueriesModel.test.js',
 			'tests/qunit/resources/mediawiki.rcfilters/UriProcessor.test.js',
 			'tests/qunit/resources/mediawiki.widgets/MediaSearch/mediawiki.widgets.APIResultsQueue.test.js',
+			'tests/qunit/resources/mediawiki.widgets/NamespaceInput/mediawiki.widgets.NamespaceInputWidget.test.js',
 			'tests/qunit/resources/mediawiki.widgets/Table/mediawiki.widgets.TableWidget.test.js',
+			'tests/qunit/resources/mediawiki.widgets/UserInputWidget/mediawiki.widgets.UserInputWidget.test.js',
 			'tests/qunit/resources/mediawiki.language.test.js',
 			'tests/qunit/resources/mediawiki.cldr.test.js',
 			'tests/qunit/resources/mediawiki.cookie.test.js',
@@ -104,7 +110,6 @@ return [
 			'tests/qunit/resources/mediawiki.visibleTimeout.test.js',
 		],
 		'dependencies' => [
-			'jquery.color',
 			'jquery.highlightText',
 			'jquery.lengthLimit',
 			'jquery.makeCollapsible',
@@ -135,6 +140,7 @@ return [
 			'mediawiki.visibleTimeout',
 			'mediawiki.widgets.MediaSearch',
 			'mediawiki.widgets.Table',
+			'mediawiki.widgets.UserInputWidget',
 			'mediawiki.qunit-testrunner',
 		],
 	]

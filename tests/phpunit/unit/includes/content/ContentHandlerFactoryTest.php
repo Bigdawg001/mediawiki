@@ -1,17 +1,27 @@
 <?php
 
+namespace MediaWiki\Tests\Unit\Content;
+
+use DummyContentHandlerForTesting;
+use Error;
+use InvalidArgumentException;
+use MediaWiki\Content\ContentHandler;
 use MediaWiki\Content\ContentHandlerFactory;
 use MediaWiki\HookContainer\HookContainer;
+use MediaWikiUnitTestCase;
+use MWUnknownContentModelException;
 use Psr\Log\LogLevel;
+use TestLogger;
+use UnexpectedValueException;
 use Wikimedia\ObjectFactory\ObjectFactory;
 
 /**
  * @group ContentHandlerFactory
+ * @covers \MediaWiki\Content\ContentHandlerFactory
  */
 class ContentHandlerFactoryTest extends MediaWikiUnitTestCase {
 
-	/** @var TestLogger */
-	private $logger;
+	private TestLogger $logger;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -36,12 +46,6 @@ class ContentHandlerFactoryTest extends MediaWikiUnitTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::getContentHandler
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::createForModelID
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::createContentHandlerFromHandlerSpec
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::validateContentHandler
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::__construct
-	 *
 	 * @dataProvider provideHandlerSpecs $handlerSpecs
 	 */
 	public function testGetContentHandler_callWithProvider_same(
@@ -58,22 +62,22 @@ class ContentHandlerFactoryTest extends MediaWikiUnitTestCase {
 			$this->logger
 		);
 
-		$expectedParams = [];
+		$returnMap = [];
 		foreach ( $handlerSpecs as $modelID => $handlerSpec ) {
-			$expectedParams[] = [
+			$returnMap[] = [
 				$handlerSpec,
 				[
 					'assertClass' => ContentHandler::class,
 					'allowCallable' => true,
 					'allowClassName' => true,
 					'extraArgs' => [ $modelID ],
-				]
+				],
+				$contentHandlerExpected
 			];
 		}
 		$objectFactory
 			->method( 'createObject' )
-			->withConsecutive( ...$expectedParams )
-			->willReturn( $contentHandlerExpected );
+			->willReturnMap( $returnMap );
 
 		foreach ( $handlerSpecs as $modelID => $handlerSpec ) {
 			$this->assertSame( $contentHandlerExpected, $factory->getContentHandler( $modelID ) );
@@ -81,11 +85,6 @@ class ContentHandlerFactoryTest extends MediaWikiUnitTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::getContentHandler
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::createForModelID
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::createContentHandlerFromHook
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::validateContentHandler
-	 *
 	 * @dataProvider provideHandlerSpecs $handlerSpecs
 	 */
 	public function testGetContentHandler_hookWithProvider_same(
@@ -119,79 +118,96 @@ class ContentHandlerFactoryTest extends MediaWikiUnitTestCase {
 		}
 	}
 
-	public static function provideHandlerSpecsWithMWException(): array {
+	public static function provideHandlerSpecsWithException(): array {
 		return [
-			'MWException expected' => [
+			'Callback exists but returns the wrong type' => [
 				[
 					'ExistCallbackWithWrongType' => static function () {
 						return true;
-					},
+					}
+				],
+				UnexpectedValueException::class
+			],
+			'Callback exists but returns null' => [
+				[
 					'ExistCallbackWithNull' => static function () {
 						return null;
-					},
+					}
+				],
+				UnexpectedValueException::class
+			],
+			'Callback exists but returns the empty string' => [
+				[
 					'ExistCallbackWithEmptyString' => static function () {
 						return '';
-					},
-					'WrongClassName' => self::class,
-					'WrongType' => true,
-					'NullType' => null,
-
+					}
 				],
-				MWException::class,
+				UnexpectedValueException::class
 			],
-			'Error expected' => [
+			'Wrong class name' => [
 				[
-					'WrongClassNameNotExist' => 'ClassNameNotExist',
+					'WrongClassName' => self::class
+				],
+				UnexpectedValueException::class
+			],
+			'Wrong type' => [
+				[
+					'WrongType' => true
+				],
+				InvalidArgumentException::class
+			],
+			'Is null' => [
+				[
+					'NullType' => null
+				],
+				MWUnknownContentModelException::class
+			],
+			'Class does not exist' => [
+				[
+					'WrongClassNameNotExist' => 'ClassNameNotExist'
+				],
+				InvalidArgumentException::class
+			],
+			'Callback with non-existing class name' => [
+				[
 					'ExistCallbackWithNotExistClassName' => static function () {
 						return ClassNameNotExist();
 					},
+				],
+				Error::class
+			],
+			'Empty string' => [
+				[
 					'EmptyString' => '',
 				],
-				Error::class,
+				InvalidArgumentException::class
 			],
 		];
 	}
 
 	/**
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::getContentHandler
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::createForModelID
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::createContentHandlerFromHandlerSpec
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::validateContentHandler
-	 *
-	 * @dataProvider provideHandlerSpecsWithMWException
+	 * @dataProvider provideHandlerSpecsWithException
 	 */
 	public function testCreateContentHandlerForModelID_callWithProvider_throwsException(
 		array $handlerSpecs,
 		string $exceptionClassName
 	): void {
-		/**
-		 * @var Exception $exceptionExpected
-		 */
-		$objectFactory = $this->createMock( ObjectFactory::class );
-		$objectFactory->method( 'createObject' )
-			->willThrowException( $this->createMock( $exceptionClassName ) );
+		if ( count( $handlerSpecs ) !== 1 ) {
+			$this->fail( 'Dataprovider provided wrong amount of specs' );
+		}
+
 		$factory = new ContentHandlerFactory(
 			$handlerSpecs,
-			$objectFactory,
+			$this->createSimpleObjectFactory(),
 			$this->createMock( HookContainer::class ),
 			$this->logger
 		);
 
-		foreach ( $handlerSpecs as $modelID => $handlerSpec ) {
-			try {
-				$factory->getContentHandler( $modelID );
-				$this->fail();
-			} catch ( \Throwable $exception ) {
-				$this->assertInstanceOf( $exceptionClassName, $exception );
-			}
-		}
+		$modelID = key( $handlerSpecs );
+		$this->expectException( $exceptionClassName );
+		$factory->getContentHandler( $modelID );
 	}
 
-	/**
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::createForModelID
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::createContentHandlerFromHandlerSpec
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::validateContentHandler
-	 */
 	public function testCreateContentHandlerForModelID_callNotExist_throwMWUCMException() {
 		$this->expectException( MWUnknownContentModelException::class );
 		$factory = new ContentHandlerFactory(
@@ -203,14 +219,6 @@ class ContentHandlerFactoryTest extends MediaWikiUnitTestCase {
 		$factory->getContentHandler( 'ModelNameNotExist' );
 	}
 
-	/**
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::defineContentHandler
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::getContentHandler
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::createForModelID
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::createContentHandlerFromHandlerSpec
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::validateContentHandler
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::isDefinedModel
-	 */
 	public function testDefineContentHandler_flow_throwsException() {
 		$objectFactory = $this->createMock( ObjectFactory::class );
 		$objectFactory
@@ -233,8 +241,6 @@ class ContentHandlerFactoryTest extends MediaWikiUnitTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::getContentModels
-	 *
 	 * @dataProvider provideValidDummySpecList
 	 */
 	public function testGetContentModels_flow_same(
@@ -276,8 +282,6 @@ class ContentHandlerFactoryTest extends MediaWikiUnitTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::isDefinedModel
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::createContentHandlerFromHook
 	 * @dataProvider provideValidDummySpecList
 	 */
 	public function testIsDefinedModel_flow_same(
@@ -336,9 +340,6 @@ class ContentHandlerFactoryTest extends MediaWikiUnitTestCase {
 		];
 	}
 
-	/**
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::getContentModels
-	 */
 	public function testGetContentModels_empty_empty() {
 		$factory = new ContentHandlerFactory(
 			[],
@@ -350,10 +351,6 @@ class ContentHandlerFactoryTest extends MediaWikiUnitTestCase {
 		$this->assertArrayEquals( [], $factory->getContentModels() );
 	}
 
-	/**
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::getAllContentFormats
-	 * @covers \MediaWiki\Content\ContentHandlerFactory::defineContentHandler
-	 */
 	public function testGetAllContentFormats_flow_same() {
 		$contentHandler1 = $this->createMock( DummyContentHandlerForTesting::class );
 		$contentHandler1->method( 'getSupportedFormats' )->willReturn( [ 'format 1' ] );

@@ -1,7 +1,5 @@
 <?php
 /**
- * MediaWiki edit token
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,21 +16,22 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup Session
  */
+
+namespace MediaWiki\User;
 
 use MediaWiki\Session\Token;
 
 /**
- * Value object representing a logged-out user's edit token
+ * Value object representing a MediaWiki edit token for logged-out users.
  *
  * This exists so that code generically dealing with MediaWiki\Session\Token
  * (i.e. the API) doesn't have to have so many special cases for anon edit
  * tokens.
  *
  * @newable
- *
  * @since 1.27
+ * @ingroup Session
  */
 class LoggedOutEditToken extends Token {
 
@@ -51,3 +50,6 @@ class LoggedOutEditToken extends Token {
 		return $userToken === self::SUFFIX;
 	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( LoggedOutEditToken::class, 'LoggedOutEditToken' );

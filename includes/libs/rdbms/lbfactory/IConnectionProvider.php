@@ -20,13 +20,15 @@
 namespace Wikimedia\Rdbms;
 
 /**
- * Narrow interface providing primary/replica connections.
+ * Provide primary and replica IDatabase connections.
  *
- * This will be heavily used outside the rdmbs library and will become the main interface.
+ * This is a narrow interface intended as the main entrypoint to the Rdbms library.
  * No methods should be added unless absolutely needed.
  *
+ * The main implementation is \Wikimedia\Rdbms\LBFactory.
+ * To obtain an instance, use \MediaWiki\MediaWikiServices::getDBLoadBalancerFactory().
+ *
  * @see ILBFactory
- * @internal
  * @since 1.40
  * @ingroup Database
  */
@@ -35,6 +37,9 @@ interface IConnectionProvider {
 	 * Get connection to the primary database.
 	 *
 	 * This should be used when there the code needs to write to the database.
+	 *
+	 * This method accepts virtual domains
+	 * ({@see \MediaWiki\MainConfigSchema::VirtualDomainsMapping}).
 	 *
 	 * @since 1.40
 	 * @param string|false $domain Domain ID, or false for the current domain
@@ -47,10 +52,13 @@ interface IConnectionProvider {
 	 *
 	 * Note that a read can have replication lag.
 	 *
+	 * This method accepts virtual domains
+	 * ({@see \MediaWiki\MainConfigSchema::VirtualDomainsMapping}).
+	 *
 	 * @since 1.40
 	 * @param string|false $domain Domain ID, or false for the current domain
 	 * @param string|null $group Query group; null for the default group
-	 * @return IDatabase
+	 * @return IReadableDatabase
 	 */
 	public function getReplicaDatabase( $domain = false, $group = null ): IReadableDatabase;
 

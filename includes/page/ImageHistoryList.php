@@ -18,11 +18,13 @@
  * @file
  */
 
+use MediaWiki\Context\ContextSource;
 use MediaWiki\HookContainer\ProtectedHookAccessorTrait;
 use MediaWiki\Html\Html;
 use MediaWiki\Linker\Linker;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Title\Title;
 
 /**
@@ -33,27 +35,13 @@ use MediaWiki\Title\Title;
 class ImageHistoryList extends ContextSource {
 	use ProtectedHookAccessorTrait;
 
-	/**
-	 * @var Title
-	 */
-	protected $title;
+	protected Title $title;
+	protected File $img;
+	protected ImagePage $imagePage;
+	protected File $current;
 
-	/**
-	 * @var File
-	 */
-	protected $img;
-
-	/**
-	 * @var ImagePage
-	 */
-	protected $imagePage;
-
-	/**
-	 * @var File
-	 */
-	protected $current;
-
-	protected $repo, $showThumb;
+	protected bool $showThumb;
+	/** @var bool */
 	protected $preventClickjacking = false;
 
 	/**
@@ -259,13 +247,13 @@ class ImageHistoryList extends ContextSource {
 		// Uploading user
 		$row .= Html::openElement( 'td' );
 		// Hide deleted usernames
-		if ( $uploader && $local ) {
+		if ( $uploader ) {
 			$row .= Linker::userLink( $uploader->getId(), $uploader->getName() );
-			$row .= Html::rawElement( 'span', [ 'style' => 'white-space: nowrap;' ],
-				Linker::userToolLinks( $uploader->getId(), $uploader->getName() )
-			);
-		} elseif ( $uploader ) {
-			$row .= htmlspecialchars( $uploader->getName() );
+			if ( $local ) {
+				$row .= Html::rawElement( 'span', [ 'style' => 'white-space: nowrap;' ],
+					Linker::userToolLinks( $uploader->getId(), $uploader->getName() )
+				);
+			}
 		} else {
 			$row .= Html::element( 'span', [ 'class' => 'history-deleted' ],
 				$this->msg( 'rev-deleted-user' )->text()
@@ -309,7 +297,6 @@ class ImageHistoryList extends ContextSource {
 			[
 				'width' => '120',
 				'height' => '120',
-				'loading' => 'lazy',
 				'isFilePageThumb' => $iscur  // old revisions are already versioned
 			]
 		);
@@ -325,7 +312,7 @@ class ImageHistoryList extends ContextSource {
 			$lang->userDate( $timestamp, $user ),
 			$lang->userTime( $timestamp, $user )
 		)->text();
-		return $thumbnail->toHtml( [ 'alt' => $alt, 'file-link' => true ] );
+		return $thumbnail->toHtml( [ 'alt' => $alt, 'file-link' => true, 'loading' => 'lazy' ] );
 	}
 
 	/**

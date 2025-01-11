@@ -21,10 +21,13 @@
 use MediaWiki\Cache\LinkBatchFactory;
 use MediaWiki\Html\Html;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Pager\ReverseChronologicalPager;
+use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Title\Title;
 use Wikimedia\Timestamp\TimestampException;
 
 class ImageHistoryPseudoPager extends ReverseChronologicalPager {
+	/** @var bool */
 	protected $preventClickjacking = false;
 
 	/**
@@ -62,7 +65,7 @@ class ImageHistoryPseudoPager extends ReverseChronologicalPager {
 	 * @param ImagePage $imagePage
 	 * @param LinkBatchFactory|null $linkBatchFactory
 	 */
-	public function __construct( $imagePage, LinkBatchFactory $linkBatchFactory = null ) {
+	public function __construct( $imagePage, ?LinkBatchFactory $linkBatchFactory = null ) {
 		parent::__construct( $imagePage->getContext() );
 		$this->mImagePage = $imagePage;
 		$this->mTitle = $imagePage->getTitle()->createFragmentTarget( 'filehistory' );
@@ -282,7 +285,6 @@ class ImageHistoryPseudoPager extends ReverseChronologicalPager {
 			[ 'action' => wfScript(), 'id' => 'mw-filehistory-deleterevision-submit' ]
 		) . "\n";
 		$s .= Html::hidden( 'target', $this->getTitle()->getPrefixedDBkey() ) . "\n";
-		$s .= Html::hidden( 'action', 'historysubmit' ) . "\n";
 		$s .= Html::hidden( 'type', 'oldimage' ) . "\n";
 		$this->setPreventClickjacking( true );
 
@@ -290,8 +292,8 @@ class ImageHistoryPseudoPager extends ReverseChronologicalPager {
 			'button',
 			[
 				'type' => 'submit',
-				'name' => 'revisiondelete',
-				'value' => '1',
+				'name' => 'title',
+				'value' => SpecialPage::getTitleFor( 'Revisiondelete' )->getPrefixedDBkey(),
 				'class' => "deleterevision-filehistory-submit mw-filehistory-deleterevision-button mw-ui-button"
 			],
 			$this->msg( 'showhideselectedfileversions' )->text()

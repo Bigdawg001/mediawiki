@@ -1,6 +1,12 @@
 <?php
 
+use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\Parser\Sanitizer;
+use MediaWiki\User\User;
+
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * A script to remove emails that are invalid from
@@ -14,6 +20,7 @@ require_once __DIR__ . '/Maintenance.php';
  */
 class RemoveInvalidEmails extends Maintenance {
 
+	/** @var bool */
 	private $commit = false;
 
 	public function __construct() {
@@ -24,21 +31,20 @@ class RemoveInvalidEmails extends Maintenance {
 
 	public function execute() {
 		$this->commit = $this->hasOption( 'commit' );
-		$dbr = $this->getDB( DB_REPLICA );
-		$dbw = $this->getDB( DB_PRIMARY );
+		$dbr = $this->getReplicaDB();
+		$dbw = $this->getPrimaryDB();
 		$lastId = 0;
 		do {
-			$rows = $dbr->select(
-				'user',
-				[ 'user_id', 'user_email' ],
-				[
-					'user_id > ' . $dbr->addQuotes( $lastId ),
-					'user_email != ' . $dbr->addQuotes( '' ),
-					'user_email_authenticated IS NULL'
-				],
-				__METHOD__,
-				[ 'LIMIT' => $this->getBatchSize() ]
-			);
+			$rows = $dbr->newSelectQueryBuilder()
+				->select( [ 'user_id', 'user_email' ] )
+				->from( 'user' )
+				->where( [
+					$dbr->expr( 'user_id', '>', $lastId ),
+					$dbr->expr( 'user_email', '!=', '' ),
+					'user_email_authenticated' => null,
+				] )
+				->limit( $this->getBatchSize() )
+				->caller( __METHOD__ )->fetchResultSet();
 			$count = $rows->numRows();
 			$badIds = [];
 			foreach ( $rows as $row ) {
@@ -55,12 +61,12 @@ class RemoveInvalidEmails extends Maintenance {
 				$badCount = count( $badIds );
 				if ( $this->commit ) {
 					$this->output( "Removing $badCount emails from the database.\n" );
-					$dbw->update(
-						'user',
-						[ 'user_email' => '' ],
-						[ 'user_id' => $badIds ],
-						__METHOD__
-					);
+					$dbw->newUpdateQueryBuilder()
+						->update( 'user' )
+						->set( [ 'user_email' => '' ] )
+						->where( [ 'user_id' => $badIds ] )
+						->caller( __METHOD__ )
+						->execute();
 					foreach ( $badIds as $badId ) {
 						User::newFromId( $badId )->invalidateCache();
 					}
@@ -75,5 +81,7 @@ class RemoveInvalidEmails extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = RemoveInvalidEmails::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

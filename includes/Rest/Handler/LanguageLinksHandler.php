@@ -2,20 +2,23 @@
 
 namespace MediaWiki\Rest\Handler;
 
-use MalformedTitleException;
 use MediaWiki\Languages\LanguageNameUtils;
 use MediaWiki\Page\ExistingPageRecord;
 use MediaWiki\Page\PageLookup;
+use MediaWiki\Rest\Handler;
+use MediaWiki\Rest\Handler\Helper\PageRedirectHelper;
+use MediaWiki\Rest\Handler\Helper\PageRestHelperFactory;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\Response;
 use MediaWiki\Rest\SimpleHandler;
-use TitleFormatter;
-use TitleParser;
+use MediaWiki\Title\MalformedTitleException;
+use MediaWiki\Title\TitleFormatter;
+use MediaWiki\Title\TitleParser;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\Message\ParamType;
 use Wikimedia\Message\ScalarParam;
 use Wikimedia\ParamValidator\ParamValidator;
-use Wikimedia\Rdbms\ILoadBalancer;
+use Wikimedia\Rdbms\IConnectionProvider;
 
 /**
  * Class LanguageLinksHandler
@@ -24,22 +27,13 @@ use Wikimedia\Rdbms\ILoadBalancer;
  * @package MediaWiki\Rest\Handler
  */
 class LanguageLinksHandler extends SimpleHandler {
-	use PageRedirectHandlerTrait;
 
-	/** @var ILoadBalancer */
-	private $loadBalancer;
-
-	/** @var LanguageNameUtils */
-	private $languageNameUtils;
-
-	/** @var TitleFormatter */
-	private $titleFormatter;
-
-	/** @var TitleParser */
-	private $titleParser;
-
-	/** @var PageLookup */
-	private $pageLookup;
+	private IConnectionProvider $dbProvider;
+	private LanguageNameUtils $languageNameUtils;
+	private TitleFormatter $titleFormatter;
+	private TitleParser $titleParser;
+	private PageLookup $pageLookup;
+	private PageRestHelperFactory $helperFactory;
 
 	/**
 	 * @var ExistingPageRecord|false|null
@@ -47,24 +41,36 @@ class LanguageLinksHandler extends SimpleHandler {
 	private $page = false;
 
 	/**
-	 * @param ILoadBalancer $loadBalancer
+	 * @param IConnectionProvider $dbProvider
 	 * @param LanguageNameUtils $languageNameUtils
 	 * @param TitleFormatter $titleFormatter
 	 * @param TitleParser $titleParser
 	 * @param PageLookup $pageLookup
+	 * @param PageRestHelperFactory $helperFactory
 	 */
 	public function __construct(
-		ILoadBalancer $loadBalancer,
+		IConnectionProvider $dbProvider,
 		LanguageNameUtils $languageNameUtils,
 		TitleFormatter $titleFormatter,
 		TitleParser $titleParser,
-		PageLookup $pageLookup
+		PageLookup $pageLookup,
+		PageRestHelperFactory $helperFactory
 	) {
-		$this->loadBalancer = $loadBalancer;
+		$this->dbProvider = $dbProvider;
 		$this->languageNameUtils = $languageNameUtils;
 		$this->titleFormatter = $titleFormatter;
 		$this->titleParser = $titleParser;
 		$this->pageLookup = $pageLookup;
+		$this->helperFactory = $helperFactory;
+	}
+
+	private function getRedirectHelper(): PageRedirectHelper {
+		return $this->helperFactory->newPageRedirectHelper(
+			$this->getResponseFactory(),
+			$this->getRouter(),
+			$this->getPath(),
+			$this->getRequest()
+		);
 	}
 
 	/**
@@ -98,10 +104,9 @@ class LanguageLinksHandler extends SimpleHandler {
 		}
 
 		'@phan-var \MediaWiki\Page\ExistingPageRecord $page';
-		$redirectResponse = $this->createNormalizationRedirectResponseIfNeeded(
+		$redirectResponse = $this->getRedirectHelper()->createNormalizationRedirectResponseIfNeeded(
 			$page,
-			$params['title'] ?? null,
-			$this->titleFormatter
+			$params['title'] ?? null
 		);
 
 		if ( $redirectResponse !== null ) {
@@ -122,7 +127,7 @@ class LanguageLinksHandler extends SimpleHandler {
 
 	private function fetchLinks( $pageId ) {
 		$result = [];
-		$res = $this->loadBalancer->getConnection( DB_REPLICA )->newSelectQueryBuilder()
+		$res = $this->dbProvider->getReplicaDatabase()->newSelectQueryBuilder()
 			->select( [ 'll_title', 'll_lang' ] )
 			->from( 'langlinks' )
 			->where( [ 'll_from' => $pageId ] )
@@ -154,6 +159,7 @@ class LanguageLinksHandler extends SimpleHandler {
 				self::PARAM_SOURCE => 'path',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-language-links-title' ),
 			],
 		];
 	}
@@ -186,4 +192,7 @@ class LanguageLinksHandler extends SimpleHandler {
 		return (bool)$this->getPage();
 	}
 
+	public function getResponseBodySchemaFileName( string $method ): ?string {
+		return 'includes/Rest/Handler/Schema/PageLanguageLinks.json';
+	}
 }

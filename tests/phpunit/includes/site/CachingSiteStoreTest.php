@@ -1,19 +1,32 @@
 <?php
 
+namespace MediaWiki\Tests\Site;
+
+use MediaWiki\MediaWikiServices;
+use MediaWiki\Site\CachingSiteStore;
+use MediaWiki\Site\HashSiteStore;
+use MediaWiki\Site\MediaWikiSite;
+use MediaWiki\Site\Site;
+use MediaWiki\Site\SiteList;
+use MediaWiki\Site\SiteStore;
+use MediaWikiIntegrationTestCase;
+
 /**
- * @covers CachingSiteStore
+ * @covers \MediaWiki\Site\CachingSiteStore
  * @group Site
  * @group Database
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
  */
-class CachingSiteStoreTest extends \MediaWikiIntegrationTestCase {
+class CachingSiteStoreTest extends MediaWikiIntegrationTestCase {
 
 	public function testGetSites() {
 		$testSites = TestSites::getSites();
+		$services = MediaWikiServices::getInstance();
 
 		$store = new CachingSiteStore(
 			$this->getHashSiteStore( $testSites ),
-			ObjectCache::getLocalClusterInstance()
+			$services->getObjectCacheFActory()
+				->getLocalClusterInstance()
 		);
 
 		$sites = $store->getSites();
@@ -33,8 +46,10 @@ class CachingSiteStoreTest extends \MediaWikiIntegrationTestCase {
 	}
 
 	public function testSaveSites() {
+		$services = MediaWikiServices::getInstance();
 		$store = new CachingSiteStore(
-			new HashSiteStore(), ObjectCache::getLocalClusterInstance()
+			new HashSiteStore(),
+			$services->getObjectCacheFActory()->getLocalClusterInstance()
 		);
 
 		$sites = [];
@@ -66,6 +81,8 @@ class CachingSiteStoreTest extends \MediaWikiIntegrationTestCase {
 		$dbSiteStore->method( 'getSite' )
 			->willReturn( $this->getTestSite() );
 
+		$services = MediaWikiServices::getInstance()->getObjectCacheFactory();
+
 		$dbSiteStore->method( 'getSites' )
 			->willReturnCallback( function () {
 				$siteList = new SiteList();
@@ -74,7 +91,7 @@ class CachingSiteStoreTest extends \MediaWikiIntegrationTestCase {
 				return $siteList;
 			} );
 
-		$store = new CachingSiteStore( $dbSiteStore, ObjectCache::getLocalClusterInstance() );
+		$store = new CachingSiteStore( $dbSiteStore, $services->getLocalClusterInstance() );
 
 		// initialize internal cache
 		$this->assertGreaterThan( 0, $store->getSites()->count(), 'count sites' );
@@ -100,8 +117,9 @@ class CachingSiteStoreTest extends \MediaWikiIntegrationTestCase {
 	}
 
 	public function testClear() {
+		$services = MediaWikiServices::getInstance()->getObjectCacheFactory();
 		$store = new CachingSiteStore(
-			new HashSiteStore(), ObjectCache::getLocalClusterInstance()
+			new HashSiteStore(), $services->getLocalClusterInstance()
 		);
 		$this->assertTrue( $store->clear() );
 

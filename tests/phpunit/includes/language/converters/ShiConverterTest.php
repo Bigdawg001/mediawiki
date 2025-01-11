@@ -2,15 +2,13 @@
 
 /**
  * @group Language
- * @covers ShiConverter
+ * @covers \ShiConverter
  */
 class ShiConverterTest extends MediaWikiIntegrationTestCase {
-
 	use LanguageConverterTestTrait;
 
 	/**
 	 * @dataProvider provideAutoConvertToAllVariants
-	 * @covers ShiConverter::autoConvertToAllVariants
 	 */
 	public function testAutoConvertToAllVariants( $result, $value ) {
 		$this->assertEquals( $result,

@@ -1,9 +1,8 @@
 {
 	"root": true,
 	"extends": [
-		"wikimedia/client-es6",
-		"wikimedia/mediawiki",
-		"wikimedia/jsduck"
+		"wikimedia/client",
+		"wikimedia/mediawiki"
 	],
 	"rules": {
 		"compat/compat": [

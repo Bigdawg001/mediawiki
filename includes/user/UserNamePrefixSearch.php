@@ -1,7 +1,5 @@
 <?php
 /**
- * Prefix search of user names.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -23,40 +21,44 @@
 namespace MediaWiki\User;
 
 use InvalidArgumentException;
+use MediaWiki\Block\HideUserUtils;
 use MediaWiki\Permissions\Authority;
-use Wikimedia\Rdbms\ILoadBalancer;
+use Wikimedia\Rdbms\IConnectionProvider;
+use Wikimedia\Rdbms\IExpression;
+use Wikimedia\Rdbms\LikeValue;
 
 /**
  * Handles searching prefixes of user names
  *
- * @note There are two classes called UserNamePrefixSearch.  You should use this first one, in
+ * @note There are two classes called UserNamePrefixSearch.  You should use this class, in
  * namespace MediaWiki\User, which is a service.  \UserNamePrefixSearch is a deprecated static wrapper
- * that forwards to the global service.
+ * that forwards to the service class.
  *
- * @since 1.36 as a service in the current namespace
+ * @since 1.36
+ * @ingroup User
  * @author DannyS712
  */
 class UserNamePrefixSearch {
 
-	/** @var string */
 	public const AUDIENCE_PUBLIC = 'public';
 
-	/** @var ILoadBalancer */
-	private $loadBalancer;
-
-	/** @var UserNameUtils */
-	private $userNameUtils;
+	private IConnectionProvider $dbProvider;
+	private UserNameUtils $userNameUtils;
+	private HideUserUtils $hideUserUtils;
 
 	/**
-	 * @param ILoadBalancer $loadBalancer
+	 * @param IConnectionProvider $dbProvider
 	 * @param UserNameUtils $userNameUtils
+	 * @param HideUserUtils $hideUserUtils
 	 */
 	public function __construct(
-		ILoadBalancer $loadBalancer,
-		UserNameUtils $userNameUtils
+		IConnectionProvider $dbProvider,
+		UserNameUtils $userNameUtils,
+		HideUserUtils $hideUserUtils
 	) {
-		$this->loadBalancer = $loadBalancer;
+		$this->dbProvider = $dbProvider;
 		$this->userNameUtils = $userNameUtils;
+		$this->hideUserUtils = $hideUserUtils;
 	}
 
 	/**
@@ -82,32 +84,20 @@ class UserNamePrefixSearch {
 		// Invalid user names are treated as empty strings
 		$prefix = $this->userNameUtils->getCanonical( $search ) ?: '';
 
-		$dbr = $this->loadBalancer->getConnectionRef( DB_REPLICA );
-
-		$tables = [ 'user' ];
-		$conds = [ 'user_name ' . $dbr->buildLike( $prefix, $dbr->anyString() ) ];
-		$joinConds = [];
+		$dbr = $this->dbProvider->getReplicaDatabase();
+		$queryBuilder = $dbr->newSelectQueryBuilder()
+			->select( 'user_name' )
+			->from( 'user' )
+			->where( $dbr->expr( 'user_name', IExpression::LIKE, new LikeValue( $prefix, $dbr->anyString() ) ) )
+			->orderBy( 'user_name' )
+			->limit( $limit )
+			->offset( $offset );
 
 		// Filter out hidden user names
 		if ( $audience === self::AUDIENCE_PUBLIC || !$audience->isAllowed( 'hideuser' ) ) {
-			$tables[] = 'ipblocks';
-			$conds['ipb_deleted'] = [ 0, null ];
-			$joinConds['ipblocks'] = [ 'LEFT JOIN', 'user_id=ipb_user' ];
+			$queryBuilder->andWhere( $this->hideUserUtils->getExpression( $dbr ) );
 		}
 
-		$res = $dbr->selectFieldValues(
-			$tables,
-			'user_name',
-			$conds,
-			__METHOD__,
-			[
-				'LIMIT' => $limit,
-				'ORDER BY' => 'user_name',
-				'OFFSET' => $offset
-			],
-			$joinConds
-		);
-
-		return $res;
+		return $queryBuilder->caller( __METHOD__ )->fetchFieldValues();
 	}
 }

@@ -27,7 +27,9 @@ use Wikimedia\AtEase\AtEase;
  * @ingroup Language
  */
 class FileDependency extends CacheDependency {
+	/** @var string */
 	private $filename;
+	/** @var null|false|int */
 	private $timestamp;
 
 	/**
@@ -68,9 +70,6 @@ class FileDependency extends CacheDependency {
 		}
 	}
 
-	/**
-	 * @return bool
-	 */
 	public function isExpired() {
 		AtEase::suppressWarnings();
 		$lastmod = filemtime( $this->filename );

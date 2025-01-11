@@ -2,17 +2,16 @@
 
 namespace MediaWiki\Tests\Maintenance;
 
-use CommentStoreComment;
-use Content;
-use ContentHandler;
 use DOMDocument;
 use ExecutableFinder;
+use MediaWiki\CommentStore\CommentStoreComment;
+use MediaWiki\Content\Content;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Revision\RevisionAccessException;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWikiLangTestCase;
-use MWException;
+use RuntimeException;
 use WikiExporter;
 use WikiPage;
 
@@ -61,8 +60,6 @@ abstract class DumpTestCase extends MediaWikiLangTestCase {
 	 * @param string $text Revisions text
 	 * @param string $summary Revisions summary
 	 * @param string $model The model ID (defaults to wikitext)
-	 *
-	 * @throws MWException
 	 * @return array
 	 */
 	protected function addRevision(
@@ -71,13 +68,15 @@ abstract class DumpTestCase extends MediaWikiLangTestCase {
 		$summary,
 		$model = CONTENT_MODEL_WIKITEXT
 	) {
-		$contentHandler = ContentHandler::getForModelID( $model );
+		$contentHandler = $this->getServiceContainer()
+			->getContentHandlerFactory()->getContentHandler( $model );
+
 		$content = $contentHandler->unserializeContent( $text );
 
 		$rev = $this->addMultiSlotRevision( $page, [ SlotRecord::MAIN => $content ], $summary );
 
 		if ( !$rev ) {
-			throw new MWException( "Could not create revision" );
+			throw new RuntimeException( "Could not create revision" );
 		}
 
 		$text_id = $this->getSlotTextId( $rev->getSlot( SlotRecord::MAIN ) );
@@ -112,7 +111,9 @@ abstract class DumpTestCase extends MediaWikiLangTestCase {
 	 * @return string
 	 */
 	protected function getSlotFormat( SlotRecord $slot ) {
-		$contentHandler = ContentHandler::getForModelID( $slot->getModel() );
+		$contentHandler = $this->getServiceContainer()
+			->getContentHandlerFactory()->getContentHandler( $slot->getModel() );
+
 		return $contentHandler->getDefaultFormat();
 	}
 
@@ -122,8 +123,6 @@ abstract class DumpTestCase extends MediaWikiLangTestCase {
 	 * @param WikiPage $page Page to add the revision to
 	 * @param Content[] $slots A mapping of slot names to Content objects
 	 * @param string $summary Revisions summary
-	 *
-	 * @throws MWException
 	 * @return RevisionRecord
 	 */
 	protected function addMultiSlotRevision(

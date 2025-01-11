@@ -1,8 +1,10 @@
 <?php
 
-require_once __DIR__ . '/Maintenance.php';
+use MediaWiki\Maintenance\Maintenance;
 
-use MediaWiki\MediaWikiServices;
+// @codeCoverageIgnoreStart
+require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Purge the MessageBlobStore cache.
@@ -10,14 +12,17 @@ use MediaWiki\MediaWikiServices;
  * This script exists for use with the `--skip-message-purge` option of
  * rebuildLocalisationCache.php.
  *
+ * @ingroup ResourceLoader
  * @since 1.36
  */
 class PurgeMessageBlobStore extends Maintenance {
 	public function execute() {
-		$blobStore = MediaWikiServices::getInstance()->getResourceLoader()->getMessageBlobStore();
+		$blobStore = $this->getServiceContainer()->getResourceLoader()->getMessageBlobStore();
 		$blobStore->clear();
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = PurgeMessageBlobStore::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

@@ -1,11 +1,17 @@
 <?php
 
+namespace Wikimedia\Tests\Rdbms;
+
+use DatabaseTestHelper;
+use MediaWikiCoversValidator;
+use PHPUnit\Framework\TestCase;
+use Wikimedia\Rdbms\Platform\ISQLPlatform;
 use Wikimedia\Rdbms\UpdateQueryBuilder;
 
 /**
  * @covers \Wikimedia\Rdbms\UpdateQueryBuilder
  */
-class UpdateQueryBuilderTest extends PHPUnit\Framework\TestCase {
+class UpdateQueryBuilderTest extends TestCase {
 	use MediaWikiCoversValidator;
 
 	/** @var DatabaseTestHelper */
@@ -68,6 +74,14 @@ class UpdateQueryBuilderTest extends PHPUnit\Framework\TestCase {
 		$this->assertSQL( 'UPDATE 1 SET a WHERE k = \'v1\' AND (k = \'v2\')', __METHOD__ );
 	}
 
+	public function testCondsAllRows() {
+		$this->uqb
+			->update( '1' )
+			->set( 'a' )
+			->where( ISQLPlatform::ALL_ROWS );
+		$this->assertSQL( 'UPDATE 1 SET a', __METHOD__ );
+	}
+
 	public function testIgnore() {
 		$this->uqb
 			->update( 'f' )
@@ -97,9 +111,8 @@ class UpdateQueryBuilderTest extends PHPUnit\Framework\TestCase {
 
 	public function testExecute() {
 		$this->uqb->update( 't' )->set( 'f' )->where( 'c' )->caller( __METHOD__ );
-		$res = $this->uqb->execute();
+		$this->uqb->execute();
 		$this->assertEquals( 'UPDATE t SET f WHERE (c)', $this->db->getLastSqls() );
-		$this->assertIsBool( $res );
 	}
 
 	public function testGetQueryInfo() {
@@ -108,13 +121,15 @@ class UpdateQueryBuilderTest extends PHPUnit\Framework\TestCase {
 			->ignore()
 			->set( [ 'f' => 'g' ] )
 			->andSet( [ 'd' => 'l' ] )
-			->where( [ 'a' => 'b' ] );
+			->where( [ 'a' => 'b' ] )
+			->caller( 'foo' );
 		$this->assertEquals(
 			[
-				'table' => 't' ,
+				'table' => 't',
 				'set' => [ 'f' => 'g', 'd' => 'l' ],
 				'conds' => [ 'a' => 'b' ],
 				'options' => [ 'IGNORE' ],
+				'caller' => 'foo',
 			],
 			$this->uqb->getQueryInfo() );
 	}

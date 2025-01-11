@@ -20,8 +20,16 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
+use MediaWiki\Cache\GenderCache;
+use MediaWiki\Language\Language;
 use MediaWiki\ParamValidator\TypeDef\UserDef;
+use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\Title\Title;
+use MediaWiki\Title\TitleValue;
+use MediaWiki\Watchlist\WatchedItemQueryService;
+use MediaWiki\Watchlist\WatchedItemStore;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\ParamValidator\TypeDef\IntegerDef;
 
@@ -33,29 +41,14 @@ use Wikimedia\ParamValidator\TypeDef\IntegerDef;
  */
 class ApiQueryWatchlistRaw extends ApiQueryGeneratorBase {
 
-	/** @var WatchedItemQueryService */
-	private $watchedItemQueryService;
+	private WatchedItemQueryService $watchedItemQueryService;
+	private Language $contentLanguage;
+	private NamespaceInfo $namespaceInfo;
+	private GenderCache $genderCache;
 
-	/** @var Language */
-	private $contentLanguage;
-
-	/** @var NamespaceInfo */
-	private $namespaceInfo;
-
-	/** @var GenderCache */
-	private $genderCache;
-
-	/**
-	 * @param ApiQuery $query
-	 * @param string $moduleName
-	 * @param WatchedItemQueryService $watchedItemQueryService
-	 * @param Language $contentLanguage
-	 * @param NamespaceInfo $namespaceInfo
-	 * @param GenderCache $genderCache
-	 */
 	public function __construct(
 		ApiQuery $query,
-		$moduleName,
+		string $moduleName,
 		WatchedItemQueryService $watchedItemQueryService,
 		Language $contentLanguage,
 		NamespaceInfo $namespaceInfo,
@@ -244,3 +237,6 @@ class ApiQueryWatchlistRaw extends ApiQueryGeneratorBase {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Watchlistraw';
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiQueryWatchlistRaw::class, 'ApiQueryWatchlistRaw' );

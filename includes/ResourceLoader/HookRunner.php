@@ -2,6 +2,7 @@
 
 namespace MediaWiki\ResourceLoader;
 
+use MediaWiki\Config\Config;
 use MediaWiki\HookContainer\HookContainer;
 
 /**
@@ -12,9 +13,12 @@ use MediaWiki\HookContainer\HookContainer;
 class HookRunner implements
 	\MediaWiki\ResourceLoader\Hook\ResourceLoaderExcludeUserOptionsHook,
 	\MediaWiki\ResourceLoader\Hook\ResourceLoaderForeignApiModulesHook,
+	\MediaWiki\ResourceLoader\Hook\ResourceLoaderModifyEmbeddedSourceUrlsHook,
 	\MediaWiki\ResourceLoader\Hook\ResourceLoaderRegisterModulesHook,
 	\MediaWiki\ResourceLoader\Hook\ResourceLoaderSiteModulePagesHook,
-	\MediaWiki\ResourceLoader\Hook\ResourceLoaderSiteStylesModulePagesHook
+	\MediaWiki\ResourceLoader\Hook\ResourceLoaderSiteStylesModulePagesHook,
+	\MediaWiki\ResourceLoader\Hook\ResourceLoaderGetConfigVarsHook,
+	\MediaWiki\ResourceLoader\Hook\ResourceLoaderJqueryMsgModuleMagicWordsHook
 {
 	/** @var HookContainer */
 	private $container;
@@ -39,6 +43,14 @@ class HookRunner implements
 		);
 	}
 
+	public function onResourceLoaderModifyEmbeddedSourceUrls( array &$urls ): void {
+		$this->container->run(
+			'ResourceLoaderModifyEmbeddedSourceUrls',
+			[ &$urls ],
+			[ 'abortable' => false ]
+		);
+	}
+
 	public function onResourceLoaderRegisterModules( ResourceLoader $rl ): void {
 		$this->container->run(
 			'ResourceLoaderRegisterModules',
@@ -59,6 +71,24 @@ class HookRunner implements
 		$this->container->run(
 			'ResourceLoaderSiteStylesModulePages',
 			[ $skin, &$pages ],
+			[ 'abortable' => false ]
+		);
+	}
+
+	public function onResourceLoaderGetConfigVars( array &$vars, $skin, Config $config ): void {
+		$this->container->run(
+			'ResourceLoaderGetConfigVars',
+			[ &$vars, $skin, $config ],
+			[ 'abortable' => false ]
+		);
+	}
+
+	public function onResourceLoaderJqueryMsgModuleMagicWords( Context $context,
+		array &$magicWords
+	): void {
+		$this->container->run(
+			'ResourceLoaderJqueryMsgModuleMagicWords',
+			[ $context, &$magicWords ],
 			[ 'abortable' => false ]
 		);
 	}

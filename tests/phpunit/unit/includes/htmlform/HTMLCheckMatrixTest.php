@@ -1,9 +1,16 @@
 <?php
 
+use MediaWiki\HTMLForm\Field\HTMLCheckMatrix;
+use MediaWiki\HTMLForm\HTMLForm;
+use MediaWiki\HTMLForm\HTMLFormField;
+use MediaWiki\HTMLForm\HTMLFormFieldRequiredOptionsException;
+use MediaWiki\Message\Message;
+
 /**
- * @covers HTMLCheckMatrix
+ * @covers \MediaWiki\HTMLForm\Field\HTMLCheckMatrix
  */
 class HTMLCheckMatrixTest extends MediaWikiUnitTestCase {
+	/** @var array */
 	private $defaultOptions = [
 		'rows' => [ 'r1', 'r2' ],
 		'columns' => [ 'c1', 'c2' ],
@@ -18,14 +25,8 @@ class HTMLCheckMatrixTest extends MediaWikiUnitTestCase {
 	}
 
 	public function testPlainInstantiation() {
-		try {
-			new HTMLCheckMatrix( [] );
-		} catch ( MWException $e ) {
-			$this->assertInstanceOf( HTMLFormFieldRequiredOptionsException::class, $e );
-			return;
-		}
-
-		$this->fail( 'Expected MWException indicating missing parameters but none was thrown.' );
+		$this->expectException( HTMLFormFieldRequiredOptionsException::class );
+		new HTMLCheckMatrix( [] );
 	}
 
 	public function testInstantiationWithMinimumRequiredParameters() {

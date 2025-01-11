@@ -20,7 +20,16 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
+use HtmlArmor;
+use ISearchResultSet;
 use MediaWiki\Search\TitleMatcher;
+use MediaWiki\Status\Status;
+use SearchEngine;
+use SearchEngineConfig;
+use SearchEngineFactory;
+use SearchResult;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\ParamValidator\TypeDef\EnumDef;
 
@@ -30,29 +39,13 @@ use Wikimedia\ParamValidator\TypeDef\EnumDef;
  * @ingroup API
  */
 class ApiQuerySearch extends ApiQueryGeneratorBase {
-	use SearchApi;
-
-	/** @var array list of api allowed params */
-	private $allowedParams;
-
-	/** @var SearchEngineConfig */
-	private $searchEngineConfig;
-
-	/** @var SearchEngineFactory */
-	private $searchEngineFactory;
+	use \MediaWiki\Api\SearchApi;
 
 	private TitleMatcher $titleMatcher;
 
-	/**
-	 * @param ApiQuery $query
-	 * @param string $moduleName
-	 * @param SearchEngineConfig $searchEngineConfig
-	 * @param SearchEngineFactory $searchEngineFactory
-	 * @param TitleMatcher $titleMatcher
-	 */
 	public function __construct(
 		ApiQuery $query,
-		$moduleName,
+		string $moduleName,
 		SearchEngineConfig $searchEngineConfig,
 		SearchEngineFactory $searchEngineFactory,
 		TitleMatcher $titleMatcher
@@ -157,6 +150,10 @@ class ApiQuerySearch extends ApiQueryGeneratorBase {
 			if ( $totalhits !== null ) {
 				$apiResult->addValue( [ 'query', 'searchinfo' ],
 					'totalhits', $totalhits );
+				if ( $matches->isApproximateTotalHits() ) {
+					$apiResult->addValue( [ 'query', 'searchinfo' ],
+						'approximate_totalhits', $matches->isApproximateTotalHits() );
+				}
 			}
 		}
 		if ( isset( $searchInfo['suggestion'] ) && $matches->hasSuggestion() ) {
@@ -325,10 +322,15 @@ class ApiQuerySearch extends ApiQueryGeneratorBase {
 		$section, $type
 	) {
 		$totalhits = null;
+		$approximateTotalHits = false;
 		if ( $matches->hasInterwikiResults( $type ) ) {
 			foreach ( $matches->getInterwikiResults( $type ) as $interwikiMatches ) {
 				// Include number of results if requested
-				$totalhits += $interwikiMatches->getTotalHits();
+				$interwikiTotalHits = $interwikiMatches->getTotalHits();
+				if ( $interwikiTotalHits !== null ) {
+					$totalhits += $interwikiTotalHits;
+					$approximateTotalHits = $approximateTotalHits || $interwikiMatches->isApproximateTotalHits();
+				}
 
 				foreach ( $interwikiMatches as $result ) {
 					$title = $result->getTitle();
@@ -354,6 +356,9 @@ class ApiQuerySearch extends ApiQueryGeneratorBase {
 			}
 			if ( $totalhits !== null ) {
 				$apiResult->addValue( [ 'query', $section . 'searchinfo' ], 'totalhits', $totalhits );
+				if ( $approximateTotalHits ) {
+					$apiResult->addValue( [ 'query', $section . 'searchinfo' ], 'approximate_totalhits', true );
+				}
 				$apiResult->addIndexedTagName( [
 					'query', $section . $this->getModuleName()
 				], 'p' );
@@ -390,11 +395,7 @@ class ApiQuerySearch extends ApiQueryGeneratorBase {
 	}
 
 	public function getAllowedParams() {
-		if ( $this->allowedParams !== null ) {
-			return $this->allowedParams;
-		}
-
-		$this->allowedParams = $this->buildCommonApiParams() + [
+		$allowedParams = $this->buildCommonApiParams() + [
 			'what' => [
 				ParamValidator::PARAM_TYPE => [
 					'title',
@@ -442,21 +443,21 @@ class ApiQuerySearch extends ApiQueryGeneratorBase {
 
 		// Generators only add info/properties if explicitly requested. T263841
 		if ( $this->isInGeneratorMode() ) {
-			$this->allowedParams['prop'][ParamValidator::PARAM_DEFAULT] = '';
-			$this->allowedParams['info'][ParamValidator::PARAM_DEFAULT] = '';
+			$allowedParams['prop'][ParamValidator::PARAM_DEFAULT] = '';
+			$allowedParams['info'][ParamValidator::PARAM_DEFAULT] = '';
 		}
 
 		// If we have more than one engine the list of available sorts is
 		// difficult to represent. For now don't expose it.
 		$alternatives = $this->searchEngineConfig->getSearchTypes();
 		if ( count( $alternatives ) == 1 ) {
-			$this->allowedParams['sort'] = [
+			$allowedParams['sort'] = [
 				ParamValidator::PARAM_DEFAULT => SearchEngine::DEFAULT_SORT,
 				ParamValidator::PARAM_TYPE => $this->searchEngineFactory->create()->getValidSorts(),
 			];
 		}
 
-		return $this->allowedParams;
+		return $allowedParams;
 	}
 
 	public function getSearchProfileParams() {
@@ -483,3 +484,6 @@ class ApiQuerySearch extends ApiQueryGeneratorBase {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Search';
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiQuerySearch::class, 'ApiQuerySearch' );

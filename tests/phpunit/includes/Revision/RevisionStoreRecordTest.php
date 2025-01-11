@@ -2,8 +2,9 @@
 
 namespace MediaWiki\Tests\Revision;
 
-use CommentStoreComment;
 use InvalidArgumentException;
+use MediaWiki\CommentStore\CommentStoreComment;
+use MediaWiki\Content\TextContent;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageIdentityValue;
 use MediaWiki\Revision\RevisionRecord;
@@ -11,13 +12,11 @@ use MediaWiki\Revision\RevisionSlots;
 use MediaWiki\Revision\RevisionStoreRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Title\Title;
+use MediaWiki\Title\TitleValue;
 use MediaWiki\User\UserIdentity;
 use MediaWiki\User\UserIdentityValue;
 use MediaWikiIntegrationTestCase;
 use stdClass;
-use TextContent;
-use TitleValue;
-use Wikimedia\Assert\PreconditionException;
 use Wikimedia\Timestamp\TimestampException;
 
 /**
@@ -53,8 +52,7 @@ class RevisionStoreRecordTest extends MediaWikiIntegrationTestCase {
 			$comment,
 			(object)$row,
 			$slots,
-			'acmewiki',
-			PreconditionException::class
+			'acmewiki'
 		];
 
 		yield 'all info, local' => [
@@ -124,7 +122,7 @@ class RevisionStoreRecordTest extends MediaWikiIntegrationTestCase {
 
 		$row = $protoRow;
 		yield 'no length, no hash' => [
-			Title::makeTitle( NS_MAIN, 'DummyDoesNotExist' ),
+			$title,
 			$user,
 			$comment,
 			(object)$row,
@@ -141,7 +139,6 @@ class RevisionStoreRecordTest extends MediaWikiIntegrationTestCase {
 	 * @param stdClass $row
 	 * @param RevisionSlots $slots
 	 * @param string|false $wikiId
-	 * @param string|null $expectedException
 	 */
 	public function testConstructorAndGetters(
 		PageIdentity $page,
@@ -149,8 +146,7 @@ class RevisionStoreRecordTest extends MediaWikiIntegrationTestCase {
 		CommentStoreComment $comment,
 		$row,
 		RevisionSlots $slots,
-		$wikiId = RevisionRecord::LOCAL,
-		string $expectedException = null
+		$wikiId = RevisionRecord::LOCAL
 	) {
 		$rec = new RevisionStoreRecord( $page, $user, $comment, $row, $slots, $wikiId );
 
@@ -201,15 +197,10 @@ class RevisionStoreRecordTest extends MediaWikiIntegrationTestCase {
 			);
 		}
 
-		if ( $expectedException ) {
-			$this->expectException( $expectedException );
-			$rec->getPageAsLinkTarget();
-		} else {
-			$this->assertTrue(
-				TitleValue::newFromPage( $page )->isSameLinkAs( $rec->getPageAsLinkTarget() ),
-				'getPageAsLinkTarget'
-			);
-		}
+		$this->assertTrue(
+			TitleValue::newFromPage( $page )->isSameLinkAs( $rec->getPageAsLinkTarget() ),
+			'getPageAsLinkTarget'
+		);
 	}
 
 	public static function provideConstructorFailure() {
@@ -284,12 +275,17 @@ class RevisionStoreRecordTest extends MediaWikiIntegrationTestCase {
 	public function testConstructorBadTimestamp() {
 		$row = (object)[
 			'rev_id' => 42,
-			'rev_page' => 'Foobar',
+			'rev_page' => 1234,
 			'rev_timestamp' => 'kittens',
 		];
 		$this->expectException( TimestampException::class );
 		new RevisionStoreRecord(
-			$this->createMock( PageIdentity::class ),
+			new PageIdentityValue(
+				$row->rev_page,
+				NS_MAIN,
+				'Foobar',
+				PageIdentityValue::LOCAL
+			),
 			new UserIdentityValue( 11, __CLASS__ ),
 			$this->createMock( CommentStoreComment::class ),
 			$row,

@@ -2,14 +2,13 @@
 
 /**
  * @group Language
- * @covers ShConverter
+ * @covers \ShConverter
  */
 class ShConverterTest extends MediaWikiIntegrationTestCase {
 	use LanguageConverterTestTrait;
 
 	/**
 	 * @dataProvider provideAutoConvertToAllVariants
-	 * @covers ShConverter::autoConvertToAllVariants
 	 */
 	public function testAutoConvertToAllVariants( $result, $value ) {
 		$this->assertEquals( $result, $this->getLanguageConverter()->autoConvertToAllVariants( $value ) );
@@ -34,9 +33,6 @@ class ShConverterTest extends MediaWikiIntegrationTestCase {
 		];
 	}
 
-	/**
-	 * @covers ShConverter::convertTo
-	 */
 	public function testConvertTo() {
 		$this->testConversionToLatin();
 		$this->testConversionToCyrillic();

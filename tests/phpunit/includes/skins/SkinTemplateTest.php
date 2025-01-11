@@ -11,10 +11,10 @@ class SkinQuickTemplateTest extends QuickTemplate {
 }
 
 /**
- * @covers SkinTemplate
- *
- * @group Output
- *
+ * @covers \SkinTemplate
+ * @covers \Skin
+ * @group Skin
+ * @group Database
  * @author Bene* < benestar.wikimedia@gmail.com >
  */
 class SkinTemplateTest extends MediaWikiIntegrationTestCase {
@@ -35,7 +35,7 @@ class SkinTemplateTest extends MediaWikiIntegrationTestCase {
 		);
 	}
 
-	public function makeListItemProvider() {
+	public static function makeListItemProvider() {
 		return [
 			[
 				'<li class="class mw-list-item" title="itemtitle"><a href="url" title="title">text</a></li>',
@@ -50,46 +50,6 @@ class SkinTemplateTest extends MediaWikiIntegrationTestCase {
 				[],
 				'Test makeListItem with normal values'
 			]
-		];
-	}
-
-	/**
-	 * @param bool $isSyndicated
-	 * @param string $html
-	 * @return OutputPage
-	 */
-	private function getMockOutputPage( $isSyndicated, $html ) {
-		$mock = $this->createMock( OutputPage::class );
-		$mock->expects( $this->once() )
-			->method( 'isSyndicated' )
-			->willReturn( $isSyndicated );
-		$mock->method( 'getHTML' )
-			->willReturn( $html );
-		return $mock;
-	}
-
-	public static function provideGetDefaultModules() {
-		return [
-			[
-				false,
-				'',
-				[]
-			],
-			[
-				true,
-				'',
-				[ 'mediawiki.feedlink' ]
-			],
-			[
-				false,
-				'FOO mw-ui-button BAR',
-				[ 'mediawiki.ui.button' ]
-			],
-			[
-				true,
-				'FOO mw-ui-button BAR',
-				[ 'mediawiki.ui.button', 'mediawiki.feedlink' ]
-			],
 		];
 	}
 
@@ -164,7 +124,6 @@ class SkinTemplateTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers SkinTemplate::getFooterIcons
 	 * @dataProvider provideGetFooterIcons
 	 */
 	public function testGetFooterIcons( $globals, $expected, $msg ) {
@@ -176,28 +135,7 @@ class SkinTemplateTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers Skin::getDefaultModules
-	 * @dataProvider provideGetDefaultModules
-	 */
-	public function testgetDefaultModules( $isSyndicated, $html, array $expectedModuleStyles ) {
-		$skin = new SkinTemplate();
-
-		$context = new DerivativeContext( $skin->getContext() );
-		$context->setOutput( $this->getMockOutputPage( $isSyndicated, $html ) );
-		$skin->setContext( $context );
-
-		$modules = $skin->getDefaultModules();
-
-		$actualStylesModule = array_merge( ...array_values( $modules['styles'] ) );
-		foreach ( $expectedModuleStyles as $expected ) {
-			$this->assertContains( $expected, $actualStylesModule );
-		}
-	}
-
-	/**
-	 * @covers SkinTemplate::injectLegacyMenusIntoPersonalTools
 	 * @dataProvider provideContentNavigation
-	 *
 	 * @param array $contentNavigation
 	 * @param array $expected
 	 */
@@ -310,16 +248,12 @@ class SkinTemplateTest extends MediaWikiIntegrationTestCase {
 		];
 	}
 
-	/**
-	 * @covers SkinTemplate::prepareQuickTemplate
-	 * @covers SkinTemplate::generateHTML
-	 */
 	public function testGenerateHTML() {
 		$wrapper = TestingAccessWrapper::newFromObject(
 			new SkinTemplate( [ 'template' => 'SkinQuickTemplateTest', 'name' => 'test' ] )
 		);
 
-		$wrapper->getContext()->setTitle( Title::newFromText( 'PrepareQuickTemplateTest' ) );
+		$wrapper->getContext()->setTitle( Title::makeTitle( NS_MAIN, 'PrepareQuickTemplateTest' ) );
 		$tpl = $wrapper->prepareQuickTemplate();
 		$contentNav = $tpl->get( 'content_navigation' );
 

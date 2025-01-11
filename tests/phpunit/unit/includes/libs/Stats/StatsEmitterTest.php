@@ -2,27 +2,30 @@
 
 namespace Wikimedia\Tests\Stats;
 
-use IBufferingStatsdDataFactory;
+use MediaWikiCoversValidator;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 use UDPTransport;
+use Wikimedia\Stats\IBufferingStatsdDataFactory;
 use Wikimedia\Stats\OutputFormats;
 use Wikimedia\Stats\StatsCache;
 use Wikimedia\Stats\StatsFactory;
 
 /**
- * @covers \Wikimedia\Stats\MetricsUDPEmitter
- * @covers \Wikimedia\Stats\MetricsCache
- * @covers \Wikimedia\Stats\Formatters\DogStatsD
+ * @covers \Wikimedia\Stats\Emitters\UDPEmitter
+ * @covers \Wikimedia\Stats\StatsCache
+ * @covers \Wikimedia\Stats\Formatters\DogStatsdFormatter
  * @covers \Wikimedia\Stats\OutputFormats
- * @covers \Wikimedia\Stats\MetricsRenderer
  */
 class StatsEmitterTest extends TestCase {
+	use MediaWikiCoversValidator;
 
-	public function testSend() {
+	public function testSendMetrics() {
 		// set up a mock statsd data factory
 		$statsd = $this->createMock( IBufferingStatsdDataFactory::class );
-		$statsd->expects( $this->exactly( 1 ) )->method( "updateCount" );
+		$statsd->expects( $this->exactly( 3 ) )->method( "updateCount" );
+		$statsd->expects( $this->once() )->method( "gauge" );
+		$statsd->expects( $this->once() )->method( "timing" );
 
 		// initialize cache
 		$cache = new StatsCache();
@@ -36,30 +39,54 @@ class StatsEmitterTest extends TestCase {
 
 		// transport
 		$transport = $this->createMock( UDPTransport::class );
-		$transport->expects( $this->exactly( 1 ) )->method( "emit" )
-			->withConsecutive(
-				[ "mediawiki.test.bar:1|c\nmediawiki.test.bar:1|c\nmediawiki.test.foo:3.14|ms\n" ]
+		$transport->expects( $this->once() )->method( "emit" )
+			->with(
+				"mediawiki.test.foo:1|c\n" .
+				"mediawiki.test.bar:1|c|#mykey:value1\n" .
+				"mediawiki.test.bar:1|c|#mykey:value2\n" .
+				"mediawiki.test.baz:3.14|ms\n" .
+				"mediawiki.test.quux:1|g\n" .
+				"mediawiki.test.stats_buffered_total:5|c\n"
 			);
 		$emitter = $emitter->withTransport( $transport );
 
 		// initialize metrics factory
-		$m = new StatsFactory( 'test', $cache, $emitter, new NullLogger );
+		$m = new StatsFactory( $cache, $emitter, new NullLogger, 'test' );
 
 		// inject statsd factory
 		$m->withStatsdDataFactory( $statsd );
 
-		// populate metric with statsd copy
-		$m->getCounter( 'bar' )->copyToStatsdAt( 'test.metric' )->increment();
+		// simple counter
+		$m->getCounter( 'foo' )
+			->increment();
 
-		// fetch same metric from cache and use it
-		$metric = $m->getCounter( 'bar' );
-		$metric->increment();
-		$metric = $m->getTiming( 'foo' );
-		$metric->observe( 3.14 );
+		// counter with statsd copy
+		// then fetch the same metric from cache and re-use it
+		$m->getCounter( 'bar' )
+			->setLabels( [
+				'mykey' => 'value1'
+			] )
+			->copyToStatsdAt( 'test.old_bar' )
+			->increment();
 
-		// name collision: gauge should not appear in output nor throw exception
-		$metric = @$m->getGauge( 'bar' );
-		$metric->set( 42 );
+		$m->getCounter( 'bar' )
+			->setLabels( [
+				'mykey' => 'value2'
+			] )
+			->increment();
+
+		// timer with statsd copy
+		$m->getTiming( 'baz' )
+			->copyToStatsdAt( 'test.old_baz' )
+			->observe( 3.14 );
+
+		// name collision: bar as gauge should not appear in output nor throw exception
+		@$m->getGauge( 'bar' )
+			->set( 42 );
+
+		$m->getGauge( 'quux' )
+			->copyToStatsdAt( 'test.old_quux' )
+			->set( 1 );
 
 		// send metrics
 		$m->flush();

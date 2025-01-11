@@ -27,6 +27,7 @@ namespace MediaWiki\StubObject;
  * when people use globals that we do not want them to.
  */
 class DeprecatedGlobal extends StubObject {
+	/** @var string|false */
 	protected $version;
 
 	/**
@@ -62,4 +63,5 @@ class DeprecatedGlobal extends StubObject {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( DeprecatedGlobal::class, 'DeprecatedGlobal' );

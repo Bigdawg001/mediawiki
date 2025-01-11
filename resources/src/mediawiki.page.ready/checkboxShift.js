@@ -1,18 +1,15 @@
 /**
- * @private
- * @class mw.plugin.page.ready
- */
-/**
  * Enable checkboxes to be checked or unchecked in a row by clicking one,
  * holding shift and clicking another one.
  *
  * @method checkboxShift
+ * @memberof module:mediawiki.page.ready
  * @param {jQuery} $box
  */
 module.exports = function ( $box ) {
-	var prev;
+	let prev;
 	// When our boxes are clicked..
-	$box.on( 'click', function ( e ) {
+	$box.on( 'click', ( e ) => {
 		// And one has been clicked before...
 		if ( prev && e.shiftKey ) {
 			// Check or uncheck this one and all in-between checkboxes,

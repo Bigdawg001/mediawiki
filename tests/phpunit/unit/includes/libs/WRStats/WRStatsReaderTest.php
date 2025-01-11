@@ -1,8 +1,15 @@
 <?php
 
-namespace Wikimedia\WRStats;
+namespace Wikimedia\Tests\WRStats;
 
+use MediaWikiCoversValidator;
 use PHPUnit\Framework\TestCase;
+use Wikimedia\WRStats\ArrayStatsStore;
+use Wikimedia\WRStats\GlobalEntityKey;
+use Wikimedia\WRStats\RatePromise;
+use Wikimedia\WRStats\TimeRange;
+use Wikimedia\WRStats\WRStatsReader;
+use Wikimedia\WRStats\WRStatsWriter;
 
 /**
  * @covers \Wikimedia\WRStats\WRStatsReader
@@ -12,6 +19,9 @@ use PHPUnit\Framework\TestCase;
  * @covers \Wikimedia\WRStats\ArrayStatsStore
  */
 class WRStatsReaderTest extends TestCase {
+	use MediaWikiCoversValidator;
+
+	/** @var ArrayStatsStore|null */
 	private $store;
 
 	public function testLatest() {

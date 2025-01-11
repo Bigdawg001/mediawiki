@@ -3,10 +3,11 @@
 namespace MediaWiki\Parser\Parsoid;
 
 use MediaWiki\Languages\LanguageConverterFactory;
+use MediaWiki\Parser\ParserFactory;
+use MediaWiki\Parser\Parsoid\Config\DataAccess;
 use MediaWiki\Parser\Parsoid\Config\PageConfigFactory;
-use ParserFactory;
-use Wikimedia\Parsoid\Config\DataAccess;
 use Wikimedia\Parsoid\Config\SiteConfig;
+use Wikimedia\Parsoid\Parsoid;
 
 /**
  * ParserFactory which uses a ParsoidParser.
@@ -22,21 +23,11 @@ use Wikimedia\Parsoid\Config\SiteConfig;
  * @ingroup Parser
  */
 class ParsoidParserFactory /* eventually this may extend \ParserFactory */ {
-
-	/** @var SiteConfig */
-	private $siteConfig;
-
-	/** @var DataAccess */
-	private $dataAccess;
-
-	/** @var PageConfigFactory */
-	private $pageConfigFactory;
-
-	/** @var LanguageConverterFactory */
-	private $languageConverterFactory;
-
-	/** @var ParserFactory */
-	private $legacyParserFactory;
+	private SiteConfig $siteConfig;
+	private DataAccess $dataAccess;
+	private PageConfigFactory $pageConfigFactory;
+	private LanguageConverterFactory $languageConverterFactory;
+	private ParserFactory $legacyParserFactory;
 
 	/**
 	 * @param SiteConfig $siteConfig
@@ -67,11 +58,10 @@ class ParsoidParserFactory /* eventually this may extend \ParserFactory */ {
 	 */
 	public function create(): ParsoidParser {
 		return new ParsoidParser(
-			$this->siteConfig,
-			$this->dataAccess,
+			new Parsoid( $this->siteConfig, $this->dataAccess ),
 			$this->pageConfigFactory,
 			$this->languageConverterFactory,
-			$this->legacyParserFactory
+			$this->dataAccess
 		);
 	}
 }

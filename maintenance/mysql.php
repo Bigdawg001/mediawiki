@@ -23,11 +23,15 @@
  * @ingroup Maintenance
  */
 
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Shell\Shell;
+use Wikimedia\FileBackend\FSFile\TempFSFile;
 use Wikimedia\IPUtils;
+use Wikimedia\Rdbms\ServerInfo;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * @ingroup Maintenance
@@ -61,7 +65,7 @@ class MysqlMaintenance extends Maintenance {
 
 	public function execute() {
 		$dbName = $this->getOption( 'wikidb', false );
-		$lbf = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
+		$lbf = $this->getServiceContainer()->getDBLoadBalancerFactory();
 
 		// Pick LB
 		if ( $this->hasOption( 'cluster' ) ) {
@@ -94,7 +98,7 @@ class MysqlMaintenance extends Maintenance {
 				$this->fatalError( "Error: Host not configured: \"$host\"" );
 			}
 		} elseif ( $this->hasOption( 'write' ) ) {
-			$index = $lb->getWriterIndex();
+			$index = ServerInfo::WRITER_INDEX;
 		} else {
 			$group = $this->getOption( 'group', false );
 			$index = $lb->getReaderIndex( $group );
@@ -143,7 +147,7 @@ class MysqlMaintenance extends Maintenance {
 			2 => STDERR,
 		];
 
-		// Split host and port as in DatabaseMysqli::mysqlConnect()
+		// Split host and port as in DatabaseMySQL::mysqlConnect()
 		$realServer = $info['host'];
 		$hostAndPort = IPUtils::splitHostAndPort( $realServer );
 		$socket = false;
@@ -178,7 +182,7 @@ class MysqlMaintenance extends Maintenance {
 			$args[] = "--port={$port}";
 		}
 
-		$args = array_merge( $args, $this->mArgs );
+		$args = array_merge( $args, $this->getArgs() );
 
 		// Ignore SIGINT if possible, otherwise the wrapper terminates when the user presses
 		// ctrl-C to kill a query.
@@ -201,5 +205,7 @@ class MysqlMaintenance extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = MysqlMaintenance::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

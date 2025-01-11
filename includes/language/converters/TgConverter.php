@@ -18,6 +18,9 @@
  * @file
  */
 
+use MediaWiki\Language\LanguageConverter;
+use MediaWiki\Language\ReplacementArray;
+
 /**
  * Tajik (Тоҷикӣ) specific code, converting Tajiki to Latin orthography.
  *
@@ -25,10 +28,7 @@
  */
 class TgConverter extends LanguageConverter {
 
-	/**
-	 * @var array
-	 */
-	private $table = [
+	private const TABLE = [
 		'а' => 'a',
 		'б' => 'b',
 		'в' => 'v',
@@ -104,39 +104,21 @@ class TgConverter extends LanguageConverter {
 		'Ц' => 'Ts',
 	];
 
-	/**
-	 * Get Main language code.
-	 * @since 1.36
-	 *
-	 * @return string
-	 */
 	public function getMainCode(): string {
 		return 'tg';
 	}
 
-	/**
-	 * Get supported variants of the language.
-	 * @since 1.36
-	 *
-	 * @return array
-	 */
 	public function getLanguageVariants(): array {
 		return [ 'tg', 'tg-latn' ];
 	}
 
-	/**
-	 * Get language variants fallbacks.
-	 * @since 1.36
-	 *
-	 * @return array
-	 */
 	public function getVariantsFallbacks(): array {
 		return [];
 	}
 
-	protected function loadDefaultTables() {
-		$this->mTables = [
-			'tg-latn' => new ReplacementArray( $this->table ),
+	protected function loadDefaultTables(): array {
+		return [
+			'tg-latn' => new ReplacementArray( self::TABLE ),
 			'tg' => new ReplacementArray()
 		];
 	}

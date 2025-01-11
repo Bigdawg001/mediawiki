@@ -19,15 +19,20 @@
  * @author Daniel Kinzler
  */
 
+use MediaWiki\Cache\GenderCache;
 use MediaWiki\Interwiki\InterwikiLookup;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageIdentityValue;
 use MediaWiki\Tests\Unit\DummyServicesTrait;
+use MediaWiki\Title\MalformedTitleException;
+use MediaWiki\Title\MediaWikiTitleCodec;
+use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\Title\Title;
+use MediaWiki\Title\TitleValue;
 
 /**
- * @covers MediaWikiTitleCodec
+ * @covers \MediaWiki\Title\MediaWikiTitleCodec
  *
  * @group Title
  * @group Database
@@ -74,7 +79,6 @@ class MediaWikiTitleCodecTest extends MediaWikiIntegrationTestCase {
 	 * @return InterwikiLookup
 	 */
 	private function getInterwikiLookup(): InterwikiLookup {
-		// DummyServicesTrait::getDummyInterwikiLookup
 		return $this->getDummyInterwikiLookup( [ 'localtestiw', 'remotetestiw' ] );
 	}
 
@@ -86,17 +90,15 @@ class MediaWikiTitleCodecTest extends MediaWikiIntegrationTestCase {
 	 * @return NamespaceInfo
 	 */
 	private function getNamespaceInfo(): NamespaceInfo {
-		// DummyServicesTrait::getDummyNamespaceInfo with the relevant overrides (the
-		// namespaces that exist, and the capitalization)
 		return $this->getDummyNamespaceInfo( [
-			'CanonicalNamespaceNames' => [
+			MainConfigNames::CanonicalNamespaceNames => [
 				NS_SPECIAL => 'Special',
 				NS_MAIN => '',
 				NS_TALK => 'Talk',
 				NS_USER => 'User',
 				NS_USER_TALK => 'User_talk',
 			],
-			'CapitalLinks' => true,
+			MainConfigNames::CapitalLinks => true,
 		] );
 	}
 
@@ -138,9 +140,7 @@ class MediaWikiTitleCodecTest extends MediaWikiIntegrationTestCase {
 	public function testFormat( $namespace, $text, $fragment, $interwiki, $lang, $expected,
 		$normalized = null
 	) {
-		if ( $normalized === null ) {
-			$normalized = $expected;
-		}
+		$normalized ??= $expected;
 
 		$codec = $this->makeCodec( $lang );
 		$actual = $codec->formatTitle( $namespace, $text, $fragment, $interwiki );
@@ -255,7 +255,7 @@ class MediaWikiTitleCodecTest extends MediaWikiIntegrationTestCase {
 
 			[
 				new PageIdentityValue( 37, NS_MAIN, 'Foo_Bar', PageIdentity::LOCAL ),
-				'en' ,
+				'en',
 				'Foo_Bar'
 			],
 			[
@@ -275,12 +275,12 @@ class MediaWikiTitleCodecTest extends MediaWikiIntegrationTestCase {
 			],
 			[
 				new PageIdentityValue( 37, NS_MAIN, 'Remote_page', PageIdentity::LOCAL ),
-				'en' ,
+				'en',
 				'Remote_page'
 			],
 			[
 				new PageIdentityValue( 37, 10000000, 'Foobar', PageIdentity::LOCAL ),
-				'en' ,
+				'en',
 				'Special:Badtitle/NS10000000:Foobar'
 			],
 		];
@@ -419,11 +419,8 @@ class MediaWikiTitleCodecTest extends MediaWikiIntegrationTestCase {
 	 * @dataProvider provideParseTitle
 	 */
 	public function testParseTitle( $text, $ns, $lang, $title = null ) {
-		if ( $title === null ) {
-			$title = str_replace( ' ', '_', trim( $text ) );
-		}
-
-		if ( is_string( $title ) ) {
+		if ( !( $title instanceof TitleValue ) ) {
+			$title ??= str_replace( ' ', '_', trim( $text ) );
 			$title = new TitleValue( NS_MAIN, $title, '' );
 		}
 
@@ -520,9 +517,9 @@ class MediaWikiTitleCodecTest extends MediaWikiIntegrationTestCase {
 
 	/**
 	 * @dataProvider provideMakeTitleValueSafe
-	 * @covers Title::makeTitleSafe
-	 * @covers Title::makeName
-	 * @covers Title::secureAndSplit
+	 * @covers \MediaWiki\Title\Title::makeTitleSafe
+	 * @covers \MediaWiki\Title\Title::makeName
+	 * @covers \MediaWiki\Title\Title::secureAndSplit
 	 */
 	public function testMakeTitleSafe(
 		$expected, $ns, $text, $fragment = '', $interwiki = '', $lang = 'en'
@@ -535,7 +532,7 @@ class MediaWikiTitleCodecTest extends MediaWikiIntegrationTestCase {
 
 		if ( $expected ) {
 			$this->assertNotNull( $actual );
-			$expectedTitle = Title::castFromLinkTarget( $expected );
+			$expectedTitle = Title::newFromLinkTarget( $expected );
 			$this->assertSame( $expectedTitle->getPrefixedDBkey(), $actual->getPrefixedDBkey() );
 		} else {
 			$this->assertNull( $actual );

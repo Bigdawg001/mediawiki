@@ -21,15 +21,16 @@
 namespace MediaWiki\Interwiki;
 
 use Interwiki;
-use Language;
 use MapCacheLRU;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\Language\Language;
+use MediaWiki\Languages\LanguageNameUtils;
 use MediaWiki\MainConfigNames;
 use MediaWiki\WikiMap\WikiMap;
-use WANObjectCache;
-use Wikimedia\Rdbms\ILoadBalancer;
+use Wikimedia\ObjectCache\WANObjectCache;
+use Wikimedia\Rdbms\IConnectionProvider;
 
 /**
  * InterwikiLookup backed by the `interwiki` database table or $wgInterwikiCache.
@@ -47,56 +48,54 @@ use Wikimedia\Rdbms\ILoadBalancer;
 class ClassicInterwikiLookup implements InterwikiLookup {
 	/**
 	 * @internal For use by ServiceWiring
-	 * @var string[]
 	 */
 	public const CONSTRUCTOR_OPTIONS = [
 		MainConfigNames::InterwikiExpiry,
 		MainConfigNames::InterwikiCache,
 		MainConfigNames::InterwikiScopes,
 		MainConfigNames::InterwikiFallbackSite,
+		MainConfigNames::InterwikiMagic,
+		MainConfigNames::VirtualDomainsMapping,
 		'wikiId',
 	];
 
 	private ServiceOptions $options;
-	/** @var Language */
-	private $contLang;
-	/** @var WANObjectCache */
-	private $wanCache;
-	/** @var HookRunner */
-	private $hookRunner;
-	/** @var ILoadBalancer */
-	private $loadBalancer;
+	private Language $contLang;
+	private WANObjectCache $wanCache;
+	private HookRunner $hookRunner;
+	private IConnectionProvider $dbProvider;
+	private LanguageNameUtils $languageNameUtils;
 
 	/** @var MapCacheLRU<Interwiki|false> */
-	private $instances;
+	private MapCacheLRU $instances;
 	/**
 	 * Specify number of domains to check for messages:
 	 *    - 1: Just local wiki level
 	 *    - 2: wiki and global levels
 	 *    - 3: site level as well as wiki and global levels
-	 * @var int
 	 */
-	private $interwikiScopes;
-	/** @var array|null Complete pregenerated data if available */
-	private $data;
-	/** @var string */
-	private $wikiId;
-	/** @var string|null */
-	private $thisSite = null;
+	private int $interwikiScopes;
+	/** Complete pregenerated data if available */
+	private ?array $data;
+	private string $wikiId;
+	private ?string $thisSite = null;
+	private array $virtualDomainsMapping;
 
 	/**
 	 * @param ServiceOptions $options
 	 * @param Language $contLang Language object used to convert prefixes to lower case
 	 * @param WANObjectCache $wanCache Cache for interwiki info retrieved from the database
 	 * @param HookContainer $hookContainer
-	 * @param ILoadBalancer $loadBalancer
+	 * @param IConnectionProvider $dbProvider
+	 * @param LanguageNameUtils $languageNameUtils
 	 */
 	public function __construct(
 		ServiceOptions $options,
 		Language $contLang,
 		WANObjectCache $wanCache,
 		HookContainer $hookContainer,
-		ILoadBalancer $loadBalancer
+		IConnectionProvider $dbProvider,
+		LanguageNameUtils $languageNameUtils
 	) {
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
 		$this->options = $options;
@@ -104,7 +103,8 @@ class ClassicInterwikiLookup implements InterwikiLookup {
 		$this->contLang = $contLang;
 		$this->wanCache = $wanCache;
 		$this->hookRunner = new HookRunner( $hookContainer );
-		$this->loadBalancer = $loadBalancer;
+		$this->dbProvider = $dbProvider;
+		$this->languageNameUtils = $languageNameUtils;
 
 		$this->instances = new MapCacheLRU( 1000 );
 		$this->interwikiScopes = $options->get( MainConfigNames::InterwikiScopes );
@@ -112,6 +112,7 @@ class ClassicInterwikiLookup implements InterwikiLookup {
 		$interwikiData = $options->get( MainConfigNames::InterwikiCache );
 		$this->data = is_array( $interwikiData ) ? $interwikiData : null;
 		$this->wikiId = $options->get( 'wikiId' );
+		$this->virtualDomainsMapping = $options->get( MainConfigNames::VirtualDomainsMapping ) ?? [];
 	}
 
 	/**
@@ -212,18 +213,24 @@ class ClassicInterwikiLookup implements InterwikiLookup {
 			return false;
 		}
 
-		$fname = __METHOD__;
 		$iwData = $this->wanCache->getWithSetCallback(
 			$this->wanCache->makeKey( 'interwiki', $prefix ),
 			$this->options->get( MainConfigNames::InterwikiExpiry ),
-			function ( $oldValue, &$ttl, array &$setOpts ) use ( $prefix, $fname ) {
-				$dbr = $this->loadBalancer->getConnectionRef( DB_REPLICA );
-				$row = $dbr->selectRow(
-					'interwiki',
-					self::selectFields(),
-					[ 'iw_prefix' => $prefix ],
-					$fname
-				);
+			function ( $oldValue, &$ttl, array &$setOpts ) use ( $prefix ) {
+				// Global interlanguage link
+				if ( $this->options->get( MainConfigNames::InterwikiMagic )
+					&& $this->languageNameUtils->getLanguageName( $prefix )
+				) {
+					$row = $this->loadFromDB( $prefix, 'virtual-interwiki-interlanguage' );
+				} else {
+					// Local interwiki link
+					$row = $this->loadFromDB( $prefix );
+
+					// Global interwiki link (not interlanguage)
+					if ( !$row && isset( $this->virtualDomainsMapping['virtual-interwiki'] ) ) {
+						$row = $this->loadFromDB( $prefix, 'virtual-interwiki' );
+					}
+				}
 
 				return $row ? (array)$row : '!NONEXISTENT';
 			}
@@ -231,6 +238,24 @@ class ClassicInterwikiLookup implements InterwikiLookup {
 
 		// Handle non-existent case
 		return is_array( $iwData ) ? $this->makeFromRow( $iwData ) : false;
+	}
+
+	/*
+	 * Fetch interwiki data from a DB query.
+	 *
+	 * @param string $prefix The interwiki prefix
+	 * @param string|false $domain Domain ID, or false for the current domain
+	 * @return stdClass|false interwiki data
+	 */
+	private function loadFromDB( $prefix, $domain = false ) {
+		$dbr = $this->dbProvider->getReplicaDatabase( $domain );
+		$row = $dbr->newSelectQueryBuilder()
+			->select( self::selectFields() )
+			->from( 'interwiki' )
+			->where( [ 'iw_prefix' => $prefix ] )
+			->caller( __METHOD__ )->fetchRow();
+
+		return $row;
 	}
 
 	/**
@@ -359,11 +384,13 @@ class ClassicInterwikiLookup implements InterwikiLookup {
 			$where['iw_local'] = (int)$local;
 		}
 
-		$dbr = $this->loadBalancer->getConnectionRef( DB_REPLICA );
-		$res = $dbr->select( 'interwiki',
-			self::selectFields(),
-			$where, __METHOD__, [ 'ORDER BY' => 'iw_prefix' ]
-		);
+		$dbr = $this->dbProvider->getReplicaDatabase();
+		$res = $dbr->newSelectQueryBuilder()
+			->select( self::selectFields() )
+			->from( 'interwiki' )
+			->where( $where )
+			->orderBy( 'iw_prefix' )
+			->caller( __METHOD__ )->fetchResultSet();
 
 		$retval = [];
 		foreach ( $res as $row ) {

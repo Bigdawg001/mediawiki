@@ -18,10 +18,12 @@
  * @file
  */
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 use MediaWiki\MainConfigNames;
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Maintenance\Maintenance;
 use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 /**
@@ -42,7 +44,9 @@ class PurgeParserCache extends Maintenance {
 	/** @var null|float */
 	private $lastTimestamp;
 
+	/** @var int */
 	private $tmpCount = 0;
+	/** @var float */
 	private $usleep = 0;
 
 	public function __construct() {
@@ -91,7 +95,7 @@ class PurgeParserCache extends Maintenance {
 
 		$this->output( "Deleting objects expiring before " . $humanDate . "\n" );
 
-		$pc = MediaWikiServices::getInstance()->getParserCache()->getCacheStorage();
+		$pc = $this->getServiceContainer()->getParserCache()->getCacheStorage();
 		$success = $pc->deleteObjectsExpiringBefore(
 			$timestamp,
 			[ $this, 'showProgressAndWait' ],
@@ -141,5 +145,7 @@ class PurgeParserCache extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = PurgeParserCache::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

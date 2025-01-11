@@ -1,13 +1,18 @@
 <?php
 
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Page\MovePageFactory;
 use MediaWiki\RenameUser\RenameuserSQL;
+use MediaWiki\Status\Status;
 use MediaWiki\Title\TitleFactory;
 use MediaWiki\User\TempUser\Pattern;
+use MediaWiki\User\User;
 use MediaWiki\User\UserFactory;
+use Wikimedia\Rdbms\IExpression;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 class RenameUsersMatchingPattern extends Maintenance {
 	/** @var UserFactory */
@@ -55,7 +60,7 @@ class RenameUsersMatchingPattern extends Maintenance {
 	}
 
 	private function initServices() {
-		$services = MediaWikiServices::getInstance();
+		$services = $this->getServiceContainer();
 		if ( $services->getCentralIdLookupFactory()->getNonLocalLookup() ) {
 			$this->fatalError( "This script cannot be run when CentralAuth is enabled." );
 		}
@@ -76,8 +81,7 @@ class RenameUsersMatchingPattern extends Maintenance {
 			$performer = $this->userFactory->newFromName( $this->getOption( 'performer' ) );
 		}
 		if ( !$performer ) {
-			$this->error( "Unable to get performer account" );
-			return false;
+			$this->fatalError( "Unable to get performer account" );
 		}
 		$this->performer = $performer;
 
@@ -86,7 +90,7 @@ class RenameUsersMatchingPattern extends Maintenance {
 		$this->suppressRedirect = $this->getOption( 'suppress-redirect' );
 		$this->skipPageMoves = $this->getOption( 'skip-page-moves' );
 
-		$dbr = $this->getDB( DB_REPLICA );
+		$dbr = $this->getReplicaDB();
 		$batchConds = [];
 		$batchSize = $this->getBatchSize();
 		$numRenamed = 0;
@@ -94,10 +98,8 @@ class RenameUsersMatchingPattern extends Maintenance {
 			$res = $dbr->newSelectQueryBuilder()
 				->select( [ 'user_name' ] )
 				->from( 'user' )
-				->where( array_merge(
-					[ 'user_name' . $fromPattern->buildLike( $dbr ) ],
-					$batchConds
-				) )
+				->where( $dbr->expr( 'user_name', IExpression::LIKE, $fromPattern->toLikeValue( $dbr ) ) )
+				->andWhere( $batchConds )
 				->orderBy( 'user_name' )
 				->limit( $batchSize )
 				->caller( __METHOD__ )
@@ -105,7 +107,7 @@ class RenameUsersMatchingPattern extends Maintenance {
 
 			foreach ( $res as $row ) {
 				$oldName = $row->user_name;
-				$batchConds = [ 'user_name > ' . $dbr->addQuotes( $oldName ) ];
+				$batchConds = [ $dbr->expr( 'user_name', '>', $oldName ) ];
 				$variablePart = $fromPattern->extract( $oldName );
 				if ( $variablePart === null ) {
 					$this->output( "Username \"fromName\" matched the LIKE " .
@@ -113,6 +115,24 @@ class RenameUsersMatchingPattern extends Maintenance {
 					continue;
 				}
 				$newName = $toPattern->generate( $variablePart );
+
+				// Canonicalize
+				$newTitle = $this->titleFactory->makeTitleSafe( NS_USER, $newName );
+				$newUser = $this->userFactory->newFromName( $newName );
+				if ( !$newTitle || !$newUser ) {
+					$this->output( "Cannot rename \"$oldName\" " .
+						"because \"$newName\" is not a valid title\n" );
+					continue;
+				}
+				$newName = $newTitle->getText();
+
+				// Check destination existence
+				if ( $newUser->isRegistered() ) {
+					$this->output( "Cannot rename \"$oldName\" " .
+						"because \"$newName\" already exists\n" );
+					continue;
+				}
+
 				$numRenamed += $this->renameUser( $oldName, $newName ) ? 1 : 0;
 				$this->waitForReplication();
 			}
@@ -195,14 +215,15 @@ class RenameUsersMatchingPattern extends Maintenance {
 			$status->merge( $movePage->moveSubpages(
 				$this->performer, $logMessage, !$this->suppressRedirect ) );
 			if ( !$status->isGood() ) {
-				$this->output( "Failed to rename user page: " .
-					$status->getWikiText( false, false, 'en' ) .
-					"\n" );
+				$this->output( "Failed to rename user page\n" );
+				$this->error( $status );
 			}
 		}
 		return true;
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = RenameUsersMatchingPattern::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

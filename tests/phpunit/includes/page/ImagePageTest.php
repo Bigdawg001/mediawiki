@@ -23,6 +23,7 @@ class ImagePageTest extends MediaWikiMediaTestCase {
 
 	public function getImagePage( $filename ) {
 		$title = Title::makeTitleSafe( NS_FILE, $filename );
+		$title->setContentModel( CONTENT_MODEL_WIKITEXT );
 		$file = $this->dataFile( $filename );
 		$iPage = new ImagePage( $title );
 		$iPage->setFile( $file );
@@ -30,7 +31,7 @@ class ImagePageTest extends MediaWikiMediaTestCase {
 	}
 
 	/**
-	 * @covers ImagePage::getThumbSizes
+	 * @covers \ImagePage::getThumbSizes
 	 * @dataProvider providerGetThumbSizes
 	 * @param string $filename
 	 * @param int $expectedNumberThumbs How many thumbnails to show
@@ -55,7 +56,7 @@ class ImagePageTest extends MediaWikiMediaTestCase {
 	}
 
 	/**
-	 * @covers ImagePage::getLanguageForRendering()
+	 * @covers \ImagePage::getLanguageForRendering()
 	 * @dataProvider provideGetLanguageForRendering
 	 *
 	 * @param string|null $expected Expected IETF language code

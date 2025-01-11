@@ -44,8 +44,8 @@ $defaultDateFormat = 'dmy';
 
 $dateFormats = [
 	'dmy time' => 'H:i',
-	'dmy date' => 'j \d\e F \d\e Y',
-	'dmy both' => 'j \d\e F \d\e Y "ás" H:i',
+	'dmy date' => 'j "de" F "de" Y',
+	'dmy both' => 'j "de" F "de" Y "ás" H:i',
 ];
 
 /** @phpcs-require-sorted-array */
@@ -79,6 +79,7 @@ $specialPageAliases = [
 	'FileDuplicateSearch'       => [ 'Procura_de_ficheiros_duplicados', 'Busca_de_ficheiros_duplicados', 'Busca_de_arquivos_duplicados' ],
 	'Filepath'                  => [ 'Ruta_do_ficheiro' ],
 	'Import'                    => [ 'Importar' ],
+	'Interwiki'                 => [ 'Interwikis' ],
 	'Invalidateemail'           => [ 'Invalidar_o_enderezo_de_correo_electrónico', 'Invalidar_correo_electrónico', 'Invalidar_enderezo_de_correo_electrónico', 'Invalidar_enderezo_correo_electrónico' ],
 	'JavaScriptTest'            => [ 'Proba_do_JavaScript' ],
 	'LinkSearch'                => [ 'Buscar_ligazóns_web' ],
@@ -202,7 +203,7 @@ $magicWords = [
 	'img_top'                   => [ '1', 'arriba', 'acima', 'top' ],
 	'img_upright'               => [ '1', 'arribaádereita', 'arribaádereita=$1', 'arribaádereita_$1', 'superiordireito', 'superiordireito=$1', 'superiordireito_$1', 'superiordireito $1', 'upright', 'upright=$1', 'upright $1' ],
 	'index'                     => [ '1', '__INDEXAR__', '__INDEX__' ],
-	'language'                  => [ '0', '#LINGUA:', '#IDIOMA:', '#LANGUAGE:' ],
+	'language'                  => [ '0', '#LINGUA', '#IDIOMA', '#LANGUAGE' ],
 	'lc'                        => [ '0', 'MINÚSCULA:', 'MINUSCULA', 'MINÚSCULA', 'MINUSCULAS', 'MINÚSCULAS', 'LC:' ],
 	'lcfirst'                   => [ '0', 'PRIMEIRAMINÚSCULA:', 'PRIMEIRAMINUSCULA:', 'LCFIRST:' ],
 	'localday'                  => [ '1', 'DÍALOCAL', 'DIALOCAL', 'LOCALDAY' ],

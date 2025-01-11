@@ -1,6 +1,8 @@
 <?php
 
 use MediaWiki\ResourceLoader\ForeignResourceManager;
+use MediaWiki\ResourceLoader\ForeignResourceNetworkException;
+use PHPUnit\Framework\TestCase;
 
 /**
  * Verify MediaWiki core's foreign-resources.yaml.
@@ -10,7 +12,7 @@ use MediaWiki\ResourceLoader\ForeignResourceManager;
  *
  * @coversNothing
  */
-class ForeignResourceStructureTest extends \PHPUnit\Framework\TestCase {
+class ForeignResourceStructureTest extends TestCase {
 
 	public function testVerifyIntegrity() {
 		global $IP;
@@ -37,6 +39,22 @@ class ForeignResourceStructureTest extends \PHPUnit\Framework\TestCase {
 	$ php maintenance/manageForeignResources.php update <moduleName>
 		';
 
-		$this->assertTrue( $frm->run( 'verify', 'all' ), "$out\n$helpUpdate" );
+		try {
+			$this->assertTrue( $frm->run( 'verify', 'all' ), "$out\n$helpUpdate" );
+		} catch ( ForeignResourceNetworkException $e ) {
+			$this->markTestSkipped( 'Network error: ' . $e->getMessage() );
+		}
+
+		// Verify that the CycloneDX SBOM file is up to date. CDX serials are random, so we need
+		// to hack in the correct serial.
+		$cdxFile = $frm->getCdxFileLocation();
+		$this->assertFileExists( $cdxFile );
+		$cdxJsonString = file_get_contents( $cdxFile );
+		$serial = preg_match( '/"urn:uuid:[\\da-f\\-]+"/', $cdxJsonString, $matches );
+		$this->assertSame( 1, $serial );
+		$expectedCdx = preg_replace( '/"urn:uuid:[\\da-f\\-]+"/', $matches[0], $frm->generateCdx() );
+		$this->assertJsonStringEqualsJsonFile( $cdxFile, $expectedCdx,
+			"foreign-resources.cdx.json does not match foreign-resources.yaml, "
+			. "run `manageForeignResources.php make-cdx`" );
 	}
 }

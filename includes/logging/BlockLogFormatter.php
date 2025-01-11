@@ -22,9 +22,14 @@
  * @since 1.25
  */
 
+use MediaWiki\Api\ApiResult;
+use MediaWiki\Language\Language;
 use MediaWiki\Linker\Linker;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Message\Message;
+use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
 
 /**
  * This class formats block log entries.
@@ -84,12 +89,14 @@ class BlockLogFormatter extends LogFormatter {
 			// block restrictions
 			if ( isset( $params[6] ) ) {
 				$pages = $params[6]['pages'] ?? [];
-				$pages = array_map( function ( $page ) {
-					return $this->makePageLink( Title::newFromText( $page ) );
-				}, $pages );
+				$pageLinks = [];
+				foreach ( $pages as $page ) {
+					$pageLinks[] = $this->makePageLink( Title::newFromText( $page ) );
+				}
 
-				$namespaces = $params[6]['namespaces'] ?? [];
-				$namespaces = array_map( function ( $ns ) {
+				$rawNamespaces = $params[6]['namespaces'] ?? [];
+				$namespaces = [];
+				foreach ( $rawNamespaces as $ns ) {
 					$text = (int)$ns === NS_MAIN
 						? $this->msg( 'blanknamespace' )->escaped()
 						: htmlspecialchars( $this->context->getLanguage()->getFormattedNsText( $ns ) );
@@ -97,39 +104,40 @@ class BlockLogFormatter extends LogFormatter {
 						// Because the plaintext cannot link to the Special:AllPages
 						// link that is linked to in non-plaintext mode, just return
 						// the name of the namespace.
-						return $text;
+						$namespaces[] = $text;
 					} else {
-						return $this->makePageLink(
+						$namespaces[] = $this->makePageLink(
 							SpecialPage::getTitleFor( 'Allpages' ),
 							[ 'namespace' => $ns ],
 							$text
 						);
 					}
-				}, $namespaces );
+				}
 
-				$actions = $params[6]['actions'] ?? [];
-				$actions = array_map( function ( $actions ) {
-					return $this->msg( 'ipb-action-' . $actions )->text();
-				}, $actions );
+				$rawActions = $params[6]['actions'] ?? [];
+				$actions = [];
+				foreach ( $rawActions as $action ) {
+					$actions[] = $this->msg( 'ipb-action-' . $action )->escaped();
+				}
 
 				$restrictions = [];
-				if ( $pages ) {
+				if ( $pageLinks ) {
 					$restrictions[] = $this->msg( 'logentry-partialblock-block-page' )
-						->numParams( count( $pages ) )
-						->rawParams( $this->context->getLanguage()->listToText( $pages ) )->text();
+						->numParams( count( $pageLinks ) )
+						->rawParams( $this->context->getLanguage()->listToText( $pageLinks ) )->escaped();
 				}
 
 				if ( $namespaces ) {
 					$restrictions[] = $this->msg( 'logentry-partialblock-block-ns' )
 						->numParams( count( $namespaces ) )
-						->rawParams( $this->context->getLanguage()->listToText( $namespaces ) )->text();
+						->rawParams( $this->context->getLanguage()->listToText( $namespaces ) )->escaped();
 				}
 				$enablePartialActionBlocks = $this->context->getConfig()
 					->get( MainConfigNames::EnablePartialActionBlocks );
 				if ( $actions && $enablePartialActionBlocks ) {
 					$restrictions[] = $this->msg( 'logentry-partialblock-block-action' )
 						->numParams( count( $actions ) )
-						->rawParams( $this->context->getLanguage()->listToText( $actions ) )->text();
+						->rawParams( $this->context->getLanguage()->listToText( $actions ) )->escaped();
 				}
 
 				$params[6] = Message::rawParam( $this->context->getLanguage()->listToText( $restrictions ) );
@@ -330,7 +338,9 @@ class BlockLogFormatter extends LogFormatter {
 	protected function getMessageKey() {
 		$type = $this->entry->getType();
 		$subtype = $this->entry->getSubtype();
-		$sitewide = $this->entry->getParameters()['sitewide'] ?? true;
+		$params = $this->entry->getParameters();
+		$sitewide = $params['sitewide'] ?? true;
+		$count = $params['finalTargetCount'] ?? 0;
 
 		$key = "logentry-$type-$subtype";
 		if ( ( $subtype === 'block' || $subtype === 'reblock' ) && !$sitewide ) {
@@ -345,6 +355,11 @@ class BlockLogFormatter extends LogFormatter {
 			} else {
 				$key = "logentry-non-editing-$type-$subtype";
 			}
+		}
+		if ( $subtype === 'block' && $count > 1 ) {
+			// logentry-block-block-multi, logentry-partialblock-block-multi,
+			// logentry-non-editing-block-block-multi
+			$key .= '-multi';
 		}
 
 		return $key;

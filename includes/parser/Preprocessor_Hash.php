@@ -21,6 +21,10 @@
  * @ingroup Parser
  */
 
+namespace MediaWiki\Parser;
+
+use Wikimedia\ObjectCache\WANObjectCache;
+
 /**
  * Differences from DOM schema:
  *   * attribute nodes are children
@@ -56,7 +60,7 @@ class Preprocessor_Hash extends Preprocessor {
 	 */
 	public function __construct(
 		Parser $parser,
-		WANObjectCache $wanCache = null,
+		?WANObjectCache $wanCache = null,
 		array $options = []
 	) {
 		parent::__construct( $parser, $wanCache, $options );
@@ -372,8 +376,7 @@ class Preprocessor_Hash extends Preprocessor {
 							// Dump all but the last comment to the accumulator
 							// $endPos includes the newline from the if above, want also eat that
 							[ $startPos, $endPos ] = array_pop( $comments );
-							foreach ( $comments as $com ) {
-								[ $cStartPos, $cEndPos ] = $com;
+							foreach ( $comments as [ $cStartPos, $cEndPos ] ) {
 								// $cEndPos is the next char, no +1 needed to get correct length between start/end
 								$inner = substr( $text, $cStartPos, $cEndPos - $cStartPos );
 								$accum[] = [ 'comment', [ $inner ] ];
@@ -708,7 +711,7 @@ class Preprocessor_Hash extends Preprocessor {
 					$children[] = $titleNode;
 					$argIndex = 1;
 					foreach ( $parts as $part ) {
-						if ( isset( $part->eqpos ) ) {
+						if ( $part->eqpos !== null ) {
 							$equalsNode = $part->out[$part->eqpos];
 							$nameNode = [ 'name', array_slice( $part->out, 0, $part->eqpos ) ];
 							$valueNode = [ 'value', array_slice( $part->out, $part->eqpos + 1 ) ];
@@ -809,3 +812,6 @@ class Preprocessor_Hash extends Preprocessor {
 		}
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( Preprocessor_Hash::class, 'Preprocessor_Hash' );

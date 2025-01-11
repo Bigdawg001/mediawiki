@@ -1,7 +1,5 @@
 <?php
 /**
- * DBMS-specific updater helper.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,24 +16,39 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup Installer
  */
 
+namespace MediaWiki\Installer;
+
+use AutoLoader;
+use CleanupEmptyCategories;
+use DeleteDefaultMessages;
+use LogicException;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\HookContainer\StaticHookRegistry;
-use MediaWiki\MainConfigNames;
+use MediaWiki\Maintenance\FakeMaintenance;
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Registration\ExtensionRegistry;
 use MediaWiki\ResourceLoader\MessageBlobStore;
+use MediaWiki\SiteStats\SiteStatsInit;
+use MigrateLinksTable;
+use RebuildLocalisationCache;
+use RefreshImageMetadata;
+use RuntimeException;
+use UnexpectedValueException;
+use UpdateCollation;
 use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\IMaintainableDatabase;
+use Wikimedia\Rdbms\LBFactory;
+use Wikimedia\Rdbms\Platform\ISQLPlatform;
 
 require_once __DIR__ . '/../../maintenance/Maintenance.php';
 
 /**
- * Class for handling database updates.
+ * Apply database changes after updating MediaWiki.
  *
- * @stable to extend
  * @ingroup Installer
  * @since 1.17
  */
@@ -63,6 +76,12 @@ abstract class DatabaseUpdater {
 	protected $extensionUpdates = [];
 
 	/**
+	 * List of extension-provided database updates on virtual domain dbs
+	 * @var array
+	 */
+	protected $extensionUpdatesWithVirtualDomains = [];
+
+	/**
 	 * Handle to the database subclass
 	 *
 	 * @var IMaintainableDatabase
@@ -74,6 +93,7 @@ abstract class DatabaseUpdater {
 	 */
 	protected $maintenance;
 
+	/** @var bool */
 	protected $shared = false;
 
 	/** @var HookContainer|null */
@@ -85,18 +105,7 @@ abstract class DatabaseUpdater {
 	 */
 	protected $postDatabaseUpdateMaintenance = [
 		DeleteDefaultMessages::class,
-		PopulateRevisionLength::class,
-		PopulateRevisionSha1::class,
-		PopulateImageSha1::class,
-		FixExtLinksProtocolRelative::class,
-		PopulateFilearchiveSha1::class,
-		PopulateBacklinkNamespace::class,
-		FixDefaultJsonContentPages::class,
 		CleanupEmptyCategories::class,
-		AddRFCandPMIDInterwiki::class,
-		PopulatePPSortKey::class,
-		PopulateIpChanges::class,
-		RefreshExternallinksIndex::class,
 	];
 
 	/**
@@ -107,14 +116,19 @@ abstract class DatabaseUpdater {
 	protected $fileHandle = null;
 
 	/**
-	 * Flag specifying whether or not to skip schema (e.g. SQL-only) updates.
+	 * Flag specifying whether to skip schema (e.g., SQL-only) updates.
 	 *
 	 * @var bool
 	 */
 	protected $skipSchema = false;
 
 	/**
-	 * @stable to call
+	 * The virtual domain currently being acted on
+	 * @var string|null
+	 */
+	private $currentVirtualDomain = null;
+
+	/**
 	 * @param IMaintainableDatabase &$db To perform updates on
 	 * @param bool $shared Whether to perform updates on shared tables
 	 * @param Maintenance|null $maintenance Maintenance object which created us
@@ -122,7 +136,7 @@ abstract class DatabaseUpdater {
 	protected function __construct(
 		IMaintainableDatabase &$db,
 		$shared,
-		Maintenance $maintenance = null
+		?Maintenance $maintenance = null
 	) {
 		$this->db = $db;
 		$this->db->setFlag( DBO_DDLMODE );
@@ -156,11 +170,11 @@ abstract class DatabaseUpdater {
 			return $this->autoExtensionHookContainer;
 		}
 		if ( defined( 'MW_EXTENSIONS_LOADED' ) ) {
-			throw new Exception( __METHOD__ .
+			throw new LogicException( __METHOD__ .
 				' apparently called from installer but no hook container was injected' );
 		}
 		if ( !defined( 'MEDIAWIKI_INSTALL' ) ) {
-			// Running under update.php: just use global locator
+			// Running under update.php: use the global locator
 			return MediaWikiServices::getInstance()->getHookContainer();
 		}
 		$vars = Installer::getExistingLocalSettings();
@@ -191,16 +205,18 @@ abstract class DatabaseUpdater {
 			|| !isset( $extInfo['autoloaderClasses'] )
 			|| !isset( $extInfo['autoloaderNS'] )
 		) {
-			// NOTE: protect against changes to the structure of $extInfo. It's volatile, and this usage easy to miss.
+			// NOTE: protect against changes to the structure of $extInfo.
+			// It's volatile, and this usage is easy to miss.
 			throw new LogicException( 'Missing autoloader keys from extracted extension info' );
 		}
 		AutoLoader::loadFiles( $extInfo['autoloaderPaths'] );
 		AutoLoader::registerClasses( $extInfo['autoloaderClasses'] );
 		AutoLoader::registerNamespaces( $extInfo['autoloaderNS'] );
 
+		$legacyHooks = $legacySchemaHooks ? [ 'LoadExtensionSchemaUpdates' => $legacySchemaHooks ] : [];
 		return new HookContainer(
 			new StaticHookRegistry(
-				[ 'LoadExtensionSchemaUpdates' => $legacySchemaHooks ],
+				$legacyHooks,
 				$extInfo['attributes']['Hooks'] ?? [],
 				$extInfo['attributes']['DeprecatedHooks'] ?? []
 			),
@@ -212,23 +228,21 @@ abstract class DatabaseUpdater {
 	 * @param IMaintainableDatabase $db
 	 * @param bool $shared
 	 * @param Maintenance|null $maintenance
-	 *
-	 * @throws MWException
 	 * @return DatabaseUpdater
 	 */
 	public static function newForDB(
 		IMaintainableDatabase $db,
 		$shared = false,
-		Maintenance $maintenance = null
+		?Maintenance $maintenance = null
 	) {
 		$type = $db->getType();
 		if ( in_array( $type, Installer::getDBTypes() ) ) {
-			$class = ucfirst( $type ) . 'Updater';
+			$class = '\\MediaWiki\\Installer\\' . ucfirst( $type ) . 'Updater';
 
 			return new $class( $db, $shared, $maintenance );
-		} else {
-			throw new MWException( __METHOD__ . ' called for unsupported $wgDBtype' );
 		}
+
+		throw new UnexpectedValueException( __METHOD__ . ' called for unsupported DB type' );
 	}
 
 	/**
@@ -252,7 +266,7 @@ abstract class DatabaseUpdater {
 	}
 
 	/**
-	 * Output some text. If we're running from web, escape the text first.
+	 * Output some text. If we're running via the web, escape the text first.
 	 *
 	 * @param string $str Text to output
 	 * @param-taint $str escapes_html
@@ -261,8 +275,7 @@ abstract class DatabaseUpdater {
 		if ( $this->maintenance->isQuiet() ) {
 			return;
 		}
-		global $wgCommandLineMode;
-		if ( !$wgCommandLineMode ) {
+		if ( MW_ENTRY_POINT !== 'cli' ) {
 			$str = htmlspecialchars( $str );
 		}
 		echo $str;
@@ -277,12 +290,25 @@ abstract class DatabaseUpdater {
 	 *
 	 * @param array $update The update to run. Format is [ $callback, $params... ]
 	 *   $callback is the method to call; either a DatabaseUpdater method name or a callable.
-	 *   Must be serializable (ie. no anonymous functions allowed). The rest of the parameters
+	 *   Must be serializable (i.e., no anonymous functions allowed). The rest of the parameters
 	 *   (if any) will be passed to the callback. The first parameter passed to the callback
 	 *   is always this object.
 	 */
 	public function addExtensionUpdate( array $update ) {
 		$this->extensionUpdates[] = $update;
+	}
+
+	/**
+	 * Add a new update coming from an extension on virtual domain databases.
+	 * Intended for use in LoadExtensionSchemaUpdates hook handlers.
+	 *
+	 * @since 1.42
+	 *
+	 * @param array $update The update to run. The format is [ $virtualDomain, $callback, $params... ]
+	 *   similarly to addExtensionUpdate()
+	 */
+	public function addExtensionUpdateOnVirtualDomain( array $update ) {
+		$this->extensionUpdatesWithVirtualDomains[] = $update;
 	}
 
 	/**
@@ -377,7 +403,7 @@ abstract class DatabaseUpdater {
 	 * @param string $tableName
 	 * @param string $oldIndexName
 	 * @param string $newIndexName
-	 * @param string $sqlPath The path to the SQL change path
+	 * @param string $sqlPath The path to the SQL change file
 	 * @param bool $skipBothIndexExistWarning Whether to warn if both the old
 	 * and the new indexes exist. [facultative; by default, false]
 	 */
@@ -497,7 +523,6 @@ abstract class DatabaseUpdater {
 	 * This should be called after any request data has been imported, but before
 	 * any write operations to the database. The result should be passed to the DB
 	 * setSchemaVars() method.
-	 * @stable to override
 	 *
 	 * @return array
 	 * @since 1.28
@@ -516,6 +541,12 @@ abstract class DatabaseUpdater {
 
 		$what = array_fill_keys( $what, true );
 		$this->skipSchema = isset( $what['noschema'] ) || $this->fileHandle !== null;
+
+		if ( isset( $what['initial'] ) ) {
+			$this->output( 'Inserting initial update keys...' );
+			$this->insertInitialUpdateKeys();
+			$this->output( "done.\n" );
+		}
 		if ( isset( $what['core'] ) ) {
 			$this->doCollationUpdate();
 			$this->runUpdates( $this->getCoreUpdateList(), false );
@@ -523,6 +554,7 @@ abstract class DatabaseUpdater {
 		if ( isset( $what['extensions'] ) ) {
 			$this->loadExtensionSchemaUpdates();
 			$this->runUpdates( $this->getExtensionUpdates(), true );
+			$this->runUpdates( $this->extensionUpdatesWithVirtualDomains, true, true );
 		}
 
 		if ( isset( $what['stats'] ) ) {
@@ -539,15 +571,25 @@ abstract class DatabaseUpdater {
 	 * Helper function for doUpdates()
 	 *
 	 * @param array $updates Array of updates to run
-	 * @param bool $passSelf Whether to pass this object we calling external functions
+	 * @param bool $passSelf Whether to pass this object when calling external functions
+	 * @param bool $hasVirtualDomain Whether the updates' array include virtual domains
 	 */
-	private function runUpdates( array $updates, $passSelf ) {
-		$lbFactory = MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
-
+	private function runUpdates( array $updates, $passSelf, $hasVirtualDomain = false ) {
+		$lbFactory = $this->getLBFactory();
 		$updatesDone = [];
 		$updatesSkipped = [];
 		foreach ( $updates as $params ) {
 			$origParams = $params;
+			$oldDb = null;
+			$this->currentVirtualDomain = null;
+			if ( $hasVirtualDomain === true ) {
+				$this->currentVirtualDomain = array_shift( $params );
+				$oldDb = $this->db;
+				$virtualDb = $lbFactory->getPrimaryDatabase( $this->currentVirtualDomain );
+				'@phan-var IMaintainableDatabase $virtualDb';
+				$this->maintenance->setDB( $virtualDb );
+				$this->db = $virtualDb;
+			}
 			$func = array_shift( $params );
 			if ( !is_array( $func ) && method_exists( $this, $func ) ) {
 				$func = [ $this, $func ];
@@ -555,11 +597,21 @@ abstract class DatabaseUpdater {
 				array_unshift( $params, $this );
 			}
 			$ret = $func( ...$params );
+			if ( $hasVirtualDomain === true && $oldDb ) {
+				$this->db = $oldDb;
+				$this->maintenance->setDB( $oldDb );
+				$this->currentVirtualDomain = null;
+			}
+
 			flush();
 			if ( $ret !== false ) {
 				$updatesDone[] = $origParams;
 				$lbFactory->waitForReplication( [ 'timeout' => self::REPLICATION_WAIT_TIMEOUT ] );
 			} else {
+				if ( $hasVirtualDomain === true ) {
+					$params = $origParams;
+					$func = array_shift( $params );
+				}
 				$updatesSkipped[] = [ $func, $params, $origParams ];
 			}
 		}
@@ -567,21 +619,28 @@ abstract class DatabaseUpdater {
 		$this->updates = array_merge( $this->updates, $updatesDone );
 	}
 
+	private function getLBFactory(): LBFactory {
+		return MediaWikiServices::getInstance()->getDBLoadBalancerFactory();
+	}
+
 	/**
 	 * Helper function: check if the given key is present in the updatelog table.
-	 * Obviously, only use this for updates that occur after the updatelog table was
-	 * created!
+	 *
 	 * @param string $key Name of the key to check for
 	 * @return bool
 	 */
 	public function updateRowExists( $key ) {
-		$row = $this->db->selectRow(
-			'updatelog',
-			# T67813
-			'1 AS X',
-			[ 'ul_key' => $key ],
-			__METHOD__
-		);
+		// Return false if the updatelog table does not exist. This can occur if performing schema changes for tables
+		// that are on a virtual database domain.
+		if ( !$this->db->tableExists( 'updatelog', __METHOD__ ) ) {
+			return false;
+		}
+
+		$row = $this->db->newSelectQueryBuilder()
+			->select( '1 AS X' ) // T67813
+			->from( 'updatelog' )
+			->where( [ 'ul_key' => $key ] )
+			->caller( __METHOD__ )->fetchRow();
 
 		return (bool)$row;
 	}
@@ -589,42 +648,52 @@ abstract class DatabaseUpdater {
 	/**
 	 * Helper function: Add a key to the updatelog table
 	 *
-	 * @note Only use this for updates that occur after the updatelog table was
-	 * created!
-	 *
 	 * @note Extensions must only use this from within callbacks registered with
 	 * addExtensionUpdate(). In particular, this method must not be called directly
 	 * from a LoadExtensionSchemaUpdates handler.
 	 *
-	 * @param string $key Name of key to insert
+	 * @param string $key Name of the key to insert
 	 * @param string|null $val [optional] Value to insert along with the key
 	 */
 	public function insertUpdateRow( $key, $val = null ) {
+		// We cannot insert anything to the updatelog table if it does not exist. This can occur for schema changes
+		// on tables that are on a virtual database domain.
+		if ( !$this->db->tableExists( 'updatelog', __METHOD__ ) ) {
+			return;
+		}
+
 		$this->db->clearFlag( DBO_DDLMODE );
 		$values = [ 'ul_key' => $key ];
-		if ( $val && $this->canUseNewUpdatelog() ) {
+		if ( $val ) {
 			$values['ul_value'] = $val;
 		}
-		$this->db->insert( 'updatelog', $values, __METHOD__, [ 'IGNORE' ] );
+		$this->db->newInsertQueryBuilder()
+			->insertInto( 'updatelog' )
+			->ignore()
+			->row( $values )
+			->caller( __METHOD__ )->execute();
 		$this->db->setFlag( DBO_DDLMODE );
 	}
 
 	/**
-	 * Updatelog was changed in 1.17 to have a ul_value column so we can record
-	 * more information about what kind of updates we've done (that's what this
-	 * class does). Pre-1.17 wikis won't have this column, and really old wikis
-	 * might not even have updatelog at all
-	 *
-	 * @return bool
+	 * Add initial keys to the updatelog table. Should be called during installation.
 	 */
-	protected function canUseNewUpdatelog() {
-		return $this->db->tableExists( 'updatelog', __METHOD__ ) &&
-			$this->db->fieldExists( 'updatelog', 'ul_value', __METHOD__ );
+	public function insertInitialUpdateKeys() {
+		$this->db->clearFlag( DBO_DDLMODE );
+		$iqb = $this->db->newInsertQueryBuilder()
+			->insertInto( 'updatelog' )
+			->ignore()
+			->caller( __METHOD__ );
+		foreach ( $this->getInitialUpdateKeys() as $key ) {
+			$iqb->row( [ 'ul_key' => $key ] );
+		}
+		$iqb->execute();
+		$this->db->setFlag( DBO_DDLMODE );
 	}
 
 	/**
 	 * Returns whether updates should be executed on the database table $name.
-	 * Updates will be prevented if the table is a shared table and it is not
+	 * Updates will be prevented if the table is a shared table, and it is not
 	 * specified to run updates on shared tables.
 	 *
 	 * @param string $name Table name
@@ -633,28 +702,44 @@ abstract class DatabaseUpdater {
 	protected function doTable( $name ) {
 		global $wgSharedDB, $wgSharedTables;
 
-		// Don't bother to check $wgSharedTables if there isn't a shared database
-		// or the user actually also wants to do updates on the shared database.
-		if ( $wgSharedDB === null || $this->shared ) {
+		if ( $this->shared ) {
+			// Shared updates are enabled
 			return true;
 		}
-
-		if ( in_array( $name, $wgSharedTables ) ) {
+		if ( $this->currentVirtualDomain
+			&& $this->getLBFactory()->isSharedVirtualDomain( $this->currentVirtualDomain )
+		) {
+			$this->output( "...skipping update to table $name in shared virtual domain.\n" );
+			return false;
+		}
+		if ( $wgSharedDB !== null && in_array( $name, $wgSharedTables ) ) {
 			$this->output( "...skipping update to shared table $name.\n" );
 			return false;
-		} else {
-			return true;
 		}
+
+		return true;
 	}
 
 	/**
 	 * Get an array of updates to perform on the database. Should return a
-	 * multi-dimensional array. The main key is the MediaWiki version (1.12,
+	 * multidimensional array. The main key is the MediaWiki version (1.12,
 	 * 1.13...) with the values being arrays of updates.
 	 *
 	 * @return array[]
 	 */
 	abstract protected function getCoreUpdateList();
+
+	/**
+	 * Get an array of update keys to insert into the updatelog table after a
+	 * new installation. The named operations will then be skipped by a
+	 * subsequent update.
+	 *
+	 * Add keys here to skip updates that are redundant or harmful on a new
+	 * installation, for example reducing field sizes, adding constraints, etc.
+	 *
+	 * @return string[]
+	 */
+	abstract protected function getInitialUpdateKeys();
 
 	/**
 	 * Append an SQL fragment to the open file handle.
@@ -676,7 +761,7 @@ abstract class DatabaseUpdater {
 	}
 
 	/**
-	 * Append a line to the open filehandle.  The line is assumed to
+	 * Append a line to the open file handle. The line is assumed to
 	 * be a complete SQL statement.
 	 *
 	 * This is used as a callback for sourceLine().
@@ -685,12 +770,11 @@ abstract class DatabaseUpdater {
 	 *
 	 * @param string $line Text to append to the file
 	 * @return bool False to skip actually executing the file
-	 * @throws MWException
 	 */
 	protected function appendLine( $line ) {
 		$line = rtrim( $line ) . ";\n";
 		if ( fwrite( $this->fileHandle, $line ) === false ) {
-			throw new MWException( "trouble writing file" );
+			throw new RuntimeException( "trouble writing file" );
 		}
 
 		return false;
@@ -705,7 +789,7 @@ abstract class DatabaseUpdater {
 	 * @param string $path Path to the patch file
 	 * @param bool $isFullPath Whether to treat $path as a relative or not
 	 * @param string|null $msg Description of the patch
-	 * @return bool False if patch is skipped.
+	 * @return bool False if the patch was skipped.
 	 */
 	protected function applyPatch( $path, $isFullPath = false, $msg = null ) {
 		$msg ??= "Applying $path patch";
@@ -731,22 +815,23 @@ abstract class DatabaseUpdater {
 	}
 
 	/**
-	 * Get the full path of a patch file. Keep in mind this always returns a patch, as
-	 * it fails back to MySQL if no DB-specific patch can be found
+	 * Get the full path to a patch file.
 	 *
 	 * @param IDatabase $db
-	 * @param string $patch The name of the patch, like patch-something.sql
-	 * @return string Full path to patch file
+	 * @param string $patch The basename of the patch, like patch-something.sql
+	 * @return string Full path to patch file. It fails back to MySQL
+	 *  if no DB-specific patch exists.
 	 */
 	public function patchPath( IDatabase $db, $patch ) {
-		$baseDir = MediaWikiServices::getInstance()->getMainConfig()->get( MainConfigNames::BaseDirectory );
+		$baseDir = MW_INSTALL_PATH;
 
 		$dbType = $db->getType();
-		if ( file_exists( "$baseDir/maintenance/$dbType/archives/$patch" ) ) {
-			return "$baseDir/maintenance/$dbType/archives/$patch";
-		} else {
-			return "$baseDir/maintenance/archives/$patch";
+		if ( file_exists( "$baseDir/sql/$dbType/$patch" ) ) {
+			return "$baseDir/sql/$dbType/$patch";
 		}
+
+		// TODO: Is the fallback still needed after the changes from T382030?
+		return "$baseDir/sql/mysql/$patch";
 	}
 
 	/**
@@ -767,11 +852,10 @@ abstract class DatabaseUpdater {
 
 		if ( $this->db->tableExists( $name, __METHOD__ ) ) {
 			$this->output( "...$name table already exists.\n" );
-		} else {
-			return $this->applyPatch( $patch, $fullpath, "Creating $name table" );
+			return true;
 		}
 
-		return true;
+		return $this->applyPatch( $patch, $fullpath, "Creating $name table" );
 	}
 
 	/**
@@ -849,10 +933,9 @@ abstract class DatabaseUpdater {
 
 		if ( $this->db->fieldExists( $table, $field, __METHOD__ ) ) {
 			return $this->applyPatch( $patch, $fullpath, "Table $table contains $field field. Dropping" );
-		} else {
-			$this->output( "...$table table does not contain $field field.\n" );
 		}
 
+		$this->output( "...$table table does not contain $field field.\n" );
 		return true;
 	}
 
@@ -875,16 +958,14 @@ abstract class DatabaseUpdater {
 
 		if ( $this->db->indexExists( $table, $index, __METHOD__ ) ) {
 			return $this->applyPatch( $patch, $fullpath, "Dropping $index index from table $table" );
-		} else {
-			$this->output( "...$index key doesn't exist.\n" );
 		}
 
+		$this->output( "...$index key doesn't exist.\n" );
 		return true;
 	}
 
 	/**
 	 * Rename an index from an existing table
-	 * @stable to override
 	 *
 	 * @note Code in a LoadExtensionSchemaUpdates handler should
 	 *       use renameExtensionIndex instead!
@@ -892,8 +973,7 @@ abstract class DatabaseUpdater {
 	 * @param string $table Name of the table to modify
 	 * @param string $oldIndex Old name of the index
 	 * @param string $newIndex New name of the index
-	 * @param bool $skipBothIndexExistWarning Whether to warn if both the
-	 * old and the new indexes exist.
+	 * @param bool $skipBothIndexExistWarning Whether to warn if both the old and new indexes exist.
 	 * @param string $patch Path to the patch file
 	 * @param bool $fullpath Whether to treat $patch path as a relative or not
 	 * @return bool False if this was skipped because schema changes are skipped
@@ -933,7 +1013,7 @@ abstract class DatabaseUpdater {
 			return true;
 		}
 
-		// Requirements have been satisfied, patch can be applied
+		// Requirements have been satisfied, the patch can be applied
 		return $this->applyPatch(
 			$patch,
 			$fullpath,
@@ -992,26 +1072,13 @@ abstract class DatabaseUpdater {
 	 * @return bool False if this was skipped because schema changes are skipped
 	 */
 	protected function modifyField( $table, $field, $patch, $fullpath = false ) {
-		if ( !$this->doTable( $table ) ) {
-			return true;
-		}
-
-		$updateKey = "$table-$field-$patch";
-		if ( !$this->db->tableExists( $table, __METHOD__ ) ) {
-			$this->output( "...$table table does not exist, skipping modify field patch.\n" );
-		} elseif ( !$this->db->fieldExists( $table, $field, __METHOD__ ) ) {
-			$this->output( "...$field field does not exist in $table table, " .
-				"skipping modify field patch.\n" );
-		} elseif ( $this->updateRowExists( $updateKey ) ) {
-			$this->output( "...$field in table $table already modified by patch $patch.\n" );
-		} else {
-			$apply = $this->applyPatch( $patch, $fullpath, "Modifying $field field of table $table" );
-			if ( $apply ) {
-				$this->insertUpdateRow( $updateKey );
-			}
-			return $apply;
-		}
-		return true;
+		return $this->modifyFieldWithCondition(
+			$table, $field,
+			static function () {
+				return true;
+			},
+			$patch, $fullpath
+		);
 	}
 
 	/**
@@ -1039,13 +1106,134 @@ abstract class DatabaseUpdater {
 		} elseif ( $this->updateRowExists( $updateKey ) ) {
 			$this->output( "...table $table already modified by patch $patch.\n" );
 		} else {
-			$apply = $this->applyPatch( $patch, $fullpath, "Modifying table $table" );
+			$apply = $this->applyPatch( $patch, $fullpath, "Modifying table $table with patch $patch" );
 			if ( $apply ) {
 				$this->insertUpdateRow( $updateKey );
 			}
 			return $apply;
 		}
 		return true;
+	}
+
+	/**
+	 * Modify a table if a field doesn't exist. This helps extensions to avoid
+	 * running updates on SQLite that are destructive because they don't copy
+	 * new fields.
+	 *
+	 * @since 1.44
+	 * @param string $table Name of the table to which the field belongs
+	 * @param string $field Name of the field to check
+	 * @param string $patch Path to the patch file
+	 * @param bool $fullpath Whether to treat $patch path as a relative or not
+	 * @param string|null $fieldBeingModified The field being modified. If this
+	 *   is specified, the updatelog key will match that used by modifyField(),
+	 *   so if the patch was previously applied via modifyField(), it won't be
+	 *   applied again. Also, if the field doesn't exist, the patch will not be
+	 *   applied. If this is null, the updatelog key will match that used by
+	 *   modifyTable().
+	 * @return bool False if this was skipped because schema changes are skipped
+	 */
+	protected function modifyTableIfFieldNotExists( $table, $field, $patch, $fullpath = false,
+		$fieldBeingModified = null
+	) {
+		if ( !$this->doTable( $table ) ) {
+			return true;
+		}
+
+		if ( $fieldBeingModified === null ) {
+			$updateKey = "$table-$patch";
+		} else {
+			$updateKey = "$table-$fieldBeingModified-$patch";
+		}
+
+		if ( !$this->db->tableExists( $table, __METHOD__ ) ) {
+			$this->output( "...$table table does not exist, skipping patch $patch.\n" );
+		} elseif ( $this->db->fieldExists( $table, $field, __METHOD__ ) ) {
+			$this->output( "...$field field exists in $table table, skipping obsolete patch $patch.\n" );
+		} elseif ( $fieldBeingModified !== null
+			&& !$this->db->fieldExists( $table, $fieldBeingModified, __METHOD__ )
+		) {
+			$this->output( "...$fieldBeingModified field does not exist in $table table, " .
+				"skipping patch $patch.\n" );
+		} elseif ( $this->updateRowExists( $updateKey ) ) {
+			$this->output( "...table $table already modified by patch $patch.\n" );
+		} else {
+			$apply = $this->applyPatch( $patch, $fullpath, "Modifying table $table with patch $patch" );
+			if ( $apply ) {
+				$this->insertUpdateRow( $updateKey );
+			}
+			return $apply;
+		}
+		return true;
+	}
+
+	/**
+	 * Modify a field if the field exists and is nullable
+	 *
+	 * @since 1.44
+	 * @param string $table Name of the table to which the field belongs
+	 * @param string $field Name of the field to modify
+	 * @param string $patch Path to the patch file
+	 * @param bool $fullpath Whether to treat $patch path as a relative or not
+	 * @return bool False if this was skipped because schema changes are skipped
+	 */
+	protected function modifyFieldIfNullable( $table, $field, $patch, $fullpath = false ) {
+		return $this->modifyFieldWithCondition(
+			$table, $field,
+			static function ( $fieldInfo ) {
+				return $fieldInfo->isNullable();
+			},
+			$patch,
+			$fullpath
+		);
+	}
+
+	/**
+	 * Modify a field if a field exists and a callback returns true. The callback
+	 * is called with the FieldInfo of the field in question.
+	 *
+	 * @internal
+	 * @param string $table Name of the table to modify
+	 * @param string $field Name of the field to modify
+	 * @param callable $condCallback A callback which will be called with the
+	 *   \Wikimedia\Rdbms\Field object for the specified field. If the callback returns
+	 *   true, the update will proceed.
+	 * @param string $patch Name of the patch file to apply
+	 * @param string|bool $fullpath Whether to treat $patch path as relative or not, defaults to false
+	 * @return bool False if this was skipped because of schema changes being skipped
+	 */
+	private function modifyFieldWithCondition(
+		$table, $field, $condCallback, $patch, $fullpath = false
+	) {
+		if ( !$this->doTable( $table ) ) {
+			return true;
+		}
+
+		$updateKey = "$table-$field-$patch";
+		if ( !$this->db->tableExists( $table, __METHOD__ ) ) {
+			$this->output( "...$table table does not exist, skipping modify field patch.\n" );
+			return true;
+		}
+		$fieldInfo = $this->db->fieldInfo( $table, $field );
+		if ( !$fieldInfo ) {
+			$this->output( "...$field field does not exist in $table table, " .
+				"skipping modify field patch.\n" );
+			return true;
+		}
+		if ( $this->updateRowExists( $updateKey ) ) {
+			$this->output( "...$field in table $table already modified by patch $patch.\n" );
+			return true;
+		}
+		if ( !$condCallback( $fieldInfo ) ) {
+			$this->output( "...$field in table $table already has the required properties.\n" );
+			return true;
+		}
+
+		$apply = $this->applyPatch( $patch, $fullpath, "Modifying $field field of table $table" );
+		if ( $apply ) {
+			$this->insertUpdateRow( $updateKey );
+		}
+		return $apply;
 	}
 
 	/**
@@ -1066,14 +1254,14 @@ abstract class DatabaseUpdater {
 	 *
 	 * @since 1.32
 	 * @param string $class Maintenance subclass
-	 * @param string $script Script path and filename, usually "maintenance/fooBar.php"
+	 * @param string $unused Unused, kept for compatibility
 	 */
-	protected function runMaintenance( $class, $script ) {
-		$this->output( "Running $script...\n" );
+	protected function runMaintenance( $class, $unused = '' ) {
+		$this->output( "Running $class...\n" );
 		$task = $this->maintenance->runChild( $class );
 		$ok = $task->execute();
 		if ( !$ok ) {
-			throw new RuntimeException( "Execution of $script did not complete successfully." );
+			throw new RuntimeException( "Execution of $class did not complete successfully." );
 		}
 		$this->output( "done.\n" );
 	}
@@ -1111,7 +1299,11 @@ abstract class DatabaseUpdater {
 		$this->output( "Purging caches..." );
 
 		// ObjectCache
-		$this->db->delete( 'objectcache', '*', __METHOD__ );
+		$this->db->newDeleteQueryBuilder()
+			->deleteFrom( 'objectcache' )
+			->where( ISQLPlatform::ALL_ROWS )
+			->caller( __METHOD__ )
+			->execute();
 
 		// LocalisationCache
 		if ( $wgLocalisationCacheConf['manualRecache'] ) {
@@ -1125,7 +1317,11 @@ abstract class DatabaseUpdater {
 		);
 
 		// ResourceLoader: File-dependency cache
-		$this->db->delete( 'module_deps', '*', __METHOD__ );
+		$this->db->newDeleteQueryBuilder()
+			->deleteFrom( 'module_deps' )
+			->where( ISQLPlatform::ALL_ROWS )
+			->caller( __METHOD__ )
+			->execute();
 		$this->output( "done.\n" );
 	}
 
@@ -1134,7 +1330,11 @@ abstract class DatabaseUpdater {
 	 */
 	protected function checkStats() {
 		$this->output( "...site_stats is populated..." );
-		$row = $this->db->selectRow( 'site_stats', '*', [ 'ss_row_id' => 1 ], __METHOD__ );
+		$row = $this->db->newSelectQueryBuilder()
+			->select( '*' )
+			->from( 'site_stats' )
+			->where( [ 'ss_row_id' => 1 ] )
+			->caller( __METHOD__ )->fetchRow();
 		if ( $row === false ) {
 			$this->output( "data is missing! rebuilding...\n" );
 		} elseif ( isset( $row->site_stats ) && $row->ss_total_pages == -1 ) {
@@ -1154,22 +1354,17 @@ abstract class DatabaseUpdater {
 	 */
 	protected function doCollationUpdate() {
 		global $wgCategoryCollation;
-		if ( $this->db->selectField(
-				'categorylinks',
-				'COUNT(*)',
-				'cl_collation != ' . $this->db->addQuotes( $wgCategoryCollation ),
-				__METHOD__
-			) == 0
-		) {
+		if ( $this->updateRowExists( 'UpdateCollation::' . $wgCategoryCollation ) ) {
 			$this->output( "...collations up-to-date.\n" );
-
 			return;
 		}
-
-		$this->output( "Updating category collations..." );
+		$this->output( "Updating category collations...\n" );
 		$task = $this->maintenance->runChild( UpdateCollation::class );
-		$task->execute();
-		$this->output( "...done.\n" );
+		$ok = $task->execute();
+		if ( $ok !== false ) {
+			$this->output( "...done.\n" );
+			$this->insertUpdateRow( 'UpdateCollation::' . $wgCategoryCollation );
+		}
 	}
 
 	protected function doConvertDjvuMetadata() {
@@ -1231,6 +1426,27 @@ abstract class DatabaseUpdater {
 		$this->output( "done.\n" );
 	}
 
+	protected function migratePagelinks() {
+		if ( $this->updateRowExists( MigrateLinksTable::class . 'pagelinks' ) ) {
+			$this->output( "...pagelinks table has already been migrated.\n" );
+			return;
+		}
+		/**
+		 * @var MigrateLinksTable $task
+		 */
+		$task = $this->maintenance->runChild(
+			MigrateLinksTable::class, 'migrateLinksTable.php'
+		);
+		'@phan-var MigrateLinksTable $task';
+		$task->loadParamsAndArgs( MigrateLinksTable::class, [
+			'force' => true,
+			'table' => 'pagelinks'
+		] );
+		$this->output( "Running migrateLinksTable.php on pagelinks...\n" );
+		$task->execute();
+		$this->output( "done.\n" );
+	}
+
 	/**
 	 * Only run a function if a table does not exist
 	 *
@@ -1240,7 +1456,7 @@ abstract class DatabaseUpdater {
 	 *  $passSelf = true: all other parameters are shifted and $this is
 	 *  prepended to the rest of $params.
 	 * @param string|array|static $func Normally this is the string naming the method on $this to
-	 *  call. It may also be an array callable.
+	 *  call. It may also be an array style callable.
 	 * @param mixed ...$params Parameters for `$func`
 	 * @return mixed Whatever $func returns, or null when skipped.
 	 */
@@ -1277,7 +1493,7 @@ abstract class DatabaseUpdater {
 	 *  prepended to the rest of $params.
 	 * @param string $field Field to check
 	 * @param string|array|static $func Normally this is the string naming the method on $this to
-	 *  call. It may also be an array callable.
+	 *  call. It may also be an array style callable.
 	 * @param mixed ...$params Parameters for `$func`
 	 * @return mixed Whatever $func returns, or null when skipped.
 	 */
@@ -1308,3 +1524,6 @@ abstract class DatabaseUpdater {
 	}
 
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( DatabaseUpdater::class, 'DatabaseUpdater' );

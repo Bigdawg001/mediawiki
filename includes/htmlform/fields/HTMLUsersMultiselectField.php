@@ -1,5 +1,7 @@
 <?php
 
+namespace MediaWiki\HTMLForm\Field;
+
 use MediaWiki\MediaWikiServices;
 use MediaWiki\User\UserRigorOptions;
 use MediaWiki\Widget\UsersMultiselectWidget;
@@ -122,6 +124,14 @@ class HTMLUsersMultiselectField extends HTMLUserTextField {
 			$params['ipRangeLimits'] = $this->mParams['iprangelimits'];
 		}
 
+		if ( isset( $this->mParams['excludenamed'] ) ) {
+			$params['excludeNamed'] = $this->mParams['excludenamed'];
+		}
+
+		if ( isset( $this->mParams['excludetemp'] ) ) {
+			$params['excludeTemp'] = $this->mParams['excludetemp'];
+		}
+
 		if ( isset( $this->mParams['input'] ) ) {
 			$params['input'] = $this->mParams['input'];
 		}
@@ -156,3 +166,6 @@ class HTMLUsersMultiselectField extends HTMLUserTextField {
 	}
 
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( HTMLUsersMultiselectField::class, 'HTMLUsersMultiselectField' );

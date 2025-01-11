@@ -18,9 +18,12 @@
  * @file
  */
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 use MediaWiki\MainConfigNames;
+use MediaWiki\Maintenance\Maintenance;
 
 /**
  * Diagnostic tool for interacting with memcached.
@@ -214,5 +217,7 @@ class Mcc extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = Mcc::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

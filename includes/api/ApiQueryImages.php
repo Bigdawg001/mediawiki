@@ -20,6 +20,8 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
 use MediaWiki\Title\Title;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\ParamValidator\TypeDef\IntegerDef;
@@ -32,11 +34,7 @@ use Wikimedia\ParamValidator\TypeDef\IntegerDef;
  */
 class ApiQueryImages extends ApiQueryGeneratorBase {
 
-	/**
-	 * @param ApiQuery $query
-	 * @param string $moduleName
-	 */
-	public function __construct( ApiQuery $query, $moduleName ) {
+	public function __construct( ApiQuery $query, string $moduleName ) {
 		parent::__construct( $query, $moduleName, 'im' );
 	}
 
@@ -169,10 +167,13 @@ class ApiQueryImages extends ApiQueryGeneratorBase {
 	}
 
 	protected function getExamplesMessages() {
+		$title = Title::newMainPage()->getPrefixedText();
+		$mp = rawurlencode( $title );
+
 		return [
-			'action=query&prop=images&titles=Main%20Page'
+			"action=query&prop=images&titles={$mp}"
 				=> 'apihelp-query+images-example-simple',
-			'action=query&generator=images&titles=Main%20Page&prop=info'
+			"action=query&generator=images&titles={$mp}&prop=info"
 				=> 'apihelp-query+images-example-generator',
 		];
 	}
@@ -181,3 +182,6 @@ class ApiQueryImages extends ApiQueryGeneratorBase {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Images';
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiQueryImages::class, 'ApiQueryImages' );

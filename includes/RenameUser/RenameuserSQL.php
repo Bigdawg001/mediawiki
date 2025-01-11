@@ -10,48 +10,49 @@ use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Session\SessionManager;
+use MediaWiki\Specials\SpecialLog;
 use MediaWiki\Title\TitleFactory;
+use MediaWiki\User\User;
 use MediaWiki\User\UserFactory;
 use Psr\Log\LoggerInterface;
-use RenameUserJob;
-use SpecialLog;
-use User;
-use Wikimedia\Rdbms\ILoadBalancer;
+use Wikimedia\Rdbms\IConnectionProvider;
+use Wikimedia\Rdbms\IDBAccessObject;
+use Wikimedia\Rdbms\SelectQueryBuilder;
 
 /**
  * Class which performs the actual renaming of users
  */
 class RenameuserSQL {
 	/**
-	 * The old username
+	 * The old username of the user being renamed
 	 *
 	 * @var string
 	 */
 	public $old;
 
 	/**
-	 * The new username
+	 * The new username of the user being renamed
 	 *
 	 * @var string
 	 */
 	public $new;
 
 	/**
-	 * The user ID
+	 * The user ID of the user being renamed
 	 *
 	 * @var int
 	 */
 	public $uid;
 
 	/**
-	 * The tables => fields to be updated
+	 * The [ tables => fields ] to be updated
 	 *
 	 * @var array
 	 */
 	public $tables;
 
 	/**
-	 * tables => fields to be updated in a deferred job
+	 * [ tables => fields ] to be updated in a deferred job
 	 *
 	 * @var array[]
 	 */
@@ -73,7 +74,7 @@ class RenameuserSQL {
 	private $renamer;
 
 	/**
-	 * Reason to be used in the log entry
+	 * Reason for the rename to be used in the log entry
 	 *
 	 * @var string
 	 */
@@ -94,8 +95,8 @@ class RenameuserSQL {
 	/** @var HookRunner */
 	private $hookRunner;
 
-	/** @var ILoadBalancer */
-	private $loadBalancer;
+	/** @var IConnectionProvider */
+	private $dbProvider;
 
 	/** @var UserFactory */
 	private $userFactory;
@@ -127,12 +128,14 @@ class RenameuserSQL {
 	public function __construct( $old, $new, $uid, User $renamer, $options = [] ) {
 		$services = MediaWikiServices::getInstance();
 		$this->hookRunner = new HookRunner( $services->getHookContainer() );
-		$this->loadBalancer = $services->getDBLoadBalancer();
+		$this->dbProvider = $services->getConnectionProvider();
 		$this->userFactory = $services->getUserFactory();
 		$this->jobQueueGroup = $services->getJobQueueGroup();
 		$this->titleFactory = $services->getTitleFactory();
-		$this->updateRowsPerJob = $services->getMainConfig()->get( MainConfigNames::UpdateRowsPerJob );
 		$this->logger = LoggerFactory::getInstance( 'Renameuser' );
+
+		$config = $services->getMainConfig();
+		$this->updateRowsPerJob = $config->get( MainConfigNames::UpdateRowsPerJob );
 
 		$this->old = $old;
 		$this->new = $new;
@@ -170,10 +173,7 @@ class RenameuserSQL {
 	 * @return bool
 	 */
 	public function rename() {
-		// Grab the user's edit count first, used in log entry
-		$contribs = $this->userFactory->newFromId( $this->uid )->getEditCount();
-
-		$dbw = $this->loadBalancer->getConnection( DB_PRIMARY );
+		$dbw = $this->dbProvider->getPrimaryDatabase();
 		$atomicId = $dbw->startAtomic( __METHOD__, $dbw::ATOMIC_CANCELABLE );
 
 		$this->hookRunner->onRenameUserPreRename( $this->uid, $this->old, $this->new );
@@ -186,36 +186,45 @@ class RenameuserSQL {
 			return false;
 		}
 
+		// Grab the user's edit count before any updates are made; used later in a log entry
+		$contribs = $this->userFactory->newFromId( $this->uid )->getEditCount();
+
 		// Rename and touch the user before re-attributing edits to avoid users still being
 		// logged in and making new edits (under the old name) while being renamed.
 		$this->debug( "Starting rename of {$this->old} to {$this->new}" );
-		$dbw->update( 'user',
-			[ 'user_name' => $this->new, 'user_touched' => $dbw->timestamp() ],
-			[ 'user_name' => $this->old, 'user_id' => $this->uid ],
-			__METHOD__
-		);
-		$dbw->update( 'actor',
-			[ 'actor_name' => $this->new ],
-			[ 'actor_name' => $this->old, 'actor_user' => $this->uid ],
-			__METHOD__
-		);
+		$dbw->newUpdateQueryBuilder()
+			->update( 'user' )
+			->set( [ 'user_name' => $this->new, 'user_touched' => $dbw->timestamp() ] )
+			->where( [ 'user_name' => $this->old, 'user_id' => $this->uid ] )
+			->caller( __METHOD__ )->execute();
+		$dbw->newUpdateQueryBuilder()
+			->update( 'actor' )
+			->set( [ 'actor_name' => $this->new ] )
+			->where( [ 'actor_name' => $this->old, 'actor_user' => $this->uid ] )
+			->caller( __METHOD__ )->execute();
+
+		// If this user is renaming themself, make sure that code below uses a proper name
+		if ( $this->renamer->getId() === $this->uid ) {
+			$this->renamer->setName( $this->new );
+		}
 
 		// Reset token to break login with central auth systems.
 		// Again, avoids user being logged in with old name.
 		$user = $this->userFactory->newFromId( $this->uid );
 
-		$user->load( User::READ_LATEST );
+		$user->load( IDBAccessObject::READ_LATEST );
 		SessionManager::singleton()->invalidateSessionsForUser( $user );
 
 		// Purge user cache
 		$user->invalidateCache();
 
-		// Update ipblock list if this user has a block in there.
-		$dbw->update( 'ipblocks',
-			[ 'ipb_address' => $this->new ],
-			[ 'ipb_user' => $this->uid, 'ipb_address' => $this->old ],
-			__METHOD__
-		);
+		// Update the block_target table rows if this user has a block in there.
+		$dbw->newUpdateQueryBuilder()
+			->update( 'block_target' )
+			->set( [ 'bt_user_text' => $this->new ] )
+			->where( [ 'bt_user' => $this->uid, 'bt_user_text' => $this->old ] )
+			->caller( __METHOD__ )->execute();
+
 		// Update this users block/rights log. Ideally, the logs would be historical,
 		// but it is really annoying when users have "clean" block logs by virtue of
 		// being renamed, which makes admin tasks more of a pain...
@@ -226,36 +235,36 @@ class RenameuserSQL {
 		// Exclude user renames per T200731
 		$logTypesOnUser = array_diff( SpecialLog::getLogTypesOnUser(), [ 'renameuser' ] );
 
-		$dbw->update( 'logging',
-			[ 'log_title' => $newTitle->getDBkey() ],
-			[
+		$dbw->newUpdateQueryBuilder()
+			->update( 'logging' )
+			->set( [ 'log_title' => $newTitle->getDBkey() ] )
+			->where( [
 				'log_type' => $logTypesOnUser,
 				'log_namespace' => NS_USER,
 				'log_title' => $oldTitle->getDBkey()
-			],
-			__METHOD__
-		);
+			] )
+			->caller( __METHOD__ )->execute();
 
-		$this->debug( "Updating recentchanges table for {$this->old} to {$this->new}" );
-		$dbw->update( 'recentchanges',
-			[ 'rc_title' => $newTitle->getDBkey() ],
-			[
+		$this->debug( "Updating recentchanges table for rename from {$this->old} to {$this->new}" );
+		$dbw->newUpdateQueryBuilder()
+			->update( 'recentchanges' )
+			->set( [ 'rc_title' => $newTitle->getDBkey() ] )
+			->where( [
 				'rc_type' => RC_LOG,
 				'rc_log_type' => $logTypesOnUser,
 				'rc_namespace' => NS_USER,
 				'rc_title' => $oldTitle->getDBkey()
-			],
-			__METHOD__
-		);
+			] )
+			->caller( __METHOD__ )->execute();
 
 		// Do immediate re-attribution table updates...
 		foreach ( $this->tables as $table => $fieldSet ) {
-			list( $nameCol, $userCol ) = $fieldSet;
-			$dbw->update( $table,
-				[ $nameCol => $this->new ],
-				[ $nameCol => $this->old, $userCol => $this->uid ],
-				__METHOD__
-			);
+			[ $nameCol, $userCol ] = $fieldSet;
+			$dbw->newUpdateQueryBuilder()
+				->update( $table )
+				->set( [ $nameCol => $this->new ] )
+				->where( [ $nameCol => $this->old, $userCol => $this->uid ] )
+				->caller( __METHOD__ )->execute();
 		}
 
 		/** @var RenameUserJob[] $jobs */
@@ -272,12 +281,12 @@ class RenameuserSQL {
 			$userIDC = $params[self::UID_COL]; // some *_user column
 			$timestampC = $params[self::TIME_COL]; // some *_timestamp column
 
-			$res = $dbw->select( $table,
-				[ $timestampC ],
-				[ $userTextC => $this->old, $userIDC => $this->uid ],
-				__METHOD__,
-				[ 'ORDER BY' => "$timestampC ASC" ]
-			);
+			$res = $dbw->newSelectQueryBuilder()
+				->select( [ $timestampC ] )
+				->from( $table )
+				->where( [ $userTextC => $this->old, $userIDC => $this->uid ] )
+				->orderBy( $timestampC, SelectQueryBuilder::SORT_ASC )
+				->caller( __METHOD__ )->fetchResultSet();
 
 			$jobParams = [];
 			$jobParams['table'] = $table;
@@ -298,16 +307,16 @@ class RenameuserSQL {
 
 			// Insert jobs into queue!
 			foreach ( $res as $row ) {
-				# Since the ORDER BY is ASC, set the min timestamp with first row
+				// Since the ORDER BY is ASC, set the min timestamp with first row
 				if ( $jobParams['count'] === 0 ) {
 					$jobParams['minTimestamp'] = $row->$timestampC;
 				}
-				# Keep updating the last timestamp, so it should be correct
-				# when the last item is added.
+				// Keep updating the last timestamp, so it should be correct
+				// when the last item is added.
 				$jobParams['maxTimestamp'] = $row->$timestampC;
-				# Update row counter
+				// Update row counter
 				$jobParams['count']++;
-				# Once a job has $wgUpdateRowsPerJob rows, add it to the queue
+				// Once a job has $wgUpdateRowsPerJob rows, add it to the queue
 				if ( $jobParams['count'] >= $this->updateRowsPerJob ) {
 					$jobs[] = new JobSpecification( 'renameUser', $jobParams, [], $oldTitle );
 					$jobParams['minTimestamp'] = '0';
@@ -315,7 +324,7 @@ class RenameuserSQL {
 					$jobParams['count'] = 0;
 				}
 			}
-			# If there are any job rows left, add it to the queue as one job
+			// If there are any job rows left, add it to the queue as one job
 			if ( $jobParams['count'] > 0 ) {
 				$jobs[] = new JobSpecification( 'renameUser', $jobParams, [], $oldTitle );
 			}
@@ -339,7 +348,7 @@ class RenameuserSQL {
 		$count = count( $jobs );
 		if ( $count > 0 ) {
 			$this->jobQueueGroup->push( $jobs );
-			$this->debug( "Queued $count jobs for {$this->old} to {$this->new}" );
+			$this->debug( "Queued $count jobs for rename from {$this->old} to {$this->new}" );
 		}
 
 		// Commit the transaction
@@ -351,7 +360,7 @@ class RenameuserSQL {
 				$dbw->startAtomic( $fname );
 				// Clear caches and inform authentication plugins
 				$user = $this->userFactory->newFromId( $this->uid );
-				$user->load( User::READ_LATEST );
+				$user->load( IDBAccessObject::READ_LATEST );
 				// Trigger the UserSaveSettings hook
 				$user->saveSettings();
 				$this->hookRunner->onRenameUserComplete( $this->uid, $this->old, $this->new );
@@ -362,22 +371,21 @@ class RenameuserSQL {
 			$fname
 		);
 
-		$this->debug( "Finished rename for {$this->old} to {$this->new}" );
+		$this->debug( "Finished rename from {$this->old} to {$this->new}" );
 
 		return true;
 	}
 
 	/**
-	 * @param string $name Current wiki local user name
+	 * @param string $name Current wiki local username
 	 * @return int Returns 0 if no row was found
 	 */
 	private function lockUserAndGetId( $name ) {
-		return (int)$this->loadBalancer->getConnection( DB_PRIMARY )->selectField(
-			'user',
-			'user_id',
-			[ 'user_name' => $name ],
-			__METHOD__,
-			[ 'FOR UPDATE' ]
-		);
+		return (int)$this->dbProvider->getPrimaryDatabase()->newSelectQueryBuilder()
+			->select( 'user_id' )
+			->forUpdate()
+			->from( 'user' )
+			->where( [ 'user_name' => $name ] )
+			->caller( __METHOD__ )->fetchField();
 	}
 }

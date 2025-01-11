@@ -18,12 +18,18 @@
  *
  */
 
+namespace Wikimedia\Tests;
+
+use MediaWikiCoversValidator;
+use PHPUnit\Framework\TestCase;
 use Wikimedia\StaticArrayWriter;
 
 /**
  * @covers \Wikimedia\StaticArrayWriter
  */
-class StaticArrayWriterTest extends PHPUnit\Framework\TestCase {
+class StaticArrayWriterTest extends TestCase {
+	use MediaWikiCoversValidator;
+
 	public function testCreate() {
 		$data = [
 			'foo' => 'bar',
@@ -45,8 +51,8 @@ return [
 	'baz' => 'rawr',
 	'they\'re' => '"quoted properly"',
 	'nested' => [
-		0 => 'elements',
-		1 => 'work',
+		'elements',
+		'work',
 	],
 	'intlike' => [
 		'050' => true,

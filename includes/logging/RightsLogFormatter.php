@@ -23,8 +23,9 @@
  * @since 1.22
  */
 
+use MediaWiki\Api\ApiResult;
 use MediaWiki\MainConfigNames;
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
 use MediaWiki\Title\Title;
 use MediaWiki\WikiMap\WikiMap;
 
@@ -34,12 +35,12 @@ use MediaWiki\WikiMap\WikiMap;
  * @since 1.21
  */
 class RightsLogFormatter extends LogFormatter {
-	protected function makePageLink( Title $title = null, $parameters = [], $html = null ) {
+	protected function makePageLink( ?Title $title = null, $parameters = [], $html = null ) {
 		$userrightsInterwikiDelimiter = $this->context->getConfig()
 			->get( MainConfigNames::UserrightsInterwikiDelimiter );
 
 		if ( !$this->plaintext ) {
-			$text = MediaWikiServices::getInstance()->getContentLanguage()->
+			$text = $this->getContentLanguage()->
 				ucfirst( $title->getDBkey() );
 			$parts = explode( $userrightsInterwikiDelimiter, $text, 2 );
 
@@ -128,17 +129,16 @@ class RightsLogFormatter extends LogFormatter {
 		// separate arrays of temporary and permanent memberships
 		$tempList = $permList = [];
 
-		reset( $groups );
-		reset( $serializedUGMs );
-		while ( current( $groups ) ) {
-			$group = current( $groups );
-
-			if ( current( $serializedUGMs ) &&
-				isset( current( $serializedUGMs )['expiry'] ) &&
-				current( $serializedUGMs )['expiry']
+		foreach (
+			array_map( null, $groups, $serializedUGMs )
+				as [ $group, $serializedUGM ]
+		) {
+			if ( $serializedUGM &&
+				isset( $serializedUGM['expiry'] ) &&
+				$serializedUGM['expiry']
 			) {
 				// there is an expiry date; format the group and expiry into a friendly string
-				$expiry = current( $serializedUGMs )['expiry'];
+				$expiry = $serializedUGM['expiry'];
 				$expiryFormatted = $uiLanguage->userTimeAndDate( $expiry, $uiUser );
 				$expiryFormattedD = $uiLanguage->userDate( $expiry, $uiUser );
 				$expiryFormattedT = $uiLanguage->userTime( $expiry, $uiUser );
@@ -146,11 +146,8 @@ class RightsLogFormatter extends LogFormatter {
 					$expiryFormatted, $expiryFormattedD, $expiryFormattedT )->parse();
 			} else {
 				// the right does not expire; just insert the group name
-				$permList[] = $group;
+				$permList[] = htmlspecialchars( $group );
 			}
-
-			next( $groups );
-			next( $serializedUGMs );
 		}
 
 		// place all temporary memberships first, to avoid the ambiguity of

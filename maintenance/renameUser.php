@@ -19,12 +19,16 @@
  * @author Martin Urbanec <martin.urbanec@wikimedia.cz>
  */
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Page\MovePageFactory;
 use MediaWiki\RenameUser\RenameuserSQL;
 use MediaWiki\Title\Title;
+use MediaWiki\User\CentralId\CentralIdLookup;
+use MediaWiki\User\User;
 use MediaWiki\User\UserFactory;
 
 class RenameUser extends Maintenance {
@@ -52,7 +56,7 @@ class RenameUser extends Maintenance {
 	}
 
 	private function initServices() {
-		$services = MediaWikiServices::getInstance();
+		$services = $this->getServiceContainer();
 		$this->userFactory = $services->getUserFactory();
 		$this->centralLookup = $services->getCentralIdLookupFactory()->getNonLocalLookup();
 		$this->movePageFactory = $services->getMovePageFactory();
@@ -150,9 +154,8 @@ class RenameUser extends Maintenance {
 			if ( $status->isGood() ) {
 				$numRenames++;
 			} else {
-				$this->output( "Failed to rename $kind page: " .
-					$status->getWikiText( false, false, 'en' ) .
-					"\n" );
+				$this->output( "Failed to rename $kind page\n" );
+				$this->error( $status );
 			}
 		}
 
@@ -161,13 +164,15 @@ class RenameUser extends Maintenance {
 			if ( $status->isGood() ) {
 				$numRenames++;
 			} else {
-				$this->output( "Failed to rename $kind subpage \"$titleText\": " .
-					$status->getWikiText( false, false, 'en' ) . "\n" );
+				$this->output( "Failed to rename $kind subpage \"$titleText\"\n" );
+				$this->error( $status );
 			}
 		}
 		return $numRenames;
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = RenameUser::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

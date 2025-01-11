@@ -25,8 +25,14 @@
  * @author Daniel Kinzler
  */
 
+namespace MediaWiki\Content;
+
+use InvalidArgumentException;
+use MediaWiki\Language\Language;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MWUnknownContentModelException;
+use Wikimedia\Diff\Diff;
 
 /**
  * Content object implementation for representing flat text.
@@ -48,7 +54,6 @@ class TextContent extends AbstractContent {
 	 * @stable to call
 	 * @param string $text
 	 * @param string $model_id
-	 * @throws MWException
 	 */
 	public function __construct( $text, $model_id = CONTENT_MODEL_TEXT ) {
 		parent::__construct( $model_id );
@@ -61,7 +66,7 @@ class TextContent extends AbstractContent {
 		}
 
 		if ( !is_string( $text ) ) {
-			throw new MWException( "TextContent expects a string in the constructor." );
+			throw new InvalidArgumentException( "TextContent expects a string in the constructor." );
 		}
 
 		$this->mText = $text;
@@ -219,7 +224,7 @@ class TextContent extends AbstractContent {
 	 * @return Diff A diff representing the changes that would have to be
 	 *    made to this content object to make it equal to $that.
 	 */
-	public function diff( Content $that, Language $lang = null ) {
+	public function diff( Content $that, ?Language $lang = null ) {
 		$this->checkModelID( $that->getModel() );
 		/** @var self $that */
 		'@phan-var self $that';
@@ -276,3 +281,5 @@ class TextContent extends AbstractContent {
 	}
 
 }
+/** @deprecated class alias since 1.43 */
+class_alias( TextContent::class, 'TextContent' );

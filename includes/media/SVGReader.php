@@ -21,11 +21,12 @@
  * @file
  * @ingroup Media
  * @author "Derk-Jan Hartman <hartman _at_ videolan d0t org>"
- * @author Brion Vibber
- * @copyright Copyright © 2010-2010 Brion Vibber, Derk-Jan Hartman
+ * @author Brooke Vibber
+ * @copyright Copyright © 2010-2010 Brooke Vibber, Derk-Jan Hartman
  * @license GPL-2.0-or-later
  */
 
+use MediaWiki\Language\LanguageCode;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use Wikimedia\AtEase\AtEase;
@@ -48,13 +49,15 @@ class SVGReader {
 
 	/** @var array */
 	private $metadata = [];
+	/** @var int[] */
 	private $languages = [];
+	/** @var int[] */
 	private $languagePrefixes = [];
 
 	/**
 	 * Creates an SVGReader drawing from the source provided
 	 * @param string $source URI from which to read
-	 * @throws MWException|Exception
+	 * @throws InvalidSVGException
 	 */
 	public function __construct( $source ) {
 		$svgMetadataCutoff = MediaWikiServices::getInstance()->getMainConfig()
@@ -64,21 +67,21 @@ class SVGReader {
 		// Don't use $file->getSize() since file object passed to SVGHandler::getMetadata is bogus.
 		$size = filesize( $source );
 		if ( $size === false ) {
-			throw new MWException( "Error getting filesize of SVG." );
+			throw new InvalidSVGException( "Error getting filesize of SVG." );
 		}
 
 		if ( $size > $svgMetadataCutoff ) {
 			$this->debug( "SVG is $size bytes, which is bigger than {$svgMetadataCutoff}. Truncating." );
 			$contents = file_get_contents( $source, false, null, 0, $svgMetadataCutoff );
 			if ( $contents === false ) {
-				throw new MWException( 'Error reading SVG file.' );
+				throw new InvalidSVGException( 'Error reading SVG file.' );
 			}
 			$status = $this->reader->XML( $contents, null, LIBXML_NOERROR | LIBXML_NOWARNING );
 		} else {
 			$status = $this->reader->open( $source, null, LIBXML_NOERROR | LIBXML_NOWARNING );
 		}
 		if ( !$status ) {
-			throw new MWException( "Error getting xml of SVG." );
+			throw new InvalidSVGException( "Error getting xml of SVG." );
 		}
 
 		// Expand entities, since Adobe Illustrator uses them for xmlns
@@ -107,11 +110,9 @@ class SVGReader {
 		// be a better way.
 		AtEase::suppressWarnings();
 		try {
-			$this->read();
-		} catch ( Exception $e ) {
-			// Note, if this happens, the width/height will be taken to be 0x0.
+			// Note: if this throws, the width/height will be taken to be 0x0.
 			// Should we consider it the default 512x512 instead?
-			throw $e;
+			$this->read();
 		} finally {
 			libxml_disable_entity_loader( $oldDisable );
 			AtEase::restoreWarnings();
@@ -127,7 +128,7 @@ class SVGReader {
 
 	/**
 	 * Read the SVG
-	 * @throws MWException
+	 * @throws InvalidSVGException
 	 * @return bool
 	 */
 	protected function read() {
@@ -139,7 +140,7 @@ class SVGReader {
 		}
 
 		if ( $this->reader->localName !== 'svg' || $this->reader->namespaceURI !== self::NS_SVG ) {
-			throw new MWException( "Expected <svg> tag, got " .
+			throw new InvalidSVGException( "Expected <svg> tag, got " .
 				$this->reader->localName . " in NS " . $this->reader->namespaceURI );
 		}
 		$this->debug( '<svg> tag is correct.' );
@@ -220,7 +221,6 @@ class SVGReader {
 	 * Read an XML snippet from an element
 	 *
 	 * @param string|null $metafield Field that we will fill with the result
-	 * @throws MWException
 	 */
 	private function readXml( $metafield = null ) {
 		$this->debug( "Read top level metadata" );
@@ -285,6 +285,16 @@ class SVGReader {
 					}
 				}
 				switch ( $this->reader->localName ) {
+					case 'style':
+						$styleContents = $this->reader->readString();
+						if (
+							str_contains( $styleContents, 'animated' ) ||
+							str_contains( $styleContents, '@keyframes' )
+						) {
+							$this->debug( "HOUSTON WE HAVE ANIMATION" );
+							$this->metadata['animated'] = true;
+						}
+						break;
 					case 'script':
 						// Normally we disallow files with
 						// <script>, but its possible
@@ -343,12 +353,12 @@ class SVGReader {
 			$this->metadata['originalHeight'] = $this->reader->getAttribute( 'height' );
 		}
 
-		if ( !isset( $width ) && !isset( $height ) ) {
+		if ( $width === null && $height === null ) {
 			$width = $defaultWidth;
 			$height = $width / $aspect;
-		} elseif ( isset( $width ) && !isset( $height ) ) {
+		} elseif ( $width !== null && $height === null ) {
 			$height = $width / $aspect;
-		} elseif ( isset( $height ) && !isset( $width ) ) {
+		} elseif ( $height !== null && $width === null ) {
 			$width = $height * $aspect;
 		}
 
@@ -361,31 +371,38 @@ class SVGReader {
 	/**
 	 * Return a rounded pixel equivalent for a labeled CSS/SVG length.
 	 * https://www.w3.org/TR/SVG11/coords.html#Units
+	 * https://www.w3.org/TR/css-values-3/#lengths
 	 *
 	 * @param string $length CSS/SVG length.
 	 * @param float|int $viewportSize Optional scale for percentage units...
 	 * @return float Length in pixels
 	 */
 	public static function scaleSVGUnit( $length, $viewportSize = 512 ) {
+		// Per CSS values spec, assume 96dpi.
 		static $unitLength = [
 			'px' => 1.0,
-			'pt' => 1.25,
-			'pc' => 15.0,
-			'mm' => 3.543307,
-			'cm' => 35.43307,
-			'in' => 90.0,
-			'em' => 16.0, // fake it?
-			'ex' => 12.0, // fake it?
+			'pt' => 1.333333,
+			'pc' => 16.0,
+			'mm' => 3.7795275,
+			'q' => 0.944881,
+			'cm' => 37.795275,
+			'in' => 96.0,
+			'em' => 16.0, // Browser default font size if unspecified
+			'rem' => 16.0,
+			'ch' => 8.0, // Spec says 1em if impossible to determine
+			'ex' => 8.0, // Spec says 0.5em if impossible to determine
 			'' => 1.0, // "User units" pixels by default
 		];
+		// TODO: Does not support vw, vh, vmin, vmax.
 		$matches = [];
 		if ( preg_match(
-			'/^\s*([-+]?\d*(?:\.\d+|\d+)(?:[Ee][-+]?\d+)?)\s*(em|ex|px|pt|pc|cm|mm|in|%|)\s*$/',
+			'/^\s*([-+]?\d*(?:\.\d+|\d+)(?:[Ee][-+]?\d+)?)\s*' .
+			'(rem|em|ex|px|pt|pc|cm|mm|in|ch|q|%)\s*$/i',
 			$length,
 			$matches
 		) ) {
 			$length = (float)$matches[1];
-			$unit = $matches[2];
+			$unit = strtolower( $matches[2] );
 			if ( $unit === '%' ) {
 				return $length * 0.01 * $viewportSize;
 			}

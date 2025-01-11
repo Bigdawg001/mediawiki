@@ -1,23 +1,29 @@
 <?php
 
+namespace MediaWiki\Tests\Parser;
+
 use MediaWiki\Language\RawMessage;
+use MediaWiki\Parser\CoreParserFunctions;
+use MediaWiki\User\User;
+use MediaWikiLangTestCase;
 
 /**
  * @group Database
- * @covers CoreParserFunctions
+ * @covers \MediaWiki\Parser\CoreParserFunctions
  */
 class CoreParserFunctionsTest extends MediaWikiLangTestCase {
 
 	public function testGender() {
 		$userOptionsManager = $this->getServiceContainer()->getUserOptionsManager();
 
-		$user = User::createNew( '*Female' );
+		$username = 'Female*';
+		$user = User::createNew( $username );
 		$userOptionsManager->setOption( $user, 'gender', 'female' );
 		$user->saveSettings();
 
-		$msg = ( new RawMessage( '{{GENDER:*Female|m|f|o}}' ) )->parse();
+		$msg = ( new RawMessage( '{{GENDER:' . $username . '|m|f|o}}' ) )->parse();
 		$this->assertEquals( 'f', $msg, 'Works unescaped' );
-		$escapedName = wfEscapeWikiText( '*Female' );
+		$escapedName = wfEscapeWikiText( $username );
 		$msg2 = ( new RawMessage( '{{GENDER:' . $escapedName . '|m|f|o}}' ) )
 			->parse();
 		$this->assertEquals( 'f', $msg2, 'Works escaped' );

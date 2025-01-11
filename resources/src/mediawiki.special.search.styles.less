@@ -1,6 +1,6 @@
 /* Special:Search */
+@import 'mediawiki.skin.variables.less';
 @import 'mediawiki.mixins.less';
-@import 'mediawiki.ui/variables.less';
 
 /* stylelint-disable selector-class-pattern */
 #mw-content-text {
@@ -59,31 +59,35 @@
 	float: left;
 }
 
-@media only screen and ( min-width: @width-breakpoint-tablet ) {
+@media only screen and ( min-width: @min-width-breakpoint-tablet ) {
 	.mw-search-results-container,
 	.mw-search-results-info {
 		width: ~'calc( 100% / 12 * 7 )';
 	}
-
-	.mw-search-profile-tabs {
-		width: 50em;
-	}
 }
 
 .searchResultImage {
+	display: flex;
+
 	.searchResultImage-thumbnail {
+		flex-shrink: 0;
 		width: 90px;
 		height: 90px;
 		text-align: center;
 		vertical-align: top;
-		padding-right: 0.5em;
+		padding-right: 1em;
+
+		> div {
+			padding: 0.5em;
+		}
 
 		.searchResultImage-thumbnail-placeholder {
+			background-color: @background-color-neutral-subtle;
+			box-sizing: border-box;
 			width: inherit;
 			height: inherit;
-			background-color: @colorGray15;
-			border: 1px solid @colorGray12;
-			fill: @colorGray7;
+			border: @border-subtle;
+			fill: @color-placeholder;
 			display: flex;
 			justify-content: center;
 			align-items: center;
@@ -94,10 +98,9 @@
 			/* Note: below !important required to override an unrelated !important in minerva skin */
 			/* stylelint-disable-next-line declaration-no-important */
 			height: 100% !important;
-			/* stylelint-disable-next-line plugin/no-unsupported-browser-features */
 			object-fit: cover;
 			object-position: top;
-			border: 1px solid @colorGray12;
+			border: @border-subtle;
 		}
 	}
 
@@ -116,15 +119,17 @@
 }
 
 .mw-search-result-data {
-	color: @colorGray5;
+	color: @color-subtle;
 	font-size: 93%;
 }
 
 .mw-search-profile-tabs {
-	background-color: @colorGray15;
+	background-color: @background-color-neutral-subtle;
 	margin-top: 1em;
-	border: 1px solid @colorGray12;
-	border-radius: 2px;
+	border: @border-subtle;
+	border-radius: @border-radius-base;
+	// ooui's @max-width-base
+	max-width: 50em;
 }
 
 .search-types {
@@ -149,7 +154,7 @@
 	}
 
 	.current a {
-		color: @colorGray2;
+		color: @color-base;
 		cursor: default;
 
 		&:hover {
@@ -162,7 +167,7 @@
 	float: right;
 	padding: 0.5em;
 	padding-right: 0.75em;
-	color: @colorGray5;
+	color: @color-subtle;
 	font-size: 95%;
 }
 
@@ -175,13 +180,13 @@
 /* ===================== */
 
 #mw-searchoptions {
+	background-color: @background-color-neutral-subtle;
 	/* Support: Firefox, needs `clear: both` on `fieldset` when zoom level > 100%, see T176499 */
 	clear: both;
 	padding: 0.5em 0.75em 0.75em 0.75em;
-	background-color: @colorGray15;
 	margin: -1px 0 0;
-	border: 1px solid @colorGray12;
-	border-radius: 0 0 2px 2px;
+	border: @border-subtle;
+	border-radius: 0 0 @border-radius-base @border-radius-base;
 
 	legend {
 		display: none;
@@ -195,17 +200,18 @@
 
 	.divider {
 		clear: both;
-		border-bottom: 1px solid @colorGray14;
+		border-bottom: @border-subtle;
 		padding-top: 0.5em;
 		margin-bottom: 0.5em;
 	}
 
-	.checkbox-container {
+	.checkbox-wrapper {
 		columns: 13em;
-		margin-bottom: 1em;
 
 		> * {
 			.column-break-inside-avoid;
+			/* padding because margin triggers a Safari bug on columns, see T377900 */
+			padding-bottom: 1.5em;
 		}
 	}
 }
@@ -218,7 +224,7 @@
 #mw-search-interwiki {
 	float: right;
 	width: 18em;
-	border: 1px solid #a2a9b1;
+	border: @border-base;
 	margin-top: 2ex;
 }
 
@@ -239,11 +245,16 @@
 }
 
 .mw-search-interwiki-project {
+	background-color: @background-color-neutral;
 	font-size: 97%;
 	text-align: left;
 	padding: 0.15em 0.15em 0.2em 0.2em;
-	background-color: @colorGray14;
-	border-top: 1px solid @colorGray12;
+	border-top: @border-subtle;
+}
+
+.mw-search-interwiki-header {
+	font-size: 1.3125em;
+	border-bottom: @border-base;
 }
 
 .searchdidyoumean {

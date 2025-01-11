@@ -1,13 +1,18 @@
 <?php
 
+namespace MediaWiki\Tests\Api;
+
+use MediaWiki\Api\ApiWatchlistTrait;
 use MediaWiki\Title\Title;
-use MediaWiki\User\UserOptionsLookup;
+use MediaWiki\User\Options\UserOptionsLookup;
+use MediaWiki\User\User;
 use MediaWiki\Watchlist\WatchlistManager;
+use MediaWikiUnitTestCase;
 use Wikimedia\TestingAccessWrapper;
 
 /**
  * @group API
- * @covers ApiWatchlistTrait
+ * @covers \MediaWiki\Api\ApiWatchlistTrait
  */
 class ApiWatchlistTraitTest extends MediaWikiUnitTestCase {
 

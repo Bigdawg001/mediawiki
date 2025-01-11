@@ -20,8 +20,8 @@
 
 namespace MediaWiki\StubObject;
 
-use Language;
-use RequestContext;
+use MediaWiki\Context\RequestContext;
+use MediaWiki\Language\Language;
 
 /**
  * Stub object for the user language. Assigned to the $wgLang global.
@@ -41,4 +41,5 @@ class StubUserLang extends StubObject {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( StubUserLang::class, 'StubUserLang' );

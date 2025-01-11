@@ -20,6 +20,7 @@
  * @file
  */
 
+use MediaWiki\Context\RequestContext;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\User\UserIdentity;
@@ -87,7 +88,7 @@ class UploadStash {
 	 * @param FileRepo $repo
 	 * @param UserIdentity|null $user
 	 */
-	public function __construct( FileRepo $repo, UserIdentity $user = null ) {
+	public function __construct( FileRepo $repo, ?UserIdentity $user = null ) {
 		// this might change based on wiki's configuration.
 		$this->repo = $repo;
 
@@ -198,12 +199,13 @@ class UploadStash {
 	 * @param string $path Path to file you want stashed
 	 * @param string|null $sourceType The type of upload that generated this file
 	 *   (currently, I believe, 'file' or null)
+	 * @param array|null $fileProps File props or null to regenerate
 	 * @throws UploadStashBadPathException
 	 * @throws UploadStashFileException
 	 * @throws UploadStashNotLoggedInException
 	 * @return UploadStashFile|null File, or null on failure
 	 */
-	public function stashFile( $path, $sourceType = null ) {
+	public function stashFile( $path, $sourceType = null, $fileProps = null ) {
 		if ( !is_file( $path ) ) {
 			wfDebug( __METHOD__ . " tried to stash file at '$path', but it doesn't exist" );
 			throw new UploadStashBadPathException(
@@ -211,8 +213,11 @@ class UploadStash {
 			);
 		}
 
-		$mwProps = new MWFileProps( MediaWikiServices::getInstance()->getMimeAnalyzer() );
-		$fileProps = $mwProps->getPropsFromPath( $path, true );
+		// File props is expensive to generate for large files, so reuse if possible.
+		if ( !$fileProps ) {
+			$mwProps = new MWFileProps( MediaWikiServices::getInstance()->getMimeAnalyzer() );
+			$fileProps = $mwProps->getPropsFromPath( $path, true );
+		}
 		wfDebug( __METHOD__ . " stashing file at '$path'" );
 
 		// we will be initializing from some tmpnam files that don't have extensions.
@@ -251,26 +256,21 @@ class UploadStash {
 
 		if ( !$storeStatus->isOK() ) {
 			// It is a convention in MediaWiki to only return one error per API
-			// exception, even if multiple errors are available. We use reset()
-			// to pick the "first" thing that was wrong, preferring errors to
-			// warnings. This is a bit lame, as we may have more info in the
+			// exception, even if multiple errors are available.[citation needed]
+			// Pick the "first" thing that was wrong, preferring errors to warnings.
+			// This is a bit lame, as we may have more info in the
 			// $storeStatus and we're throwing it away, but to fix it means
 			// redesigning API errors significantly.
 			// $storeStatus->value just contains the virtual URL (if anything)
 			// which is probably useless to the caller.
-			$error = $storeStatus->getErrorsArray();
-			$error = reset( $error );
-			if ( !count( $error ) ) {
-				$error = $storeStatus->getWarningsArray();
-				$error = reset( $error );
-				if ( !count( $error ) ) {
-					$error = [ 'unknown', 'no error recorded' ];
-				}
+			foreach ( $storeStatus->getMessages( 'error' ) as $msg ) {
+				throw new UploadStashFileException( $msg );
 			}
-			// At this point, $error should contain the single "most important"
-			// error, plus any parameters.
-			$errorMsg = array_shift( $error );
-			throw new UploadStashFileException( wfMessage( $errorMsg, $error ) );
+			foreach ( $storeStatus->getMessages( 'warning' ) as $msg ) {
+				throw new UploadStashFileException( $msg );
+			}
+			// XXX: This isn't a real message, hopefully this case is unreachable
+			throw new UploadStashFileException( [ 'unknown', 'no error recorded' ] );
 		}
 		$stashPath = $storeStatus->value;
 
@@ -312,11 +312,10 @@ class UploadStash {
 			'us_status' => 'finished'
 		];
 
-		$dbw->insert(
-			'uploadstash',
-			$insertRow,
-			__METHOD__
-		);
+		$dbw->newInsertQueryBuilder()
+			->insertInto( 'uploadstash' )
+			->row( $insertRow )
+			->caller( __METHOD__ )->execute();
 
 		// store the insertid in the class variable so immediate retrieval
 		// (possibly laggy) isn't necessary.
@@ -346,11 +345,10 @@ class UploadStash {
 
 		wfDebug( __METHOD__ . ' clearing all rows for user ' . $this->user->getId() );
 		$dbw = $this->repo->getPrimaryDB();
-		$dbw->delete(
-			'uploadstash',
-			[ 'us_user' => $this->user->getId() ],
-			__METHOD__
-		);
+		$dbw->newDeleteQueryBuilder()
+			->deleteFrom( 'uploadstash' )
+			->where( [ 'us_user' => $this->user->getId() ] )
+			->caller( __METHOD__ )->execute();
 
 		# destroy objects.
 		$this->files = [];
@@ -413,11 +411,10 @@ class UploadStash {
 
 		$dbw = $this->repo->getPrimaryDB();
 
-		$dbw->delete(
-			'uploadstash',
-			[ 'us_key' => $key ],
-			__METHOD__
-		);
+		$dbw->newDeleteQueryBuilder()
+			->deleteFrom( 'uploadstash' )
+			->where( [ 'us_key' => $key ] )
+			->caller( __METHOD__ )->execute();
 
 		/** @todo Look into UnregisteredLocalFile and find out why the rv here is
 		 *  sometimes wrong (false when file was removed). For now, ignore.
@@ -449,7 +446,7 @@ class UploadStash {
 			->where( [ 'us_user' => $this->user->getId() ] )
 			->caller( __METHOD__ )->fetchResultSet();
 
-		if ( !is_object( $res ) || $res->numRows() == 0 ) {
+		if ( $res->numRows() == 0 ) {
 			// nothing to do.
 			return false;
 		}
@@ -545,7 +542,12 @@ class UploadStash {
 	 * @return bool
 	 */
 	protected function initFile( $key ) {
-		$file = new UploadStashFile( $this->repo, $this->fileMetadata[$key]['us_path'], $key );
+		$file = new UploadStashFile(
+			$this->repo,
+			$this->fileMetadata[$key]['us_path'],
+			$key,
+			$this->fileMetadata[$key]['us_sha1']
+		);
 		if ( $file->getSize() === 0 ) {
 			throw new UploadStashZeroLengthFileException(
 				wfMessage( 'uploadstash-zero-length' )

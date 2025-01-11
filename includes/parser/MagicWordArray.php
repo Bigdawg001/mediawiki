@@ -1,8 +1,5 @@
 <?php
-
 /**
- * See docs/magicword.md.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -19,28 +16,29 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup Parser
  */
 
 namespace MediaWiki\Parser;
 
-use Exception;
+use LogicException;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
-use MWException;
 
 /**
  * Class for handling an array of magic words
+ *
+ * See docs/magicword.md.
+ *
+ * @since 1.11
  * @ingroup Parser
  */
 class MagicWordArray {
+
 	/** @var string[] */
 	public $names = [];
+	private MagicWordFactory $factory;
 
-	/** @var MagicWordFactory */
-	private $factory;
-
-	/** @var array|null */
+	/** @var array<int,array<string,string>>|null */
 	private $hash;
 
 	/** @var string[]|null */
@@ -53,7 +51,7 @@ class MagicWordArray {
 	 * @param string[] $names
 	 * @param MagicWordFactory|null $factory
 	 */
-	public function __construct( $names = [], MagicWordFactory $factory = null ) {
+	public function __construct( $names = [], ?MagicWordFactory $factory = null ) {
 		$this->names = $names;
 		$this->factory = $factory ?: MediaWikiServices::getInstance()->getMagicWordFactory();
 	}
@@ -63,26 +61,17 @@ class MagicWordArray {
 	 *
 	 * @param string $name
 	 */
-	public function add( $name ) {
+	public function add( $name ): void {
 		$this->names[] = $name;
 		$this->hash = $this->baseRegex = $this->regex = null;
 	}
 
 	/**
-	 * Add a number of magic words by name
-	 *
-	 * @param string[] $names
-	 */
-	public function addArray( $names ) {
-		$this->names = array_merge( $this->names, array_values( $names ) );
-		$this->hash = $this->baseRegex = $this->regex = null;
-	}
-
-	/**
 	 * Get a 2-d hashtable for this array
-	 * @return array
+	 *
+	 * @return array<int,array<string,string>>
 	 */
-	public function getHash() {
+	public function getHash(): array {
 		if ( $this->hash === null ) {
 			$this->hash = [ 0 => [], 1 => [] ];
 			foreach ( $this->names as $name ) {
@@ -101,20 +90,20 @@ class MagicWordArray {
 
 	/**
 	 * Get the base regex
+	 *
+	 * @internal For use in {@see Parser} only
 	 * @param bool $capture Set to false to suppress the capture groups,
 	 *  which can cause unexpected conflicts when this regexp is embedded in
 	 *  other regexps with similar constructs.
 	 * @param string $delimiter The delimiter which will be used for the
 	 *  eventual regexp.
-	 * @return string[]
-	 * @internal
+	 * @return array<int,string>
 	 */
 	public function getBaseRegex( bool $capture = true, string $delimiter = '/' ): array {
 		if ( $capture && $delimiter === '/' && $this->baseRegex !== null ) {
 			return $this->baseRegex;
 		}
 		$regex = [ 0 => [], 1 => [] ];
-		$allGroups = [];
 		foreach ( $this->names as $name ) {
 			$magic = $this->factory->get( $name );
 			$case = $magic->isCaseSensitive() ? 1 : 0;
@@ -124,13 +113,6 @@ class MagicWordArray {
 					$it = strtr( $i, '0123456789', 'abcdefghij' );
 					$groupName = $it . '_' . $name;
 					$group = '(?P<' . $groupName . '>' . preg_quote( $syn, $delimiter ) . ')';
-					// look for same group names to avoid same named subpatterns in the regex
-					if ( isset( $allGroups[$groupName] ) ) {
-						throw new MWException(
-							__METHOD__ . ': duplicate internal name in magic word array: ' . $name
-						);
-					}
-					$allGroups[$groupName] = true;
 					$regex[$case][] = $group;
 				} else {
 					$regex[$case][] = preg_quote( $syn, $delimiter );
@@ -154,15 +136,15 @@ class MagicWordArray {
 
 	/**
 	 * Get an unanchored regex that does not match parameters
-	 * @return string[]
-	 * @internal
+	 *
+	 * @return array<int,string>
 	 */
-	public function getRegex() {
+	private function getRegex(): array {
 		if ( $this->regex === null ) {
 			$this->regex = [];
 			$base = $this->getBaseRegex( true, '/' );
 			foreach ( $base as $case => $re ) {
-				$this->regex[$case] = "/{$re}/S";
+				$this->regex[$case] = "/$re/JS";
 			}
 			// As a performance optimization, turn on unicode mode only for
 			// case-insensitive matching.
@@ -172,28 +154,15 @@ class MagicWordArray {
 	}
 
 	/**
-	 * Get a regex for matching variables with parameters
-	 *
-	 * @return string[]
-	 * @internal
-	 * @deprecated since 1.36 Appears to have no uses.
-	 */
-	public function getVariableRegex() {
-		wfDeprecated( __METHOD__, '1.36' );
-		return str_replace( "\\$1", "(.*?)", $this->getRegex() );
-	}
-
-	/**
 	 * Get a regex anchored to the start of the string that does not match parameters
 	 *
-	 * @return string[]
-	 * @internal
+	 * @return array<int,string>
 	 */
-	public function getRegexStart() {
+	private function getRegexStart(): array {
 		$newRegex = [];
 		$base = $this->getBaseRegex( true, '/' );
 		foreach ( $base as $case => $re ) {
-			$newRegex[$case] = "/^(?:{$re})/S";
+			$newRegex[$case] = "/^(?:$re)/JS";
 		}
 		// As a performance optimization, turn on unicode mode only for
 		// case-insensitive matching.
@@ -204,14 +173,13 @@ class MagicWordArray {
 	/**
 	 * Get an anchored regex for matching variables with parameters
 	 *
-	 * @return string[]
-	 * @internal
+	 * @return array<int,string>
 	 */
-	public function getVariableStartToEndRegex() {
+	private function getVariableStartToEndRegex(): array {
 		$newRegex = [];
 		$base = $this->getBaseRegex( true, '/' );
 		foreach ( $base as $case => $re ) {
-			$newRegex[$case] = str_replace( "\\$1", "(.*?)", "/^(?:{$re})$/S" );
+			$newRegex[$case] = str_replace( '\$1', '(.*?)', "/^(?:$re)$/JS" );
 		}
 		// As a performance optimization, turn on unicode mode only for
 		// case-insensitive matching.
@@ -229,47 +197,42 @@ class MagicWordArray {
 
 	/**
 	 * Parse a match array from preg_match
-	 * Returns array(magic word ID, parameter value)
-	 * If there is no parameter value, that element will be false.
 	 *
-	 * @param array $m
-	 *
-	 * @throws MWException
-	 * @return array
+	 * @param array<string|int,string> $matches
+	 * @return array{0:string,1:string|false} Pair of (magic word ID, parameter value),
+	 *  where the latter is instead false if there is no parameter value.
 	 */
-	public function parseMatch( $m ) {
-		reset( $m );
-		while ( ( $key = key( $m ) ) !== null ) {
-			$value = current( $m );
-			next( $m );
-			if ( $key === 0 || $value === '' ) {
-				continue;
+	private function parseMatch( array $matches ): array {
+		$magicName = null;
+		foreach ( $matches as $key => $match ) {
+			if ( $magicName !== null ) {
+				// The structure we found at this point is [ …,
+				//     'a_magicWordName' => 'matchedSynonym',
+				//     n                 => 'matchedSynonym (again)',
+				//     n + 1             => 'parameterValue',
+				// … ]
+				return [ $magicName, $matches[$key + 1] ?? false ];
 			}
-			$parts = explode( '_', $key, 2 );
-			if ( count( $parts ) != 2 ) {
-				// This shouldn't happen
-				// continue;
-				throw new MWException( __METHOD__ . ': bad parameter name' );
+			// Skip the initial full match and any non-matching group
+			if ( $match !== '' && $key !== 0 ) {
+				$parts = explode( '_', $key, 2 );
+				if ( !isset( $parts[1] ) ) {
+					throw new LogicException( 'Unexpected group name' );
+				}
+				$magicName = $parts[1];
 			}
-			[ /* $synIndex */, $magicName ] = $parts;
-			$paramValue = next( $m );
-			return [ $magicName, $paramValue ];
 		}
-		// This shouldn't happen either
-		throw new MWException( __METHOD__ . ': parameter not found' );
+		throw new LogicException( 'Unexpected $m array with no match' );
 	}
 
 	/**
 	 * Match some text, with parameter capture
-	 * Returns an array with the magic word name in the first element and the
-	 * parameter in the second element.
-	 * Both elements are false if there was no match.
 	 *
 	 * @param string $text
-	 *
-	 * @return array
+	 * @return (string|false)[] Magic word name in the first element and the parameter in the second
+	 *  element. Both elements are false if there was no match.
 	 */
-	public function matchVariableStartToEnd( $text ) {
+	public function matchVariableStartToEnd( $text ): array {
 		$regexes = $this->getVariableStartToEndRegex();
 		foreach ( $regexes as $regex ) {
 			$m = [];
@@ -282,11 +245,10 @@ class MagicWordArray {
 
 	/**
 	 * Match some text, without parameter capture
-	 * Returns the magic word name, or false if there was no capture
 	 *
+	 * @see MagicWord::matchStartToEnd
 	 * @param string $text
-	 *
-	 * @return string|false False on failure
+	 * @return string|false The magic word name, or false if there was no capture
 	 */
 	public function matchStartToEnd( $text ) {
 		$hash = $this->getHash();
@@ -298,49 +260,37 @@ class MagicWordArray {
 	}
 
 	/**
-	 * Returns an associative array, ID => param value, for all items that match
+	 * Return an associative array for all items that match.
+	 *
+	 * Cannot be used for magic words with parameters.
 	 * Removes the matched items from the input string (passed by reference)
 	 *
+	 * @see MagicWord::matchAndRemove
 	 * @param string &$text
-	 *
-	 * @return array
+	 * @return array<string,false> Keyed by magic word ID
 	 */
-	public function matchAndRemove( &$text ) {
+	public function matchAndRemove( &$text ): array {
 		$found = [];
 		$regexes = $this->getRegex();
-		foreach ( $regexes as $regex ) {
-			$matches = [];
-			$res = preg_match_all( $regex, $text, $matches, PREG_SET_ORDER );
-			if ( $res === false ) {
-				$error = preg_last_error();
-				// TODO: Remove function_exists when we require PHP8
-				$errorText = function_exists( 'preg_last_error_msg' ) ? preg_last_error_msg() : '';
-				LoggerFactory::getInstance( 'parser' )->warning( 'preg_match_all error: {code} {errorText}', [
-					'code' => $error,
-					'regex' => $regex,
-					'text' => $text,
-					'errorText' => $errorText
-				] );
-				throw new Exception( "preg_match_all error $error: $errorText" );
-			} elseif ( $res ) {
-				foreach ( $matches as $m ) {
-					[ $name, $param ] = $this->parseMatch( $m );
-					$found[$name] = $param;
-				}
+		$res = preg_replace_callback( $regexes, function ( $m ) use ( &$found ) {
+			[ $name, $param ] = $this->parseMatch( $m );
+			$found[$name] = $param;
+			return '';
+		}, $text );
+		// T321234: Don't try to fix old revisions with broken UTF-8, just return $text as is
+		if ( $res === null ) {
+			$error = preg_last_error();
+			$errorText = preg_last_error_msg();
+			LoggerFactory::getInstance( 'parser' )->warning( 'preg_match_all error: {code} {errorText}', [
+				'code' => $error,
+				'regex' => $regexes,
+				'text' => $text,
+				'errorText' => $errorText
+			] );
+			if ( $error !== PREG_BAD_UTF8_ERROR ) {
+				throw new LogicException( "preg_match_all error $error: $errorText" );
 			}
-			$res = preg_replace( $regex, '', $text );
-			if ( $res === null ) {
-				$error = preg_last_error();
-				// TODO: Remove function_exists when we require PHP8
-				$errorText = function_exists( 'preg_last_error_msg' ) ? preg_last_error_msg() : '';
-				LoggerFactory::getInstance( 'parser' )->warning( 'preg_replace error: {code} {errorText}', [
-					'code' => $error,
-					'regex' => $regex,
-					'text' => $text,
-					'errorText' => $errorText
-				] );
-				throw new Exception( "preg_replace error $error: $errorText" );
-			}
+		} else {
 			$text = $res;
 		}
 		return $found;
@@ -349,12 +299,12 @@ class MagicWordArray {
 	/**
 	 * Return the ID of the magic word at the start of $text, and remove
 	 * the prefix from $text.
-	 * Return false if no match found and $text is not modified.
+	 *
 	 * Does not match parameters.
 	 *
-	 * @param string &$text
-	 *
-	 * @return int|bool False on failure
+	 * @see MagicWord::matchStartAndRemove
+	 * @param string &$text Unmodified if no match is found.
+	 * @return string|false False if no match is found.
 	 */
 	public function matchStartAndRemove( &$text ) {
 		$regexes = $this->getRegexStart();
@@ -373,4 +323,5 @@ class MagicWordArray {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( MagicWordArray::class, 'MagicWordArray' );

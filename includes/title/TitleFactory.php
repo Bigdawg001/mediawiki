@@ -22,11 +22,11 @@
 
 namespace MediaWiki\Title;
 
-use MalformedTitleException;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageReference;
 use MessageLocalizer;
+use Wikimedia\Rdbms\IResultWrapper;
 
 /**
  * Creates Title objects.
@@ -67,6 +67,16 @@ class TitleFactory {
 	}
 
 	/**
+	 * @see Title::newFromPageIdentity
+	 * @since 1.41
+	 * @param PageIdentity $pageIdentity
+	 * @return Title
+	 */
+	public function newFromPageIdentity( PageIdentity $pageIdentity ): Title {
+		return Title::newFromPageIdentity( $pageIdentity );
+	}
+
+	/**
 	 * @see Title::castFromPageIdentity
 	 * @since 1.36
 	 * @param PageIdentity|null $pageIdentity
@@ -74,6 +84,16 @@ class TitleFactory {
 	 */
 	public function castFromPageIdentity( ?PageIdentity $pageIdentity ): ?Title {
 		return Title::castFromPageIdentity( $pageIdentity );
+	}
+
+	/**
+	 * @see Title::newFromPageReference
+	 * @since 1.41
+	 * @param PageReference $pageReference
+	 * @return Title
+	 */
+	public function newFromPageReference( PageReference $pageReference ): Title {
+		return Title::newFromPageReference( $pageReference );
 	}
 
 	/**
@@ -128,17 +148,6 @@ class TitleFactory {
 	}
 
 	/**
-	 * @deprecated since 1.38 use a PageStore QueryBuilder instead
-	 * @see Title::newFromIDs
-	 * @param int[] $ids
-	 * @return Title[]
-	 */
-	public function newFromIDs( $ids ): array {
-		wfDeprecated( __METHOD__, '1.38' );
-		return Title::newFromIDs( $ids );
-	}
-
-	/**
 	 * @see Title::newFromRow
 	 * @param \stdClass $row
 	 * @return Title
@@ -176,10 +185,20 @@ class TitleFactory {
 	 * @param MessageLocalizer|null $localizer
 	 * @return Title
 	 */
-	public function newMainPage( MessageLocalizer $localizer = null ): Title {
+	public function newMainPage( ?MessageLocalizer $localizer = null ): Title {
 		return Title::newMainPage( $localizer );
+	}
+
+	/**
+	 * @since 1.42
+	 * @param IResultWrapper $result
+	 * @return TitleArrayFromResult
+	 */
+	public function newTitleArrayFromResult( IResultWrapper $result ) {
+		return new TitleArrayFromResult( $result );
 	}
 
 }
 
+/** @deprecated class alias since 1.41 */
 class_alias( TitleFactory::class, 'TitleFactory' );

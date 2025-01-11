@@ -1,6 +1,8 @@
 <?php
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/../includes/Benchmarker.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Benchmark any provided code for ad-hoc benchmarks.
@@ -30,6 +32,7 @@ class BenchmarkEval extends Benchmarker {
 	public function execute() {
 		if ( $this->hasOption( 'setup' ) ) {
 			$setupCode = $this->getOption( 'setup' ) . ';';
+			// phpcs:ignore MediaWiki.Usage.ForbiddenFunctions.eval
 			eval( $setupCode );
 		}
 
@@ -50,10 +53,13 @@ class BenchmarkEval extends Benchmarker {
 			$code = "for ( \$__i = 0; \$__i < $inner; \$__i++ ) { $code }";
 		}
 		$code = "function wfBenchmarkEvalBody () { $code }";
+		// phpcs:ignore MediaWiki.Usage.ForbiddenFunctions.eval
 		eval( $code );
 		$this->bench( [ 'eval' => [ 'function' => 'wfBenchmarkEvalBody' ] ] );
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = BenchmarkEval::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

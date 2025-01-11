@@ -1,8 +1,6 @@
 <?php
 /** Serbo-Croatian (Latin script) (srpskohrvatski (latinica))
  *
- * To improve a translation please visit https://translatewiki.net
- *
  * @file
  * @ingroup Languages
  *
@@ -35,24 +33,28 @@ $namespaceNames = [
 
 $namespaceAliases = [
 	'Razgovor_sa_korisnikom' => NS_USER_TALK,
-	'Mediawiki_razgovor' => NS_MEDIAWIKI_TALK,
+	'MediaWiki_razgovor' => NS_MEDIAWIKI_TALK,
 ];
 
-# Some dummy translations to prevent language fallback for now
-# @TODO: Check whether localising them is appropriate.
-$namespaceGenderAliases = [];
-$defaultDateFormat = 'dmy';
+$namespaceGenderAliases = [
+	NS_USER => [ 'male' => 'Korisnik', 'female' => 'Korisnica' ],
+	NS_USER_TALK => [ 'male' => 'Razgovor_s_korisnikom', 'female' => 'Razgovor_s_korisnicom' ],
+];
+
 $datePreferences = [
 	'default',
-	'dmy',
-	'ymd',
+	'dmy sh-latn',
 	'ISO 8601',
 ];
-$datePreferenceMigrationMap = [
-	'default',
-	'mdy',
-	'dmy',
-	'ymd',
+
+$defaultDateFormat = 'dmy sh-latn';
+
+$dateFormats = [
+	'dmy sh-latn time' => 'H:i',
+	'dmy sh-latn date' => 'j. xg Y.',
+	'dmy sh-latn monthonly' => 'xg Y.',
+	'dmy sh-latn both' => 'j. xg Y. u H:i',
+	'dmy sh-latn pretty' => 'j. xg',
 ];
 
 /** @phpcs-require-sorted-array */

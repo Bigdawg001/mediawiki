@@ -1,7 +1,5 @@
 <?php
 /**
- * Class to parse and build external user names
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -20,9 +18,13 @@
  * @file
  */
 
+namespace MediaWiki\User;
+
+use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Title\Title;
-use MediaWiki\User\UserRigorOptions;
+use Wikimedia\Rdbms\IDBAccessObject;
 
 /**
  * Class to parse and build external user names
@@ -30,15 +32,8 @@ use MediaWiki\User\UserRigorOptions;
  */
 class ExternalUserNames {
 
-	/**
-	 * @var string
-	 */
-	private $usernamePrefix;
-
-	/**
-	 * @var bool
-	 */
-	private $assignKnownUsers;
+	private string $usernamePrefix;
+	private bool $assignKnownUsers;
 
 	/**
 	 * @var bool[]
@@ -107,13 +102,14 @@ class ExternalUserNames {
 	 *  username), otherwise the name with the prefix prepended.
 	 */
 	public function applyPrefix( $name ) {
-		$userNameUtils = MediaWikiServices::getInstance()->getUserNameUtils();
+		$services = MediaWikiServices::getInstance();
+		$userNameUtils = $services->getUserNameUtils();
 		if ( $userNameUtils->getCanonical( $name, UserRigorOptions::RIGOR_USABLE ) === false ) {
 			return $name;
 		}
 
 		if ( $this->assignKnownUsers ) {
-			$userIdentityLookup = MediaWikiServices::getInstance()->getUserIdentityLookup();
+			$userIdentityLookup = $services->getUserIdentityLookup();
 			$userIdentity = $userIdentityLookup->getUserIdentityByName( $name );
 			if ( $userIdentity && $userIdentity->isRegistered() ) {
 				return $name;
@@ -122,7 +118,7 @@ class ExternalUserNames {
 			// See if any extension wants to create it.
 			if ( !isset( $this->triedCreations[$name] ) ) {
 				$this->triedCreations[$name] = true;
-				if ( !Hooks::runner()->onImportHandleUnknownUser( $name ) ) {
+				if ( !( new HookRunner( $services->getHookContainer() ) )->onImportHandleUnknownUser( $name ) ) {
 					$userIdentity = $userIdentityLookup->getUserIdentityByName( $name, IDBAccessObject::READ_LATEST );
 					if ( $userIdentity && $userIdentity->isRegistered() ) {
 						return $name;
@@ -169,3 +165,6 @@ class ExternalUserNames {
 	}
 
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( ExternalUserNames::class, 'ExternalUserNames' );

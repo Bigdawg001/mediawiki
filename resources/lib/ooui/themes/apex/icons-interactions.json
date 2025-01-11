@@ -32,6 +32,9 @@
 		"ellipsis": {
 			"file": "../wikimediaui/images/icons/ellipsis.svg"
 		},
+		"verticalEllipsis": {
+			"file": "../wikimediaui/images/icons/verticalEllipsis.svg"
+		},
 		"feedback": {
 			"file": {
 				"ltr": "../wikimediaui/images/icons/feedback-ltr.svg",
@@ -106,6 +109,9 @@
 		},
 		"pageSettings": {
 			"file": "../wikimediaui/images/icons/pageSettings.svg"
+		},
+		"power": {
+			"file": "../wikimediaui/images/icons/power.svg"
 		},
 		"printer": {
 			"file": "../wikimediaui/images/icons/printer.svg"

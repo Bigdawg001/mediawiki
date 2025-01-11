@@ -23,18 +23,24 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
 use MediaWiki\Cache\LinkBatchFactory;
+use MediaWiki\ChangeTags\ChangeTagsStore;
 use MediaWiki\CommentFormatter\CommentFormatter;
 use MediaWiki\Content\IContentHandlerFactory;
 use MediaWiki\Content\Renderer\ContentRenderer;
 use MediaWiki\Content\Transform\ContentTransformer;
 use MediaWiki\ParamValidator\TypeDef\UserDef;
+use MediaWiki\Parser\ParserFactory;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\RevisionStore;
 use MediaWiki\Revision\SlotRoleRegistry;
 use MediaWiki\Storage\NameTableAccessException;
 use MediaWiki\Storage\NameTableStore;
 use MediaWiki\Title\Title;
+use MediaWiki\User\TempUser\TempUserCreator;
+use MediaWiki\User\UserFactory;
 use Wikimedia\ParamValidator\ParamValidator;
 
 /**
@@ -44,40 +50,26 @@ use Wikimedia\ParamValidator\ParamValidator;
  */
 class ApiQueryDeletedRevisions extends ApiQueryRevisionsBase {
 
-	/** @var RevisionStore */
-	private $revisionStore;
+	private RevisionStore $revisionStore;
+	private NameTableStore $changeTagDefStore;
+	private ChangeTagsStore $changeTagsStore;
+	private LinkBatchFactory $linkBatchFactory;
 
-	/** @var NameTableStore */
-	private $changeTagDefStore;
-
-	/** @var LinkBatchFactory */
-	private $linkBatchFactory;
-
-	/**
-	 * @param ApiQuery $query
-	 * @param string $moduleName
-	 * @param RevisionStore $revisionStore
-	 * @param IContentHandlerFactory $contentHandlerFactory
-	 * @param ParserFactory $parserFactory
-	 * @param SlotRoleRegistry $slotRoleRegistry
-	 * @param NameTableStore $changeTagDefStore
-	 * @param LinkBatchFactory $linkBatchFactory
-	 * @param ContentRenderer $contentRenderer
-	 * @param ContentTransformer $contentTransformer
-	 * @param CommentFormatter $commentFormatter
-	 */
 	public function __construct(
 		ApiQuery $query,
-		$moduleName,
+		string $moduleName,
 		RevisionStore $revisionStore,
 		IContentHandlerFactory $contentHandlerFactory,
 		ParserFactory $parserFactory,
 		SlotRoleRegistry $slotRoleRegistry,
 		NameTableStore $changeTagDefStore,
+		ChangeTagsStore $changeTagsStore,
 		LinkBatchFactory $linkBatchFactory,
 		ContentRenderer $contentRenderer,
 		ContentTransformer $contentTransformer,
-		CommentFormatter $commentFormatter
+		CommentFormatter $commentFormatter,
+		TempUserCreator $tempUserCreator,
+		UserFactory $userFactory
 	) {
 		parent::__construct(
 			$query,
@@ -89,14 +81,17 @@ class ApiQueryDeletedRevisions extends ApiQueryRevisionsBase {
 			$slotRoleRegistry,
 			$contentRenderer,
 			$contentTransformer,
-			$commentFormatter
+			$commentFormatter,
+			$tempUserCreator,
+			$userFactory
 		);
 		$this->revisionStore = $revisionStore;
 		$this->changeTagDefStore = $changeTagDefStore;
+		$this->changeTagsStore = $changeTagsStore;
 		$this->linkBatchFactory = $linkBatchFactory;
 	}
 
-	protected function run( ApiPageSet $resultPageSet = null ) {
+	protected function run( ?ApiPageSet $resultPageSet = null ) {
 		$pageSet = $this->getPageSet();
 		$pageMap = $pageSet->getGoodAndMissingTitlesByNamespace();
 		$pageCount = count( $pageSet->getGoodAndMissingPages() );
@@ -130,7 +125,9 @@ class ApiQueryDeletedRevisions extends ApiQueryRevisionsBase {
 		}
 
 		if ( $this->fld_tags ) {
-			$this->addFields( [ 'ts_tags' => ChangeTags::makeTagSummarySubquery( 'archive' ) ] );
+			$this->addFields( [
+				'ts_tags' => $this->changeTagsStore->makeTagSummarySubquery( 'archive' )
+			] );
 		}
 
 		if ( $params['tag'] !== null ) {
@@ -178,7 +175,7 @@ class ApiQueryDeletedRevisions extends ApiQueryRevisionsBase {
 			if ( $params['user'] !== null ) {
 				$this->addWhereFld( 'actor_name', $params['user'] );
 			} elseif ( $params['excludeuser'] !== null ) {
-				$this->addWhere( 'actor_name<>' . $db->addQuotes( $params['excludeuser'] ) );
+				$this->addWhere( $db->expr( 'actor_name', '!=', $params['excludeuser'] ) );
 			}
 		}
 
@@ -310,15 +307,19 @@ class ApiQueryDeletedRevisions extends ApiQueryRevisionsBase {
 				],
 				ParamValidator::PARAM_DEFAULT => 'older',
 				ApiBase::PARAM_HELP_MSG => 'api-help-param-direction',
+				ApiBase::PARAM_HELP_MSG_PER_VALUE => [
+					'newer' => 'api-help-paramvalue-direction-newer',
+					'older' => 'api-help-paramvalue-direction-older',
+				],
 			],
 			'tag' => null,
 			'user' => [
 				ParamValidator::PARAM_TYPE => 'user',
-				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'id', 'interwiki' ],
+				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'temp', 'id', 'interwiki' ],
 			],
 			'excludeuser' => [
 				ParamValidator::PARAM_TYPE => 'user',
-				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'id', 'interwiki' ],
+				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'temp', 'id', 'interwiki' ],
 			],
 			'continue' => [
 				ApiBase::PARAM_HELP_MSG => 'api-help-param-continue',
@@ -327,16 +328,27 @@ class ApiQueryDeletedRevisions extends ApiQueryRevisionsBase {
 	}
 
 	protected function getExamplesMessages() {
-		return [
-			'action=query&prop=deletedrevisions&titles=Main%20Page|Talk:Main%20Page&' .
-				'drvslots=*&drvprop=user|comment|content'
-				=> 'apihelp-query+deletedrevisions-example-titles',
+		$title = Title::newMainPage();
+		$talkTitle = $title->getTalkPageIfDefined();
+		$examples = [
 			'action=query&prop=deletedrevisions&revids=123456'
 				=> 'apihelp-query+deletedrevisions-example-revids',
 		];
+
+		if ( $talkTitle ) {
+			$title = rawurlencode( $title->getPrefixedText() );
+			$talkTitle = rawurlencode( $talkTitle->getPrefixedText() );
+			$examples["action=query&prop=deletedrevisions&titles={$title}|{$talkTitle}&" .
+				'drvslots=*&drvprop=user|comment|content'] = 'apihelp-query+deletedrevisions-example-titles';
+		}
+
+		return $examples;
 	}
 
 	public function getHelpUrls() {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Deletedrevisions';
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiQueryDeletedRevisions::class, 'ApiQueryDeletedRevisions' );

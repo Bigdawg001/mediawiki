@@ -29,8 +29,9 @@
 namespace MediaWiki\Html;
 
 use ArrayAccess;
-use MWException;
-use WebRequest;
+use InvalidArgumentException;
+use MediaWiki\Request\WebRequest;
+use UnexpectedValueException;
 
 /**
  * Helper class to keep track of options when mixing links and form elements.
@@ -74,6 +75,7 @@ class FormOptions implements ArrayAccess {
 	 * - 'consumed' - true/false, whether the option was consumed using
 	 *   consumeValue() or consumeValues()
 	 * - 'type' - one of the type constants (but never AUTO)
+	 * @var array
 	 */
 	protected $options = [];
 
@@ -115,11 +117,9 @@ class FormOptions implements ArrayAccess {
 	 * Used to find out which type the data is. All types are defined in the 'Type constants' section
 	 * of this class.
 	 *
-	 * Detection of the INTNULL type is not supported; INT will be assumed if the data is an integer,
-	 * MWException will be thrown if it's null.
+	 * Detection of the INTNULL type is not supported; INT will be assumed if the data is an integer.
 	 *
 	 * @param mixed $data Value to guess the type for
-	 * @throws MWException If unable to guess the type
 	 * @return int Type constant
 	 */
 	public static function guessType( $data ) {
@@ -134,7 +134,7 @@ class FormOptions implements ArrayAccess {
 		} elseif ( is_array( $data ) ) {
 			return self::ARR;
 		} else {
-			throw new MWException( 'Unsupported datatype' );
+			throw new InvalidArgumentException( 'Unsupported datatype' );
 		}
 	}
 
@@ -145,13 +145,12 @@ class FormOptions implements ArrayAccess {
 	 *
 	 * @param string $name Option name
 	 * @param bool $strict Throw an exception when the option doesn't exist instead of returning false
-	 * @throws MWException When $strict is true, failure results in an exception.
 	 * @return bool True if the option exists, false otherwise
 	 */
 	public function validateName( $name, $strict = false ) {
 		if ( !isset( $this->options[$name] ) ) {
 			if ( $strict ) {
-				throw new MWException( "Invalid option $name" );
+				throw new InvalidArgumentException( "Invalid option $name" );
 			} else {
 				return false;
 			}
@@ -184,6 +183,8 @@ class FormOptions implements ArrayAccess {
 	 *
 	 * @param string $name Option name
 	 * @return mixed
+	 * @return-taint tainted This actually depends on the type of the option, but there's no way to determine that
+	 * statically.
 	 */
 	public function getValue( $name ) {
 		$this->validateName( $name, true );
@@ -217,10 +218,9 @@ class FormOptions implements ArrayAccess {
 
 	/**
 	 * Get the value of given option and mark it as 'consumed'. Consumed options are not returned
-	 * by getUnconsumedValues().
+	 * by getUnconsumedValues(). Callers should verify that the given option exists.
 	 *
 	 * @see consumeValues()
-	 * @throws MWException If the option does not exist
 	 * @param string $name Option name
 	 * @return mixed Value, or the default value if it is null
 	 */
@@ -233,10 +233,9 @@ class FormOptions implements ArrayAccess {
 
 	/**
 	 * Get the values of given options and mark them as 'consumed'. Consumed options are not returned
-	 * by getUnconsumedValues().
+	 * by getUnconsumedValues(). Callers should verify that all the given options exist.
 	 *
 	 * @see consumeValue()
-	 * @throws MWException If any option does not exist
 	 * @param string[] $names List of option names
 	 * @return array Array of option values, or the default values if they are null
 	 */
@@ -268,23 +267,22 @@ class FormOptions implements ArrayAccess {
 	 *
 	 * @since 1.23
 	 *
-	 * @param string $name Option name
+	 * @param string $name Option name. Must be of numeric type.
 	 * @param int|float $min Minimum value
 	 * @param int|float $max Maximum value
-	 * @throws MWException If option is not of type INT
 	 */
 	public function validateBounds( $name, $min, $max ) {
 		$this->validateName( $name, true );
 		$type = $this->options[$name]['type'];
 
-		if ( $type !== self::INT && $type !== self::FLOAT ) {
-			throw new MWException( "Option $name is not of type INT or FLOAT" );
+		if ( $type !== self::INT && $type !== self::INTNULL && $type !== self::FLOAT ) {
+			throw new InvalidArgumentException( "Type of option $name is not numeric" );
 		}
 
 		$value = $this->getValueReal( $this->options[$name] );
-		$value = max( $min, min( $max, $value ) );
-
-		$this->setValue( $name, $value );
+		if ( $type !== self::INTNULL || $value !== null ) {
+			$this->setValue( $name, max( $min, min( $max, $value ) ) );
+		}
 	}
 
 	/**
@@ -347,7 +345,6 @@ class FormOptions implements ArrayAccess {
 	 * @param array|null $optionKeys Which options to fetch the values for (default:
 	 *     all of them). Note that passing an empty array will also result in
 	 *     values for all keys being fetched.
-	 * @throws MWException If the type of any option is invalid
 	 */
 	public function fetchValuesFromRequest( WebRequest $r, $optionKeys = null ) {
 		if ( !$optionKeys ) {
@@ -376,9 +373,14 @@ class FormOptions implements ArrayAccess {
 					break;
 				case self::ARR:
 					$value = $r->getArray( $name );
+
+					if ( $value !== null ) {
+						// Reject nested arrays (T344931)
+						$value = array_filter( $value, 'is_scalar' );
+					}
 					break;
 				default:
-					throw new MWException( 'Unsupported datatype' );
+					throw new UnexpectedValueException( "Unsupported datatype $type" );
 			}
 
 			if ( $value !== null ) {
@@ -433,4 +435,5 @@ class FormOptions implements ArrayAccess {
 	// endregion -- end of ArrayAccess functions
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( FormOptions::class, 'FormOptions' );

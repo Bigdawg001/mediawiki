@@ -19,38 +19,50 @@
  * @since 1.23
  */
 
+namespace MediaWiki\Api;
+
+use ChangesFeed;
+use MediaWiki\Context\DerivativeContext;
 use MediaWiki\Feed\ChannelFeed;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Request\DerivativeRequest;
+use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\SpecialPage\SpecialPageFactory;
 use MediaWiki\Title\Title;
+use MediaWiki\User\TempUser\TempUserConfig;
+use RuntimeException;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\ParamValidator\TypeDef\IntegerDef;
 
 /**
  * Recent changes feed.
  *
+ * @ingroup RecentChanges
  * @ingroup API
  */
 class ApiFeedRecentChanges extends ApiBase {
 
+	/** @var array */
 	private $params;
 
-	/** @var SpecialPageFactory */
-	private $specialPageFactory;
+	private SpecialPageFactory $specialPageFactory;
+	private TempUserConfig $tempUserConfig;
 
 	/**
 	 * @param ApiMain $mainModule
 	 * @param string $moduleName
 	 * @param SpecialPageFactory $specialPageFactory
+	 * @param TempUserConfig $tempUserConfig
 	 */
 	public function __construct(
 		ApiMain $mainModule,
 		string $moduleName,
-		SpecialPageFactory $specialPageFactory
+		SpecialPageFactory $specialPageFactory,
+		TempUserConfig $tempUserConfig
 	) {
 		parent::__construct( $mainModule, $moduleName );
 		$this->specialPageFactory = $specialPageFactory;
+		$this->tempUserConfig = $tempUserConfig;
 	}
 
 	/**
@@ -106,7 +118,7 @@ class ApiFeedRecentChanges extends ApiBase {
 		if ( $rc === null ) {
 			throw new RuntimeException( __METHOD__ . ' not able to instance special page ' . $specialPageName );
 		}
-		'@phan-var ChangesListSpecialPage $rc';
+		'@phan-var \MediaWiki\SpecialPage\ChangesListSpecialPage $rc';
 		$rc->setContext( $context );
 		$rows = $rc->getRows();
 
@@ -183,7 +195,12 @@ class ApiFeedRecentChanges extends ApiBase {
 
 			'hideminor' => false,
 			'hidebots' => false,
-			'hideanons' => false,
+			'hideanons' => [
+				ParamValidator::PARAM_DEFAULT => false,
+				ApiBase::PARAM_HELP_MSG => $this->tempUserConfig->isKnown() ?
+					'apihelp-feedrecentchanges-param-hideanons-temp' :
+					'apihelp-feedrecentchanges-param-hideanons',
+			],
 			'hideliu' => false,
 			'hidepatrolled' => false,
 			'hidemyself' => false,
@@ -209,4 +226,11 @@ class ApiFeedRecentChanges extends ApiBase {
 				=> 'apihelp-feedrecentchanges-example-30days',
 		];
 	}
+
+	public function getHelpUrls() {
+		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Feedrecentchanges';
+	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiFeedRecentChanges::class, 'ApiFeedRecentChanges' );

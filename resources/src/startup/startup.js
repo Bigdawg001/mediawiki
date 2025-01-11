@@ -9,59 +9,49 @@
 /**
  * See <https://www.mediawiki.org/wiki/Compatibility#Browsers>
  *
- * Capabilities required for modern run-time:
- * - ECMAScript 2015 (a.k.a. ES6)
- * - DOM Level 4 (including Selectors API)
- * - HTML5 (including Web Storage API)
+ * Browsers that pass these checks get served our modern run-time. This includes all Grade A
+ * browsers, and some Grade C and Grade X browsers.
  *
- * Browsers we support in our modern run-time (Grade A):
- * - Chrome 21+
+ * The following browsers are known to pass these checks:
+ * - Chrome 63+
  * - Edge 79+
- * - Opera 38+
- * - Firefox 54+
+ * - Opera 50+
+ * - Firefox 58+
  * - Safari 11.1+
  * - Mobile Safari 11.2+ (iOS 11+)
  * - Android 5.0+
- *
- * Browsers we support in our no-JavaScript, basic run-time (Grade C):
- * - Chrome 1+
- * - Opera 15+
- * - IE 11+
- * - Firefox 3+
- * - Safari 3+
- * - Mobile Safari 5.0+ (iOS 4+)
- * - Android 2.0+
- * - Opera Mini (Extreme mode)
- * - UC Mini (Speed mode)
- *
- * Other browsers that pass the check are considered unknown (Grade X).
  *
  * @private
  * @return {boolean} User agent is compatible with MediaWiki JS
  */
 function isCompatible() {
 	return !!(
-		// First, check DOM4 and HTML5 features for faster-fail
+		// Ensure DOM Level 4 features (including Selectors API).
+		//
 		// https://caniuse.com/#feat=queryselector
 		'querySelector' in document &&
 
+		// Ensure HTML 5 features (including Web Storage API)
+		//
 		// https://caniuse.com/#feat=namevalue-storage
-		// https://developer.blackberry.com/html5/apis/v1_0/localstorage.html
 		// https://blog.whatwg.org/this-week-in-html-5-episode-30
 		'localStorage' in window &&
 
-		// Now, check whether the browser supports ES6.
+		// Ensure ES2015 grammar and runtime API (a.k.a. ES6)
 		//
-		// ES6 Promise, this rejects most unsupporting browsers.
-		// https://caniuse.com/promises
-		//
-		// ES6 Promise.finally, this rejects Safari 10 and iOS 10.
+		// In practice, Promise.finally is a good proxy for overall ES6 support and
+		// rejects most unsupporting browsers in one sweep. The feature itself
+		// was specified in ES2018, however.
 		// https://caniuse.com/promise-finally
+		// Chrome 63+, Edge 18+, Opera 50+, Safari 11.1+, Firefox 58+, iOS 11+
+		//
 		// eslint-disable-next-line es-x/no-promise, es-x/no-promise-prototype-finally, dot-notation
 		typeof Promise === 'function' && Promise.prototype[ 'finally' ] &&
-		// ES6 Arrow Functions (with default params), this ensures genuine syntax
-		// support in the engine, not just API coverage.
+		// ES6 Arrow Functions (with default params), this ensures
+		// genuine syntax support for ES6 grammar, not just API coverage.
+		//
 		// https://caniuse.com/arrow-functions
+		// Chrome 45+, Safari 10+, Firefox 22+, Opera 32+
 		//
 		// Based on Benjamin De Cock's snippet here:
 		// https://gist.github.com/bendc/d7f3dbc83d0f65ca0433caf90378cd95
@@ -74,8 +64,11 @@ function isCompatible() {
 				return false;
 			}
 		}() ) &&
-		// ES6 RegExp.prototype.flags, this rejects Android 4.4.4 and MSEdge <= 18,
-		// which was the last Edge Legacy version (MSEdgeHTML-based).
+		// ES6 RegExp.prototype.flags
+		//
+		// https://caniuse.com/mdn-javascript_builtins_regexp_flags
+		// Edge 79+ (Chromium-based, rejects MSEdgeHTML-based Edge <= 18)
+		//
 		// eslint-disable-next-line es-x/no-regexp-prototype-flags
 		/./g.flags === 'g'
 	);
@@ -121,7 +114,7 @@ if ( !isCompatible() ) {
 
 		$CODE.registrations();
 
-		// First set page-specific config needed by mw.loader (wgCSPNonce, wgUserName)
+		// First set page-specific config needed by mw.loader (wgUserName)
 		mw.config.set( window.RLCONF || {} );
 		mw.loader.state( window.RLSTATE || {} );
 		mw.loader.load( window.RLPAGEMODULES || [] );

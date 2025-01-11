@@ -1,25 +1,29 @@
 <?php
 
+use MediaWiki\Config\HashConfig;
+use MediaWiki\Config\MultiConfig;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\HookContainer\HookContainer;
+use MediaWiki\Language\Language;
 use MediaWiki\Languages\LanguageConverterFactory;
 use MediaWiki\Languages\LanguageFallback;
 use MediaWiki\Languages\LanguageNameUtils;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Registration\ExtensionRegistry;
 use MediaWiki\Tests\Unit\DummyServicesTrait;
+use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\User\UserIdentityValue;
 use Wikimedia\TestingAccessWrapper;
 
 /**
  * @group Language
+ * @covers \MediaWiki\Language\Language
+ * @covers \MediaWiki\Languages\LanguageNameUtils
  */
 class LanguageIntegrationTest extends LanguageClassesTestCase {
 	use DummyServicesTrait;
 	use LanguageNameUtilsTestTrait;
-
-	/** @var array Copy of the handlers for LanguageGetTranslatedLanguageNames */
-	private $origHandlers;
 
 	private function newLanguage( $class = Language::class, $code = 'en' ) {
 		// Needed to support the setMwGlobals calls for the various tests, but this should
@@ -41,19 +45,9 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 	protected function setUp(): void {
 		parent::setUp();
 
-		// Don't allow installed hooks to run, except if a test restores them via origHooks (needed
-		// for testIsKnownLanguageTag_cldr)
-		$this->origHandlers = $this->getServiceContainer()->getHookContainer()
-			->getLegacyHandlers( 'LanguageGetTranslatedLanguageNames' );
-
-		$this->clearHook( 'LanguageGetTranslatedLanguageNames' );
 		$this->overrideConfigValue( MainConfigNames::UsePigLatinVariant, true );
 	}
 
-	/**
-	 * @covers Language::convertDoubleWidth
-	 * @covers Language::normalizeForSearch
-	 */
 	public function testLanguageConvertDoubleWidthToSingleWidth() {
 		$this->assertSame(
 			"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
@@ -66,7 +60,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 
 	/**
 	 * @dataProvider provideFormattableTimes
-	 * @covers Language::formatTimePeriod
 	 */
 	public function testFormatTimePeriod( $seconds, $format, $expected, $desc ) {
 		$this->assertEquals( $expected, $this->getLang()->formatTimePeriod( $seconds, $format ), $desc );
@@ -269,10 +262,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 		];
 	}
 
-	/**
-	 * @covers Language::truncateForDatabase
-	 * @covers Language::truncateInternal
-	 */
 	public function testTruncateForDatabase() {
 		$this->assertEquals(
 			"XXX",
@@ -337,8 +326,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 
 	/**
 	 * @dataProvider provideTruncateData
-	 * @covers Language::truncateForVisual
-	 * @covers Language::truncateInternal
 	 */
 	public function testTruncateForVisual(
 		$expected, $string, $length, $ellipsis = '...', $adjustLength = true
@@ -370,7 +357,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 
 	/**
 	 * @dataProvider provideHTMLTruncateData
-	 * @covers Language::truncateHTML
 	 */
 	public function testTruncateHtml( $len, $ellipsis, $input, $expected ) {
 		// Actual HTML...
@@ -445,34 +431,30 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 
 	/**
 	 * Test too short timestamp
-	 * @covers Language::sprintfDate
 	 */
 	public function testSprintfDateTooShortTimestamp() {
-		$this->expectException( MWException::class );
+		$this->expectException( InvalidArgumentException::class );
 		$this->getLang()->sprintfDate( 'xiY', '1234567890123' );
 	}
 
 	/**
 	 * Test too long timestamp
-	 * @covers Language::sprintfDate
 	 */
 	public function testSprintfDateTooLongTimestamp() {
-		$this->expectException( MWException::class );
+		$this->expectException( InvalidArgumentException::class );
 		$this->getLang()->sprintfDate( 'xiY', '123456789012345' );
 	}
 
 	/**
 	 * Test too short timestamp
-	 * @covers Language::sprintfDate
 	 */
 	public function testSprintfDateNotAllDigitTimestamp() {
-		$this->expectException( MWException::class );
+		$this->expectException( InvalidArgumentException::class );
 		$this->getLang()->sprintfDate( 'xiY', '-1234567890123' );
 	}
 
 	/**
 	 * @dataProvider provideSprintfDateSamples
-	 * @covers Language::sprintfDate
 	 */
 	public function testSprintfDate( $format, $ts, $expected, $msg ) {
 		$ttl = null;
@@ -504,7 +486,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 	/**
 	 * sprintfDate should always use UTC when no zone is given.
 	 * @dataProvider provideSprintfDateSamples
-	 * @covers Language::sprintfDate
 	 */
 	public function testSprintfDateNoZone( $format, $ts, $expected, $ignore, $msg ) {
 		$oldTZ = date_default_timezone_get();
@@ -525,7 +506,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 	/**
 	 * sprintfDate should use passed timezone
 	 * @dataProvider provideSprintfDateSamples
-	 * @covers Language::sprintfDate
 	 */
 	public function testSprintfDateTZ( $format, $ts, $ignore, $expected, $msg ) {
 		$tz = new DateTimeZone( 'Asia/Seoul' );
@@ -542,7 +522,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 
 	/**
 	 * sprintfDate should only calculate a TTL if the caller is going to use it.
-	 * @covers Language::sprintfDate
 	 */
 	public function testSprintfDateNoTtlIfNotNeeded() {
 		$noTtl = 'unused'; // Value used to represent that the caller didn't pass a variable in.
@@ -914,31 +893,115 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 			],
 			[
 				'xtY',
-				'20120102090705',
-				'平成24',
-				'平成24',
-				'nengo'
+				'18660101000000',
+				'西暦1866',
+				'西暦1866',
+				'nengo - before meiji'
+			],
+			[
+				'xtY',
+				'18670101000000',
+				'西暦1867',
+				'西暦1867',
+				'nengo - before meiji'
+			],
+			[
+				'xtY',
+				'18721231235959',
+				'西暦1872',
+				'西暦1872',
+				'nengo - meiji, but Lunisolar calendar'
+			],
+			[
+				'xtY',
+				'18730101000000',
+				'明治6',
+				'明治6',
+				'nengo - meiji 6th'
+			],
+			[
+				'xtY',
+				'19120729235959',
+				'明治45',
+				'明治45',
+				'nengo - meiji 45th last day'
+			],
+			[
+				'xtY',
+				'19120730000000',
+				'大正元',
+				'大正元',
+				'nengo - taisho first day'
+			],
+			[
+				'xtY',
+				'19130101000000',
+				'大正2',
+				'大正2',
+				'nengo - taisho 2nd'
+			],
+			[
+				'xtY',
+				'19261224235959',
+				'大正15',
+				'大正15',
+				'nengo - taisho last day'
+			],
+			[
+				'xtY',
+				'19261225000000',
+				'昭和元',
+				'昭和元',
+				'nengo - first day of Showa'
+			],
+			[
+				'xtY',
+				'19270101000000',
+				'昭和2',
+				'昭和2',
+				'nengo - second year of Showa'
+			],
+			[
+				'xtY',
+				'19890107235959',
+				'昭和64',
+				'昭和64',
+				'nengo - last day of Showa'
+			],
+			[
+				'xtY',
+				'19890108000000',
+				'平成元',
+				'平成元',
+				'nengo - first day of Heisei'
+			],
+			[
+				'xtY',
+				'19900101000000',
+				'平成2',
+				'平成2',
+				'nengo - second year of Heisei'
 			],
 			[
 				'xtY',
 				'20190430235959',
 				'平成31',
 				'平成31',
-				'nengo - last day of heisei'
+				'nengo - last day of Heisei'
 			],
 			[
 				'xtY',
 				'20190501000000',
 				'令和元',
 				'令和元',
-				'nengo - first day of reiwa'
+				'nengo - first day of Reiwa'
 			],
 			[
 				'xtY',
 				'20200501000000',
 				'令和2',
 				'令和2',
-				'nengo - second year of reiwa'
+				'nengo - second year of Reiwa'
 			],
 			[
 				'xrxkYY',
@@ -974,7 +1037,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 
 	/**
 	 * @dataProvider provideFormatSizes
-	 * @covers Language::formatSize
 	 */
 	public function testFormatSize( $size, $expected, $msg ) {
 		$this->assertEquals(
@@ -1052,7 +1114,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 
 	/**
 	 * @dataProvider provideFormatBitrate
-	 * @covers Language::formatBitrate
 	 */
 	public function testFormatBitrate( $bps, $expected, $msg ) {
 		$this->assertEquals(
@@ -1134,7 +1195,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 
 	/**
 	 * @dataProvider provideFormatDuration
-	 * @covers Language::formatDuration
 	 */
 	public function testFormatDuration( $duration, $expected, $intervals = [] ) {
 		$this->assertEquals(
@@ -1183,9 +1243,25 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 				'2 days',
 			],
 			[
+				365.2425 * 24 * 3600 / 12,
+				'1 month',
+				[ 'months', 'days' ]
+			],
+			[
+				365.2425 * 24 * 3600 / 12 * 2,
+				'2 months',
+				[ 'months', 'days' ]
+			],
+			[
+				( 365.2425 * 24 * 3600 / 12 * 2 ) + 24 * 3600,
+				'2 months and 1 day',
+				[ 'months', 'days' ]
+			],
+			[
 				// ( 365 + ( 24 * 3 + 25 ) / 400 ) * 86400 = 31556952
 				( 365 + ( 24 * 3 + 25 ) / 400.0 ) * 86400,
 				'1 year',
+				[ 'months', 'years' ]
 			],
 			[
 				2 * 31556952,
@@ -1266,12 +1342,358 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 				'0 days',
 				[ 'days', 'years' ],
 			],
+			[
+				( new DateTime( '2025-05-03 20:00:00' ) )->getTimestamp() - ( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				'11 months',
+				[ 'months' ],
+			],
+			[
+				( new DateTime( '2025-05-03 20:00:00' ) )->getTimestamp() - ( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				'11 months, 30 days, 4 hours, 39 minutes and 54 seconds',
+				[ 'years', 'months', 'days', 'hours', 'minutes', 'seconds' ],
+			],
+		];
+	}
+
+	/**
+	 * @dataProvider provideFormatDurationBetweenTimestamps
+	 */
+	public function testFormatDurationBetweenTimestamps(
+		int $timestamp1,
+		int $timestamp2,
+		?int $precision,
+		string $expected
+	): void {
+		$this->assertSame(
+			$expected,
+			$this->getLang()->formatDurationBetweenTimestamps( $timestamp1, $timestamp2, $precision )
+		);
+		$this->assertSame(
+			$expected,
+			$this->getLang()->formatDurationBetweenTimestamps( $timestamp2, $timestamp1, $precision )
+		);
+	}
+
+	public function provideFormatDurationBetweenTimestamps(): array {
+		return [
+			// most test cases ported from provideFormatDuration()
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				null,
+				'0 seconds',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-05-03 20:00:01' ) )->getTimestamp(),
+				null,
+				'1 second',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-05-03 20:00:02' ) )->getTimestamp(),
+				null,
+				'2 seconds',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-05-03 20:01:00' ) )->getTimestamp(),
+				null,
+				'1 minute',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-05-03 20:02:00' ) )->getTimestamp(),
+				null,
+				'2 minutes',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-05-03 21:00:00' ) )->getTimestamp(),
+				null,
+				'1 hour',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-05-03 22:00:00' ) )->getTimestamp(),
+				null,
+				'2 hours',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-05-04 20:00:00' ) )->getTimestamp(),
+				null,
+				'1 day',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-05-05 20:00:00' ) )->getTimestamp(),
+				null,
+				'2 days',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-06-03 20:00:00' ) )->getTimestamp(),
+				2,
+				'1 month',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-07-03 20:00:00' ) )->getTimestamp(),
+				2,
+				'2 months',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-07-04 20:00:00' ) )->getTimestamp(),
+				2,
+				'2 months and 1 day',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2025-05-03 20:00:00' ) )->getTimestamp(),
+				2,
+				'1 year',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2026-05-03 20:00:00' ) )->getTimestamp(),
+				null,
+				'2 years',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2034-05-03 20:00:00' ) )->getTimestamp(),
+				null,
+				'1 decade',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2044-05-03 20:00:00' ) )->getTimestamp(),
+				null,
+				'2 decades',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2124-05-03 20:00:00' ) )->getTimestamp(),
+				null,
+				'1 century',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2224-05-03 20:00:00' ) )->getTimestamp(),
+				null,
+				'2 centuries',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '3024-05-03 20:00:00' ) )->getTimestamp(),
+				null,
+				'1 millennium',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '4024-05-03 20:00:00' ) )->getTimestamp(),
+				null,
+				'2 millennia',
+			],
+			[
+				0,
+				9001,
+				null,
+				'2 hours, 30 minutes and 1 second',
+			],
+			[
+				0,
+				3601,
+				null,
+				'1 hour and 1 second',
+			],
+			[
+				( new DateTime( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2025-05-05 22:30:00' ) )->getTimestamp(),
+				null,
+				'1 year, 2 days, 2 hours and 30 minutes',
+			],
+			[
+				( new DateTimeImmutable( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTimeImmutable() )->setDate( 44024, 05, 03 )->setTime( 20, 0, 42 )->getTimestamp(),
+				null,
+				'42 millennia and 42 seconds',
+			],
+			[
+				0,
+				60,
+				null,
+				'1 minute',
+			],
+			[
+				0,
+				61,
+				null,
+				'1 minute and 1 second',
+			],
+			[
+				( new DateTimeImmutable( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTimeImmutable() )->setDate( 2025, 05, 05 )->setTime( 22, 30, 0 )->getTimestamp(),
+				null,
+				'1 year, 2 days, 2 hours and 30 minutes',
+			],
+			[
+				( new DateTimeImmutable( '2024-05-03 20:00:00' ) )->getTimestamp(),
+				( new DateTimeImmutable( '2024-10-09 20:15:37' ) )->getTimestamp(),
+				1,
+				'5 months',
+			],
+			[
+				( new DateTime( '2022-01-01 10:00:00' ) )->getTimestamp(),
+				( new DateTime( '2022-01-01 12:30:00' ) )->getTimestamp(),
+				2,
+				'2 hours and 30 minutes',
+			],
+			[
+				( new DateTime( '2022-01-01 10:00:00' ) )->getTimestamp(),
+				( new DateTime( '2022-01-02 12:30:00' ) )->getTimestamp(),
+				3,
+				'1 day, 2 hours and 30 minutes',
+			],
+			[
+				( new DateTime( '2022-01-01 10:00:00' ) )->getTimestamp(),
+				( new DateTime( '2022-01-01 10:30:27' ) )->getTimestamp(),
+				1,
+				'30 minutes',
+			],
+			[
+				( new DateTime( '2024-05-03 10:00:00' ) )->getTimestamp(),
+				( new DateTime( '2025-05-03 10:00:00' ) )->getTimestamp(),
+				6,
+				'1 year',
+			],
+			[
+				( new DateTime( '2024-01-28 10:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-03-01 10:00:00' ) )->getTimestamp(),
+				4,
+				'1 month and 2 days',
+			],
+			[
+				( new DateTime( '2023-01-28 10:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-03-01 10:00:00' ) )->getTimestamp(),
+				6,
+				'1 month and 1 day',
+			],
+			[
+				( new DateTime( '2023-01-29 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-02-28 20:00:00' ) )->getTimestamp(),
+				6,
+				'30 days',
+			],
+			[
+				( new DateTime( '2023-01-29 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-03-01 20:00:00' ) )->getTimestamp(),
+				6,
+				'1 month',
+			],
+			[
+				( new DateTime( '2023-01-30 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-03-01 20:00:00' ) )->getTimestamp(),
+				6,
+				'30 days',
+			],
+			[
+				( new DateTime( '2023-01-31 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-03-01 20:00:00' ) )->getTimestamp(),
+				6,
+				'29 days',
+			],
+			[
+				( new DateTime( '2023-01-31 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-01-31 20:00:01' ) )->getTimestamp(),
+				6,
+				'1 second',
+			],
+			[
+				( new DateTime( '2023-01-31 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-01-31 20:00:02' ) )->getTimestamp(),
+				6,
+				'2 seconds',
+			],
+			[
+				( new DateTime( '2023-01-31 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-01-31 20:01:00' ) )->getTimestamp(),
+				6,
+				'1 minute',
+			],
+			[
+				( new DateTime( '2023-01-31 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-01-31 20:02:00' ) )->getTimestamp(),
+				6,
+				'2 minutes',
+			],
+			[
+				( new DateTime( '2023-01-31 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-01-31 21:00:00' ) )->getTimestamp(),
+				6,
+				'1 hour',
+			],
+			[
+				( new DateTime( '2023-01-31 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-01-31 22:00:00' ) )->getTimestamp(),
+				6,
+				'2 hours',
+			],
+			[
+				( new DateTime( '2023-01-31 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-02-01 20:00:00' ) )->getTimestamp(),
+				6,
+				'1 day',
+			],
+			[
+				( new DateTime( '2023-01-31 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-02-02 20:00:00' ) )->getTimestamp(),
+				6,
+				'2 days',
+			],
+			[
+				( new DateTime( '2023-03-31 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-04-31 20:00:00' ) )->getTimestamp(),
+				6,
+				'1 month',
+			],
+			[
+				( new DateTime( '2023-01-31 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2023-03-31 20:00:00' ) )->getTimestamp(),
+				6,
+				'2 months',
+			],
+			[
+				( new DateTime( '2023-01-31 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '2024-01-31 20:00:00' ) )->getTimestamp(),
+				6,
+				'1 year',
+			],
+			[
+				( new DateTime( '2023-01-27 15:00:00' ) )->getTimestamp(),
+				( new DateTime( '2025-04-31 20:06:00' ) )->getTimestamp(),
+				5,
+				'2 years, 3 months, 4 days, 5 hours and 6 minutes',
+			],
+			[
+				( new DateTime( '2023-01-31 15:00:00' ) )->getTimestamp(),
+				( new DateTime( '3025-04-31 20:06:07' ) )->getTimestamp(),
+				7,
+				'1 millennium, 2 years, 3 months, 5 hours, 6 minutes and 7 seconds',
+			],
+			[
+				( new DateTime( '2023-01-28 20:00:00' ) )->getTimestamp(),
+				( new DateTime( '4030-05-31 22:01:14' ) )->getTimestamp(),
+				9,
+				'2 millennia, 7 years, 4 months, 3 days, 2 hours, 1 minute and 14 seconds',
+			],
 		];
 	}
 
 	/**
 	 * @dataProvider provideCheckTitleEncodingData
-	 * @covers Language::checkTitleEncoding
 	 */
 	public function testCheckTitleEncoding( $s ) {
 		$this->assertEquals(
@@ -1337,7 +1759,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 
 	/**
 	 * @dataProvider provideRomanNumeralsData
-	 * @covers Language::romanNumeral
 	 */
 	public function testRomanNumerals( $num, $numerals ) {
 		$this->assertEquals(
@@ -1396,7 +1817,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 
 	/**
 	 * @dataProvider provideHebrewNumeralsData
-	 * @covers Language::hebrewNumeral
 	 */
 	public function testHebrewNumeral( $num, $numerals ) {
 		$this->assertEquals(
@@ -1467,7 +1887,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 
 	/**
 	 * @dataProvider providePluralData
-	 * @covers Language::convertPlural
 	 */
 	public function testConvertPlural( $expected, $number, $forms ) {
 		$chosen = $this->getLang()->convertPlural( $number, $forms );
@@ -1510,9 +1929,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 		];
 	}
 
-	/**
-	 * @covers Language::embedBidi()
-	 */
 	public function testEmbedBidi() {
 		$lre = "\u{202A}"; // U+202A LEFT-TO-RIGHT EMBEDDING
 		$rle = "\u{202B}"; // U+202B RIGHT-TO-LEFT EMBEDDING
@@ -1536,14 +1952,13 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 	}
 
 	/**
-	 * @covers Language::translateBlockExpiry()
 	 * @dataProvider provideTranslateBlockExpiry
 	 */
 	public function testTranslateBlockExpiry( $expectedData, $str, $now, $desc ) {
 		$lang = $this->getLang();
 		if ( is_array( $expectedData ) ) {
-			[ $func, $arg ] = $expectedData;
-			$expected = $lang->$func( $arg );
+			$func = array_shift( $expectedData );
+			$expected = $lang->$func( ...$expectedData );
 		} else {
 			$expected = $expectedData;
 		}
@@ -1558,15 +1973,15 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 			[ 'indefinite', 'infinite', 0, 'infinite from ipboptions' ],
 			[ 'indefinite', 'infinity', 0, 'alternative infinite from ipboptions' ],
 			[ 'indefinite', 'indefinite', 0, 'another alternative infinite from ipboptions' ],
-			[ [ 'formatDuration', 1023 * 60 * 60 ], '1023 hours', 0, 'relative' ],
-			[ [ 'formatDuration', -1023 ], '-1023 seconds', 0, 'negative relative' ],
+			[ [ 'formatDurationBetweenTimestamps', 0, 1023 * 60 * 60 ], '1023 hours', 0, 'relative' ],
+			[ [ 'formatDurationBetweenTimestamps', 0, -1023 ], '-1023 seconds', 0, 'negative relative' ],
 			[
-				[ 'formatDuration', 1023 * 60 * 60 ],
+				[ 'formatDurationBetweenTimestamps', 665553906, 665553906 + ( 1023 * 60 * 60 ) ],
 				'1023 hours',
-				wfTimestamp( TS_UNIX, '19910203040506' ),
+				wfTimestamp( TS_UNIX, '1991-02-03 04:05:06' ),
 				'relative with initial timestamp'
 			],
-			[ [ 'formatDuration', 0 ], 'now', 0, 'now' ],
+			[ [ 'formatDurationBetweenTimestamps', 0, 0 ], 'now', 0, 'now' ],
 			[
 				[ 'timeanddate', '20120102070000' ],
 				'2012-1-1 7:00 +1 day',
@@ -1583,21 +1998,24 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 				'partial'
 			],
 			[ 'dummy', 'dummy', 0, 'return garbage as is' ],
+			'Relative timestamp that causes negative number from strtotime' => [
+				'-0.000000000000000001 seconds',
+				'-0.000000000000000001 seconds',
+				wfTimestamp( TS_UNIX, '20200524200807' ),
+				'Relative timestamp that fails to be parsed by strtotime should be returned without modification'
+			],
 		];
 	}
 
 	/**
 	 * @dataProvider provideFormatNum
-	 * @covers Language::formatNum
-	 * @covers Language::formatNumNoSeparators
 	 */
 	public function testFormatNum(
 		$translateNumerals, $langCode, $number, $noSeparators, $expected
 	) {
 		$this->hideDeprecated( 'Language::formatNum with a non-numeric string' );
-		$this->hideDeprecated( 'Language::factory' );
 		$this->overrideConfigValue( MainConfigNames::TranslateNumerals, $translateNumerals );
-		$lang = Language::factory( $langCode );
+		$lang = $this->getServiceContainer()->getLanguageFactory()->getLanguage( $langCode );
 		if ( $noSeparators ) {
 			$formattedNum = $lang->formatNumNoSeparators( $number );
 		} else {
@@ -1666,16 +2084,22 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 			[ false, 'ar', "1234.5", false, "1٬234٫5" ],
 			[ true, 'ar', "1", false, "١" ],
 			[ true, 'ar', "1234.5", false, "١٬٢٣٤٫٥" ],
+
+			// Test minimumGroupingDigits > 1
+			[ false, 'pl', 1, false, '1' ],
+			[ false, 'pl', 100, false, '100' ],
+			[ false, 'pl', 1000, false, '1000' ],
+			[ false, 'pl', 10000, false, "10\u{00A0}000" ],
+			[ false, 'pl', 1000000, false, "1\u{00A0}000\u{00A0}000" ],
+			[ false, 'pl', '1000.1', false, "1000,1" ],
 		];
 	}
 
 	/**
-	 * @covers Language::parseFormattedNumber
 	 * @dataProvider parseFormattedNumberProvider
 	 */
 	public function testParseFormattedNumber( $langCode, $number ) {
-		$this->hideDeprecated( 'Language::factory' );
-		$lang = Language::factory( $langCode );
+		$lang = $this->getServiceContainer()->getLanguageFactory()->getLanguage( $langCode );
 
 		$localisedNum = $lang->formatNum( $number );
 		$normalisedNum = $lang->parseFormattedNumber( $localisedNum );
@@ -1683,7 +2107,7 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 		$this->assertEquals( $number, $normalisedNum );
 	}
 
-	public function parseFormattedNumberProvider() {
+	public static function parseFormattedNumberProvider() {
 		return [
 			[ 'de', 377.01 ],
 			[ 'fa', 334 ],
@@ -1700,9 +2124,6 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 		];
 	}
 
-	/**
-	 * @covers Language::listToText
-	 */
 	public function testListToText() {
 		$lang = $this->getLang();
 		$and = $lang->getMessageFromDB( 'and' );
@@ -1717,52 +2138,18 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 	}
 
 	/**
-	 * @dataProvider provideGetParentLanguage
-	 * @covers Language::getParentLanguage
-	 */
-	public function testGetParentLanguage( $code, $expected, $comment ) {
-		$this->hideDeprecated( 'Language::factory' );
-		$this->hideDeprecated( 'Language::getParentLanguage' );
-		$lang = Language::factory( $code );
-		if ( $expected === null ) {
-			$this->assertNull( $lang->getParentLanguage(), $comment );
-		} else {
-			$this->assertEquals( $expected, $lang->getParentLanguage()->getCode(), $comment );
-		}
-	}
-
-	public static function provideGetParentLanguage() {
-		return [
-			[ 'zh-cn', 'zh', 'zh is the parent language of zh-cn' ],
-			[ 'zh', 'zh', 'zh is defined as the parent language of zh, '
-				. 'because zh converter can convert zh-cn to zh' ],
-			[ 'zh-invalid', null, 'do not be fooled by arbitrarily composed language codes' ],
-			[ 'de-formal', null, 'de does not have converter' ],
-			[ 'de', null, 'de does not have converter' ],
-			[ 'ike-cans', 'iu', 'do not simply strip out the subcode' ],
-		];
-	}
-
-	/**
 	 * Example of the real localisation files being loaded.
 	 *
 	 * This might be a bit cumbersome to maintain long-term,
 	 * but still valueable to have as integration test.
-	 *
-	 * @covers Language
-	 * @covers LocalisationCache
 	 */
 	public function testGetNamespaceAliasesReal() {
-		$this->hideDeprecated( 'Language::factory' );
-		$language = Language::factory( 'zh' );
+		$language = $this->getServiceContainer()->getLanguageFactory()->getLanguage( 'zh' );
 		$aliases = $language->getNamespaceAliases();
 		$this->assertSame( NS_FILE, $aliases['文件'] );
 		$this->assertSame( NS_FILE, $aliases['檔案'] );
 	}
 
-	/**
-	 * @covers Language::getNamespaceAliases
-	 */
 	public function testGetNamespaceAliasesFullLogic() {
 		$hooks = $this->createHookContainer( [
 			'Language::getMessagesFileName' => static function ( $code, &$file ) {
@@ -1776,7 +2163,7 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 		] );
 		$this->setService( 'LanguageNameUtils', $langNameUtils );
 
-		$language = MediaWikiServices::getInstance()->getLanguageFactory()->getLanguage( 'x-bar' );
+		$language = $this->getServiceContainer()->getLanguageFactory()->getLanguage( 'x-bar' );
 
 		$this->assertEquals(
 			[
@@ -1793,44 +2180,25 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 		);
 	}
 
-	/**
-	 * @covers Language::hasVariant
-	 */
-	public function testHasVariant() {
-		$this->hideDeprecated( 'Language::hasVariant' );
-		$this->hideDeprecated( 'Language::factory' );
-		// See LanguageSrTest::testHasVariant() for additional tests
-		$en = Language::factory( 'en' );
-		$this->assertTrue( $en->hasVariant( 'en' ), 'base is always a variant' );
-		$this->assertFalse( $en->hasVariant( 'en-bogus' ), 'bogus en variant' );
-
-		$bogus = Language::factory( 'bogus' );
-		$this->assertTrue( $bogus->hasVariant( 'bogus' ), 'base is always a variant' );
-	}
-
-	/**
-	 * @covers Language::equals
-	 */
 	public function testEquals() {
-		$this->hideDeprecated( 'Language::factory' );
-		$en1 = Language::factory( 'en' );
-		$en2 = Language::factory( 'en' );
+		$languageFactory = $this->getServiceContainer()->getLanguageFactory();
+		$en1 = $languageFactory->getLanguage( 'en' );
+		$en2 = $languageFactory->getLanguage( 'en' );
 		$en3 = $this->newLanguage();
 		$this->assertTrue( $en1->equals( $en2 ), 'en1 equals en2' );
 		$this->assertTrue( $en2->equals( $en3 ), 'en2 equals en3' );
 		$this->assertTrue( $en3->equals( $en1 ), 'en3 equals en1' );
 
-		$fr = Language::factory( 'fr' );
+		$fr = $languageFactory->getLanguage( 'fr' );
 		$this->assertFalse( $en1->equals( $fr ), 'en not equals fr' );
 
-		$ar1 = Language::factory( 'ar' );
+		$ar1 = $languageFactory->getLanguage( 'ar' );
 		$ar2 = $this->newLanguage( LanguageAr::class, 'ar' );
 		$this->assertTrue( $ar1->equals( $ar2 ), 'ar equals ar' );
 	}
 
 	/**
 	 * @dataProvider provideUcfirst
-	 * @covers Language::ucfirst
 	 */
 	public function testUcfirst( $orig, $expected, $desc, $overrides = false ) {
 		$lang = $this->newLanguage();
@@ -1850,7 +2218,7 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 			// overrides do not affect ASCII characters
 			[ 'foo', 'Foo', 'ASCII is not overridden', [ 'f' => 'b' ] ],
 			// but they do affect non-ascii ones
-			[ 'èl', 'Ll' , 'Non-ASCII is overridden', [ 'è' => 'L' ] ],
+			[ 'èl', 'Ll', 'Non-ASCII is overridden', [ 'è' => 'L' ] ],
 			[ 'ვიკიპედია', 'ვიკიპედია', 'Georgian case is preserved', false ],
 		];
 	}
@@ -1858,27 +2226,27 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 	// The following methods are for LanguageNameUtilsTestTrait
 
 	private function isSupportedLanguage( $code ) {
-		$this->hideDeprecated( 'Language::isSupportedLanguage' );
-		return Language::isSupportedLanguage( $code );
+		return $this->getServiceContainer()->getLanguageNameUtils()->isSupportedLanguage( $code );
 	}
 
 	private function isValidCode( $code ) {
-		$this->hideDeprecated( 'Language::isValidCode' );
-		return Language::isValidCode( $code );
+		return $this->getServiceContainer()->getLanguageNameUtils()->isValidCode( $code );
 	}
 
 	private function isValidBuiltInCode( $code ) {
-		$this->hideDeprecated( 'Language::isValidBuiltInCode' );
-		return Language::isValidBuiltInCode( $code );
+		return $this->getServiceContainer()->getLanguageNameUtils()->isValidBuiltInCode( $code );
 	}
 
 	private function isKnownLanguageTag( $code ) {
-		$this->hideDeprecated( 'Language::isKnownLanguageTag' );
-		return Language::isKnownLanguageTag( $code );
+		return $this->getServiceContainer()->getLanguageNameUtils()->isKnownLanguageTag( $code );
 	}
 
 	protected function setLanguageTemporaryHook( string $hookName, $handler ): void {
 		$this->setTemporaryHook( $hookName, $handler );
+	}
+
+	protected function clearLanguageHook( string $hookName ): void {
+		$this->clearHook( $hookName );
 	}
 
 	/**
@@ -1893,66 +2261,49 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 		if ( $options ) {
 			$this->overrideConfigValues( $options );
 		}
-		$this->hideDeprecated( 'Language::fetchLanguageName' );
-		$this->hideDeprecated( 'Language::fetchLanguageNames' );
+
+		$langNameUtils = $this->getServiceContainer()->getLanguageNameUtils();
 		$this->assertSame( $expected,
-			Language::fetchLanguageNames( ...$otherArgs )[strtolower( $code )] ?? '' );
-		$this->assertSame( $expected, Language::fetchLanguageName( $code, ...$otherArgs ) );
+			$langNameUtils->getLanguageNames( ...$otherArgs )[strtolower( $code )] ?? '' );
+		$this->assertSame( $expected, $langNameUtils->getLanguageName( $code, ...$otherArgs ) );
 	}
 
 	private function getLanguageNames( ...$args ) {
-		$this->hideDeprecated( 'Language::fetchLanguageNames' );
-		return Language::fetchLanguageNames( ...$args );
+		return $this->getServiceContainer()->getLanguageNameUtils()->getLanguageNames( ...$args );
 	}
 
 	private function getLanguageName( ...$args ) {
-		$this->hideDeprecated( 'Language::fetchLanguageName' );
-		return Language::fetchLanguageName( ...$args );
+		return $this->getServiceContainer()->getLanguageNameUtils()->getLanguageName( ...$args );
 	}
 
 	private function getFileName( ...$args ) {
-		$this->hideDeprecated( 'Language::getFileName' );
-		return Language::getFileName( ...$args );
+		return MediaWikiServices::getInstance()->getLanguageNameUtils()->getFileName( ...$args );
 	}
 
 	private function getMessagesFileName( $code ) {
-		$this->hideDeprecated( 'Language::getMessagesFileName' );
-		return Language::getMessagesFileName( $code );
+		return MediaWikiServices::getInstance()->getLanguageNameUtils()->getMessagesFileName( $code );
 	}
 
 	private function getJsonMessagesFileName( $code ) {
-		$this->hideDeprecated( 'Language::getJsonMessagesFileName' );
-		return Language::getJsonMessagesFileName( $code );
+		return MediaWikiServices::getInstance()->getLanguageNameUtils()->getJsonMessagesFileName( $code );
 	}
 
 	/**
 	 * @todo This really belongs in the cldr extension's tests.
-	 *
-	 * @covers MediaWiki\Languages\LanguageNameUtils::isKnownLanguageTag
-	 * @covers Language::isKnownLanguageTag
 	 */
-	public function testIsKnownLanguageTag_cldr() {
-		if ( !class_exists( LanguageNames::class ) ) {
-			$this->markTestSkipped( 'The LanguageNames class is not available. '
-				. 'The CLDR extension is probably not installed.' );
-		}
+	public function testCldr() {
+		$this->markTestSkippedIfExtensionNotLoaded( 'CLDR' );
 
-		// We need to restore extension's hook handlers.
-		foreach ( $this->origHandlers as $handler ) {
-			$this->setTemporaryHook( 'LanguageGetTranslatedLanguageNames', $handler );
-		}
-		$this->overrideConfigValue( MainConfigNames::Hooks, $this->origHandlers );
-
-		$this->hideDeprecated( 'Language::isKnownLanguageTag' );
+		$languageNameUtils = $this->getServiceContainer()->getLanguageNameUtils();
 
 		// "pal" is an ancient language, which probably will not appear in Names.php, but appears in
 		// CLDR in English
-		$this->assertTrue( Language::isKnownLanguageTag( 'pal' ) );
+		$this->assertTrue( $languageNameUtils->isKnownLanguageTag( 'pal' ) );
+
+		$this->assertSame( 'allemand', $languageNameUtils->getLanguageName( 'de', 'fr' ) );
 	}
 
 	/**
-	 * @covers Language::getNamespaces
-	 * @covers Language::fixVariableInNamespace
 	 * @dataProvider provideGetNamespaces
 	 */
 	public function testGetNamespaces( string $langCode, array $config, array $expected ) {
@@ -1968,7 +2319,9 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 		];
 		$nsInfo = new NamespaceInfo(
 			new ServiceOptions( NamespaceInfo::CONSTRUCTOR_OPTIONS, $config, $services->getMainConfig() ),
-			$services->getHookContainer()
+			$services->getHookContainer(),
+			ExtensionRegistry::getInstance()->getAttribute( 'ExtensionNamespaces' ),
+			ExtensionRegistry::getInstance()->getAttribute( 'ImmovableNamespaces' )
 		);
 		/** @var Language $lang */
 		$lang = new $langClass(
@@ -2086,18 +2439,12 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 		];
 	}
 
-	/**
-	 * @covers Language::getGroupName
-	 */
 	public function testGetGroupName() {
 		$lang = $this->getLang();
 		$groupName = $lang->getGroupName( 'bot' );
 		$this->assertSame( 'Bots', $groupName );
 	}
 
-	/**
-	 * @covers Language::getGroupMemberName
-	 */
 	public function testGetGroupMemberName() {
 		$lang = $this->getLang();
 		$user = new UserIdentityValue( 1, 'user' );
@@ -2109,12 +2456,18 @@ class LanguageIntegrationTest extends LanguageClassesTestCase {
 		$this->assertSame( '(group-bot-member: user)', $groupMemberName );
 	}
 
-	/**
-	 * @covers Language::msg
-	 */
 	public function testMsg() {
 		$lang = TestingAccessWrapper::newFromObject( $this->getLang() );
 		$this->assertSame( 'Line 1:', $lang->msg( 'lineno', '1' )->text() );
+	}
+
+	public function testBlockDurations() {
+		$lang = $this->getLang();
+		$durations = $lang->getBlockDurations();
+
+		$this->assertContains( 'other', $durations );
+		$this->assertContains( 'infinite', $durations );
+		$this->assertContains( '1 day', $durations );
 	}
 
 }

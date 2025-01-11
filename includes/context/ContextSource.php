@@ -18,10 +18,24 @@
  * @file
  */
 
+namespace MediaWiki\Context;
+
+use MediaWiki\Config\Config;
+use MediaWiki\Language\Language;
+use MediaWiki\Message\Message;
+use MediaWiki\Output\OutputPage;
 use MediaWiki\Permissions\Authority;
+use MediaWiki\Request\WebRequest;
 use MediaWiki\Session\CsrfTokenSet;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
+use Skin;
+use Timing;
+use Wikimedia\Bcp47Code\Bcp47Code;
+use Wikimedia\Message\MessageParam;
+use Wikimedia\Message\MessageSpecifier;
 use Wikimedia\NonSerializable\NonSerializableTrait;
+use WikiPage;
 
 /**
  * The simplest way of implementing IContextSource is to hold a RequestContext as a
@@ -167,6 +181,16 @@ abstract class ContextSource implements IContextSource {
 	}
 
 	/**
+	 * @since 1.42
+	 * @stable to override
+	 * @note When overriding, keep consistent with getLanguage()!
+	 * @return Bcp47Code
+	 */
+	public function getLanguageCode(): Bcp47Code {
+		return $this->getLanguage();
+	}
+
+	/**
 	 * @since 1.18
 	 * @stable to override
 	 * @return Skin
@@ -192,7 +216,9 @@ abstract class ContextSource implements IContextSource {
 	 * @stable to override
 	 * @param string|string[]|MessageSpecifier $key Message key, or array of keys,
 	 *   or a MessageSpecifier.
-	 * @param mixed ...$params
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param MessageParam|MessageSpecifier|string|int|float|list<MessageParam|MessageSpecifier|string|int|float> ...$params
+	 *   See Message::params()
 	 * @return Message
 	 */
 	public function msg( $key, ...$params ) {
@@ -221,3 +247,6 @@ abstract class ContextSource implements IContextSource {
 		return $this->getContext()->getCsrfTokenSet();
 	}
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( ContextSource::class, 'ContextSource' );

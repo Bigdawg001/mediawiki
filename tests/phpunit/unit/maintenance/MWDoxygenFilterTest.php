@@ -1,9 +1,12 @@
 <?php
 
+use MediaWiki\Maintenance\MWDoxygenFilter;
+
 /**
- * @covers MWDoxygenFilter
+ * @covers \MediaWiki\Maintenance\MWDoxygenFilter
  */
 class MWDoxygenFilterTest extends \PHPUnit\Framework\TestCase {
+	use MediaWikiCoversValidator;
 
 	public static function provideFilter() {
 		yield 'No @var' => [

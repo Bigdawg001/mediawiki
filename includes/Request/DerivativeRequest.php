@@ -2,7 +2,7 @@
 /**
  * Deal with importing all those nasty globals and things
  *
- * Copyright © 2003 Brion Vibber <brion@pobox.com>
+ * Copyright © 2003 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
  * This program is free software; you can redistribute it and/or modify
@@ -25,7 +25,7 @@
 
 namespace MediaWiki\Request;
 
-use WebRequest;
+use MediaWiki\Session\Session;
 
 /**
  * Similar to MediaWiki\Request\FauxRequest, but only fakes URL parameters and method
@@ -38,7 +38,8 @@ use WebRequest;
  * @since 1.19
  */
 class DerivativeRequest extends FauxRequest {
-	private $base;
+	private WebRequest $base;
+	/** @var string|null */
 	private $ip;
 
 	/**
@@ -66,7 +67,7 @@ class DerivativeRequest extends FauxRequest {
 		return $this->base->getAllHeaders();
 	}
 
-	public function getSession() {
+	public function getSession(): Session {
 		return $this->base->getSession();
 	}
 
@@ -82,7 +83,7 @@ class DerivativeRequest extends FauxRequest {
 		return $this->base->getAcceptLang();
 	}
 
-	public function getIP() {
+	public function getIP(): string {
 		return $this->ip ?: $this->base->getIP();
 	}
 
@@ -104,4 +105,5 @@ class DerivativeRequest extends FauxRequest {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( DerivativeRequest::class, 'DerivativeRequest' );

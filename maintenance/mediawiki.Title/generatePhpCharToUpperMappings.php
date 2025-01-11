@@ -22,10 +22,12 @@
  * @ingroup Maintenance
  */
 
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Shell\Shell;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/../Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Update list of upper case differences between JS and PHP
@@ -60,7 +62,7 @@ class GeneratePhpCharToUpperMappings extends Maintenance {
 		$jsUpperChars = json_decode( $result->getStdout() );
 		'@phan-var string[] $jsUpperChars';
 
-		$contentLanguage = MediaWikiServices::getInstance()->getContentLanguage();
+		$contentLanguage = $this->getServiceContainer()->getContentLanguage();
 		for ( $i = 0; $i <= 0x10ffff; $i++ ) {
 			if ( $i >= 0xd800 && $i <= 0xdfff ) {
 				// Skip surrogate pairs
@@ -95,5 +97,7 @@ class GeneratePhpCharToUpperMappings extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = GeneratePhpCharToUpperMappings::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

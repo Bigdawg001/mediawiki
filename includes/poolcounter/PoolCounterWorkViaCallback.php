@@ -18,6 +18,10 @@
  * @file
  */
 
+namespace MediaWiki\PoolCounter;
+
+use InvalidArgumentException;
+
 /**
  * Convenience class for dealing with PoolCounter using callbacks
  * @since 1.22
@@ -26,7 +30,7 @@
  *       but should use a factory in the future.
  */
 class PoolCounterWorkViaCallback extends PoolCounterWork {
-	/** @var callable */
+	/** @var callable|null */
 	protected $doWork;
 	/** @var callable|null */
 	protected $doCachedWork;
@@ -59,10 +63,10 @@ class PoolCounterWorkViaCallback extends PoolCounterWork {
 				$this->$name = $callbacks[$name];
 			}
 		}
-		if ( !isset( $this->doWork ) ) {
+		if ( !$this->doWork ) {
 			throw new InvalidArgumentException( "No callback provided for 'doWork' function." );
 		}
-		$this->cacheable = isset( $this->doCachedWork );
+		$this->cacheable = (bool)$this->doCachedWork;
 	}
 
 	public function doWork() {
@@ -90,3 +94,6 @@ class PoolCounterWorkViaCallback extends PoolCounterWork {
 		return false;
 	}
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( PoolCounterWorkViaCallback::class, 'PoolCounterWorkViaCallback' );

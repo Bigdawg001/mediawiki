@@ -111,37 +111,34 @@ namespace Wikimedia\Rdbms;
  * @ingroup Database
  */
 interface ILoadBalancer {
-	/** Request a replica DB connection */
+	/**
+	 * Request a replica DB connection. Can't be used as a binary flag with bitwise operators!
+	 */
 	public const DB_REPLICA = -1;
 	/**
-	 * Request a primary, write-enabled DB connection
+	 * Request a primary, write-enabled DB connection. Can't be used as a binary flag with bitwise
+	 * operators!
 	 * @since 1.36
 	 */
 	public const DB_PRIMARY = -2;
-
-	// phpcs:disable MediaWiki.Usage.DeprecatedConstantUsage.DB_MASTER
-	/**
-	 * Request a primary, write-enabled DB connection
-	 * @deprecated since 1.36, Use DB_PRIMARY instead
-	 */
-	public const DB_MASTER = self::DB_PRIMARY;
-	// phpcs:enable MediaWiki.Usage.DeprecatedConstantUsage.DB_MASTER
 
 	/** Domain specifier when no specific database needs to be selected */
 	public const DOMAIN_ANY = '';
 	/** The generic query group */
 	public const GROUP_GENERIC = '';
 
-	/** Yield an untracked, low-timeout, autocommit-mode handle (to gauge server health) */
-	public const CONN_UNTRACKED_GAUGE = 1;
 	/** Yield a tracked autocommit-mode handle (reuse existing ones) */
-	public const CONN_TRX_AUTOCOMMIT = 2;
-	/** Yield null on connection failure instead of throwing an exception */
+	public const CONN_TRX_AUTOCOMMIT = 1;
+	/**
+	 * Yield an untracked, low-timeout, autocommit-mode handle (to gauge server health)
+	 * @internal
+	 */
+	public const CONN_UNTRACKED_GAUGE = 2;
+	/**
+	 * Yield null on connection failure instead of throwing an exception
+	 * @internal
+	 */
 	public const CONN_SILENCE_ERRORS = 4;
-	/** Caller is requesting the primary DB server for possibly writes */
-	public const CONN_INTENT_WRITABLE = 8;
-	/** Bypass and update any server-side read-only mode state cache */
-	public const CONN_REFRESH_READ_ONLY = 16;
 
 	/**
 	 * Get the name of the overall cluster of database servers managing the dataset
@@ -180,14 +177,6 @@ interface ILoadBalancer {
 	public function resolveDomainID( $domain ): string;
 
 	/**
-	 * Close all connection and redefine the local domain for testing or schema creation
-	 *
-	 * @param DatabaseDomain|string $domain
-	 * @since 1.33
-	 */
-	public function redefineLocalDomain( $domain );
-
-	/**
 	 * Indicate whether the tables on this domain are only temporary tables for testing
 	 *
 	 * In "temporary tables mode", the CONN_TRX_AUTOCOMMIT flag is ignored
@@ -215,49 +204,6 @@ interface ILoadBalancer {
 	public function getReaderIndex( $group = false );
 
 	/**
-	 * Set the primary position to reach before the next generic group DB query
-	 *
-	 * If a generic replica DB connection is already open then this immediately waits
-	 * for that DB to catch up to the specified replication position. Otherwise, it will
-	 * do so once such a connection is opened.
-	 *
-	 * If a timeout happens when waiting, then laggedReplicaUsed()
-	 * will return true. This is useful for discouraging clients from taking further actions
-	 * if session consistency could not be maintained with respect to their last actions.
-	 *
-	 * @param DBPrimaryPos $pos Primary position
-	 */
-	public function waitFor( DBPrimaryPos $pos );
-
-	/**
-	 * Set the primary wait position and wait for ALL replica DBs to catch up to it
-	 *
-	 * This method is only intended for use a throttling mechanism for high-volume updates.
-	 * Unlike waitFor(), failure does not effect laggedReplicaUsed().
-	 *
-	 * @param DBPrimaryPos $pos Primary position
-	 * @param int|null $timeout Max seconds to wait; default is mWaitTimeout
-	 * @return bool Success (able to connect and no timeouts reached)
-	 */
-	public function waitForAll( DBPrimaryPos $pos, $timeout = null );
-
-	/**
-	 * Get an existing DB handle to the given server index (on any domain)
-	 *
-	 * Use the CONN_TRX_AUTOCOMMIT flag to only look for connections opened with that flag.
-	 *
-	 * Avoid the use of begin()/commit() and startAtomic()/endAtomic() on any handle returned.
-	 * This method is intended for internal RDBMS callers that issue queries that do
-	 * not affect any current transaction.
-	 *
-	 * @internal For use by Rdbms classes only
-	 * @param int $i Specific or virtual (DB_PRIMARY/DB_REPLICA) server index
-	 * @param int $flags Bitfield of CONN_* class constants
-	 * @return Database|false False if no such connection is open
-	 */
-	public function getAnyOpenConnection( $i, $flags = 0 );
-
-	/**
 	 * Get a lazy-connecting database handle for a specific or virtual (DB_PRIMARY/DB_REPLICA) server index
 	 *
 	 * The server index, $i, can be one of the following:
@@ -269,7 +215,7 @@ interface ILoadBalancer {
 	 *      weights. If a query group list is provided in $groups, then each recognized group
 	 *      will be tried, left-to-right, until server index selection succeeds or all groups
 	 *      have been tried, in which case the generic group will be tried.
-	 *   - DB_PRIMARY: the primary server index will be used; the same as getWriterIndex().
+	 *   - DB_PRIMARY: the primary server index will be used; the same as ServerInfo::WRITER_INDEX.
 	 *      The value of $groups should be [] when using this server index.
 	 *   - Specific server index: a positive integer can be provided to use the server with
 	 *      that index. An error will be thrown in no such server index is recognized. This
@@ -293,7 +239,6 @@ interface ILoadBalancer {
 	 *
 	 * CONN_UNTRACKED_GAUGE and CONN_TRX_AUTOCOMMIT are incompatible.
 	 *
-	 * @see ILoadBalancer::reuseConnection()
 	 * @see ILoadBalancer::getServerAttributes()
 	 *
 	 * @param int $i Specific (overrides $groups) or virtual (DB_PRIMARY/DB_REPLICA) server index
@@ -321,16 +266,10 @@ interface ILoadBalancer {
 	 * @param int $i Specific server index
 	 * @param string $domain Resolved DB domain
 	 * @param int $flags Bitfield of class CONN_* constants
-	 * @return IDatabase|false This returns false on failure if CONN_SILENCE_ERRORS is set
+	 * @return IDatabaseForOwner|false This returns false on failure if CONN_SILENCE_ERRORS is set
 	 * @throws DBError If no DB handle could be obtained and CONN_SILENCE_ERRORS is not set
 	 */
 	public function getServerConnection( $i, $domain, $flags = 0 );
-
-	/**
-	 * @deprecated since 1.39 noop
-	 * @param IDatabase $conn
-	 */
-	public function reuseConnection( IDatabase $conn );
 
 	/**
 	 * @deprecated since 1.39, use ILoadBalancer::getConnection() instead.
@@ -340,7 +279,7 @@ interface ILoadBalancer {
 	 * @param int $flags Bitfield of CONN_* class constants (e.g. CONN_TRX_AUTOCOMMIT)
 	 * @return DBConnRef
 	 */
-	public function getConnectionRef( $i, $groups = [], $domain = false, $flags = 0 ): IDatabase;
+	public function getConnectionRef( $i, $groups = [], $domain = false, $flags = 0 ): DBConnRef;
 
 	/**
 	 * @internal Only to be used by DBConnRef
@@ -371,19 +310,6 @@ interface ILoadBalancer {
 	 * @return DBConnRef
 	 */
 	public function getMaintenanceConnectionRef( $i, $groups = [], $domain = false, $flags = 0 ): DBConnRef;
-
-	/**
-	 * Get the specific server index of the "writer server"
-	 *
-	 * The "writer server" is the server that should be used to source writes and critical reads
-	 * originating from the local datacenter. The "writer server" will be one of the following:
-	 *   - The primary, for single-primary setups (even if it resides in a remote datacenter)
-	 *   - The "preferred" co-primary relative to the local datacenter, for multi-primary setups
-	 *   - The "preferred" static clone, for static clone server setups (e.g. no replication)
-	 *
-	 * @return int Specific server index
-	 */
-	public function getWriterIndex();
 
 	/**
 	 * Get the number of servers defined in configuration
@@ -469,40 +395,6 @@ interface ILoadBalancer {
 	public function getPrimaryPos();
 
 	/**
-	 * Get the highest DB replication position for chronology control purposes
-	 *
-	 * If there is only a primary server then this returns false. If replication is present
-	 * and correctly configured, then this returns the highest replication position of any
-	 * server with an open connection. That position can later be passed to waitFor() on a
-	 * new load balancer instance to make sure that queries on the new connections see data
-	 * at least as up-to-date as queries (prior to this method call) on the old connections.
-	 *
-	 * This can be useful for implementing session consistency, where the session
-	 * will be resumed across multiple HTTP requests or CLI script instances.
-	 *
-	 * @internal For use by Rdbms classes only
-	 * @return DBPrimaryPos|false Replication position or false if not applicable
-	 * @since 1.34
-	 */
-	public function getReplicaResumePos();
-
-	/**
-	 * Close a connection
-	 *
-	 * Using this function makes sure the LoadBalancer knows the connection is closed.
-	 * If you use $conn->close() directly, the load balancer won't update its state.
-	 *
-	 * @param IDatabase $conn
-	 */
-	public function closeConnection( IDatabase $conn );
-
-	/**
-	 * @return bool Whether a primary connection is already open
-	 * @since 1.37
-	 */
-	public function hasPrimaryConnection();
-
-	/**
 	 * Whether there are pending changes or callbacks in a transaction by this thread
 	 * @return bool
 	 * @since 1.37
@@ -518,13 +410,6 @@ interface ILoadBalancer {
 	public function explicitTrxActive();
 
 	/**
-	 * Get the timestamp of the latest write query done by this thread
-	 * @return float|false UNIX timestamp or false
-	 * @since 1.37
-	 */
-	public function lastPrimaryChangeTimestamp();
-
-	/**
 	 * Check if this load balancer object had any recent or still
 	 * pending writes issued against it by this PHP thread
 	 *
@@ -535,19 +420,10 @@ interface ILoadBalancer {
 	public function hasOrMadeRecentPrimaryChanges( $age = null );
 
 	/**
-	 * Whether a highly "lagged" replica database connection was queried.
-	 *
-	 * @note This method will never cause a new DB connection
-	 * @return bool
-	 */
-	public function laggedReplicaUsed();
-
-	/**
 	 * @note This method may trigger a DB connection if not yet done
-	 * @param string|false $domain DB domain ID or false (unused and deprecated since 1.40)
 	 * @return string|false Reason the primary is read-only or false if it is not
 	 */
-	public function getReadOnlyReason( $domain = false );
+	public function getReadOnlyReason();
 
 	/**
 	 * @return bool
@@ -596,7 +472,7 @@ interface ILoadBalancer {
 	 * @param string $name Callback name
 	 * @param callable|null $callback
 	 */
-	public function setTransactionListener( $name, callable $callback = null );
+	public function setTransactionListener( $name, ?callable $callback = null );
 
 	/**
 	 * Make certain table names use their own database, schema, and table prefix
@@ -611,20 +487,6 @@ interface ILoadBalancer {
 	 * @param array[] $aliases Map of (table => (dbname, schema, prefix) map)
 	 */
 	public function setTableAliases( array $aliases );
-
-	/**
-	 * Convert certain index names to alternative names before querying the DB
-	 *
-	 * Note that this applies to indexes regardless of the table they belong to.
-	 *
-	 * This can be employed when an index was renamed X => Y in code, but the new Y-named
-	 * indexes were not yet built on all DBs. After all the Y-named ones are added by the DBA,
-	 * the aliases can be removed, and then the old X-named indexes dropped.
-	 *
-	 * @param string[] $aliases
-	 * @since 1.31
-	 */
-	public function setIndexAliases( array $aliases );
 
 	/**
 	 * Convert certain database domains to alternative ones.

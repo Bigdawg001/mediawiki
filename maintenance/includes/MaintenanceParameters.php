@@ -77,7 +77,7 @@ class MaintenanceParameters {
 	private $errors = [];
 
 	/** @var string */
-	private $usagePrefix = 'php';
+	private $usagePrefix = 'php maintenance/run.php';
 
 	/**
 	 * Returns a reference to a member field.
@@ -234,7 +234,7 @@ class MaintenanceParameters {
 
 	/**
 	 * Sets whether to allow unknown options to be passed to the script.
-	 * Per default, unknown options cause an error.
+	 * By default, unknown options cause an error.
 	 * @param bool $allow Should we allow?
 	 */
 	public function setAllowUnregisteredOptions( bool $allow ) {
@@ -300,7 +300,7 @@ class MaintenanceParameters {
 	 *
 	 * @param int $argIndex The integer value (from zero) for the arg
 	 *
-	 * @return ?string the name of the argument, or null if no name is defined for that argument
+	 * @return string|null The name of the argument, or null if the argument does not exist.
 	 */
 	public function getArgName( int $argIndex ): ?string {
 		return $this->mArgDefs[ $argIndex ]['name'] ?? null;
@@ -406,15 +406,16 @@ class MaintenanceParameters {
 				# Short options
 				$argLength = strlen( $arg );
 				for ( $p = 1; $p < $argLength; $p++ ) {
-					$option = $arg[$p];
-					if ( !isset( $this->mOptDefs[$option] ) && isset( $this->mShortOptionMap[$option] ) ) {
-						$option = $this->mShortOptionMap[$option];
+					$givenShort = $arg[$p];
+					$option = $givenShort;
+					if ( !isset( $this->mOptDefs[$givenShort] ) && isset( $this->mShortOptionMap[$givenShort] ) ) {
+						$option = $this->mShortOptionMap[$givenShort];
 					}
 
 					if ( isset( $this->mOptDefs[$option]['withArg'] ) && $this->mOptDefs[$option]['withArg'] ) {
 						$param = next( $argv );
 						if ( $param === false ) {
-							$this->error( "Option --$option needs a value after it!" );
+							$this->error( "Option -$givenShort needs a value after it!" );
 						}
 						$this->setOptionValue( $options, $option, $param );
 					} else {
@@ -655,17 +656,20 @@ class MaintenanceParameters {
 		$output[] = "$heading:\n";
 
 		foreach ( $items as $name => $info ) {
+			$out = $name;
+
 			if ( $info['shortName'] !== false ) {
-				$name .= ' (-' . $info['shortName'] . ')';
+				$out .= ' (-' . $info['shortName'] . ')';
 			}
+
 			if ( $info['withArg'] ) {
 				$vname = strtoupper( $name );
-				$name .= " <$vname>";
+				$out .= " <$vname>";
 			}
 
 			$output[] =
 				wordwrap(
-					"$tab--$name: " . strtr( $info['desc'], [ "\n" => "\n$tab$tab" ] ),
+					"$tab--$out: " . strtr( $info['desc'], [ "\n" => "\n$tab$tab" ] ),
 					$descWidth,
 					"\n$tab$tab"
 				) . "\n";

@@ -6,6 +6,7 @@ use File;
 use MediaFileTrait;
 use MediaWiki\Page\ExistingPageRecord;
 use MediaWiki\Page\PageLookup;
+use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\Response;
 use MediaWiki\Rest\SimpleHandler;
@@ -19,11 +20,8 @@ use Wikimedia\ParamValidator\ParamValidator;
 class MediaFileHandler extends SimpleHandler {
 	use MediaFileTrait;
 
-	/** @var RepoGroup */
-	private $repoGroup;
-
-	/** @var PageLookup */
-	private $pageLookup;
+	private RepoGroup $repoGroup;
+	private PageLookup $pageLookup;
 
 	/**
 	 * @var ExistingPageRecord|false|null
@@ -35,10 +33,6 @@ class MediaFileHandler extends SimpleHandler {
 	 */
 	private $file = false;
 
-	/**
-	 * @param RepoGroup $repoGroup
-	 * @param PageLookup $pageLookup
-	 */
 	public function __construct(
 		RepoGroup $repoGroup,
 		PageLookup $pageLookup
@@ -141,6 +135,7 @@ class MediaFileHandler extends SimpleHandler {
 				self::PARAM_SOURCE => 'path',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-media-file-title' ),
 			],
 		];
 	}
@@ -177,5 +172,9 @@ class MediaFileHandler extends SimpleHandler {
 	protected function hasRepresentation() {
 		$file = $this->getFile();
 		return $file && $file->exists();
+	}
+
+	public function getResponseBodySchemaFileName( string $method ): ?string {
+		return 'includes/Rest/Handler/Schema/MediaFile.json';
 	}
 }

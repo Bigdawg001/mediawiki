@@ -21,6 +21,8 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
 use MediaWiki\Title\Title;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\ParamValidator\TypeDef\IntegerDef;
@@ -32,11 +34,7 @@ use Wikimedia\ParamValidator\TypeDef\IntegerDef;
  */
 class ApiQueryRandom extends ApiQueryGeneratorBase {
 
-	/**
-	 * @param ApiQuery $query
-	 * @param string $moduleName
-	 */
-	public function __construct( ApiQuery $query, $moduleName ) {
+	public function __construct( ApiQuery $query, string $moduleName ) {
 		parent::__construct( $query, $moduleName, 'rn' );
 	}
 
@@ -92,7 +90,7 @@ class ApiQueryRandom extends ApiQueryGeneratorBase {
 			}
 		}
 		if ( $end !== null ) {
-			$this->addWhere( 'page_random < ' . $this->getDB()->addQuotes( $end ) );
+			$this->addWhere( $this->getDB()->expr( 'page_random', '<', $end ) );
 		}
 		$this->addOption( 'ORDER BY', [ 'page_random', 'page_id' ] );
 
@@ -233,3 +231,6 @@ class ApiQueryRandom extends ApiQueryGeneratorBase {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Random';
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiQueryRandom::class, 'ApiQueryRandom' );

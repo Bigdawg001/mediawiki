@@ -4,23 +4,25 @@ namespace MediaWiki\Tests\Unit\Permissions;
 
 use MediaWiki\Actions\ActionFactory;
 use MediaWiki\Block\BlockErrorFormatter;
+use MediaWiki\Block\BlockManager;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\RedirectLookup;
 use MediaWiki\Permissions\GroupPermissionsLookup;
 use MediaWiki\Permissions\PermissionManager;
+use MediaWiki\Permissions\PermissionStatus;
 use MediaWiki\Permissions\RestrictionStore;
 use MediaWiki\SpecialPage\SpecialPageFactory;
 use MediaWiki\Tests\Unit\DummyServicesTrait;
 use MediaWiki\Title\Title;
+use MediaWiki\Title\TitleFormatter;
 use MediaWiki\User\TempUser\RealTempUserConfig;
+use MediaWiki\User\User;
 use MediaWiki\User\UserFactory;
 use MediaWiki\User\UserGroupManager;
+use MediaWiki\User\UserIdentityLookup;
 use MediaWikiUnitTestCase;
-use TitleFormatter;
-use User;
-use UserCache;
 use Wikimedia\TestingAccessWrapper;
 
 /**
@@ -47,6 +49,8 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 			MainConfigNames::NamespaceProtection => [ NS_MEDIAWIKI => 'editinterface' ],
 			MainConfigNames::RestrictionLevels => [ '', 'autoconfirmed', 'sysop' ],
 			MainConfigNames::DeleteRevisionsLimit => false,
+			MainConfigNames::RateLimits => [],
+			MainConfigNames::ImplicitRights => [],
 		];
 		$config = $overrideConfig + $baseConfig;
 
@@ -65,9 +69,10 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 				new ServiceOptions( GroupPermissionsLookup::CONSTRUCTOR_OPTIONS, $config )
 			),
 			$this->createMock( UserGroupManager::class ),
+			$this->createMock( BlockManager::class ),
 			$this->createMock( BlockErrorFormatter::class ),
 			$hookContainer,
-			$this->createMock( UserCache::class ),
+			$this->createMock( UserIdentityLookup::class ),
 			$redirectLookup,
 			$restrictionStore,
 			$this->createMock( TitleFormatter::class ),
@@ -111,15 +116,16 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 		// Override user rights
 		$permissionManager->overrideUserRightsForTesting( $user, $rights );
 
-		$result = $permissionManager->checkUserConfigPermissions(
+		$result = PermissionStatus::newEmpty();
+		$permissionManager->checkUserConfigPermissions(
 			$action,
 			$user,
-			[], // starting errors
+			$result,
 			PermissionManager::RIGOR_QUICK, // unused
 			true, // $short, unused
 			$title
 		);
-		$this->assertEquals( $expectedErrors, $result );
+		$this->assertEquals( $expectedErrors, $result->toLegacyErrorArray() );
 	}
 
 	public static function provideTestCheckUserConfigPermissions() {
@@ -223,17 +229,18 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 		}
 		$permissionManager->overrideUserRightsForTesting( $user, $rights );
 
-		$result = $permissionManager->checkUserConfigPermissions(
+		$result = PermissionStatus::newEmpty();
+		$permissionManager->checkUserConfigPermissions(
 			'edit',
 			$user,
-			[], // starting errors
+			$result,
 			PermissionManager::RIGOR_QUICK, // unused
 			true, // $short, unused
 			$title
 		);
 		$this->assertEquals(
 			$expectErrors ? [ [ 'mycustomjsredirectprotected', 'edit' ] ] : [],
-			$result
+			$result->toLegacyErrorArray()
 		);
 	}
 
@@ -262,6 +269,10 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 		$title = $this->createMock( Title::class );
 
 		$restrictionStore = $this->createMock( RestrictionStore::class );
+		$restrictionStore->expects( $this->any() )
+			->method( 'listApplicableRestrictionTypes' )
+			->with( $title )
+			->willReturn( [ 'other-action', $action ] );
 		$restrictionStore->expects( $this->once() )
 			->method( 'getRestrictions' )
 			->with( $title, $action )
@@ -273,15 +284,16 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 		] );
 		$permissionManager->overrideUserRightsForTesting( $user, $rights );
 
-		$result = $permissionManager->checkPageRestrictions(
+		$result = PermissionStatus::newEmpty();
+		$permissionManager->checkPageRestrictions(
 			$action,
 			$user,
-			[], // starting errors
+			$result,
 			PermissionManager::RIGOR_QUICK, // unused
 			true, // $short, unused
 			$title
 		);
-		$this->assertEquals( $expectedErrors, $result );
+		$this->assertEquals( $expectedErrors, $result->toLegacyErrorArray() );
 	}
 
 	public static function provideTestCheckPageRestrictions() {
@@ -318,151 +330,20 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 	}
 
 	/**
-	 * @dataProvider provideTestCheckQuickPermissions
+	 * @dataProvider provideTestCheckQuickPermissionsHook
 	 */
-	public function testCheckQuickPermissions(
-		int $namespace,
-		string $pageTitle,
-		string $userType,
-		string $action,
-		array $rights,
-		string $expectedError
-	) {
-		// Convert string single error to the array of errors PermissionManager uses
-		$expectedErrors = ( $expectedError === '' ? [] : [ [ $expectedError ] ] );
-
-		$userIsAnon = $userType === 'anon';
-		$userIsTemp = $userType === 'temp';
-		$userIsNamed = $userType === 'user';
-		$user = $this->createMock( User::class );
-		$user->method( 'getId' )->willReturn( $userIsAnon ? 0 : 123 );
-		$user->method( 'getName' )->willReturn( $userIsAnon ? '1.1.1.1' : 'NameOfActingUser' );
-		$user->method( 'isAnon' )->willReturn( $userIsAnon );
-		$user->method( 'isNamed' )->willReturn( $userIsNamed );
-		$user->method( 'isTemp' )->willReturn( $userIsTemp );
-
-		// HookContainer - always return true (false tested separately)
-		$hookContainer = $this->createMock( HookContainer::class );
-		$hookContainer->method( 'run' )
-			->willReturn( true );
-
-		// Overrides needed in case `GroupPermissionsLookup::groupHasPermission` is called
-		$config = [
-			MainConfigNames::GroupPermissions => [
-				'autoconfirmed' => [
-					'move' => true
-				]
-			]
-		];
-
-		$permissionManager = $this->getPermissionManager( [
-			'config' => $config,
-			'hookContainer' => $hookContainer,
-		] );
-		$permissionManager->overrideUserRightsForTesting( $user, $rights );
-
-		$title = $this->createMock( Title::class );
-		$title->method( 'getNamespace' )->willReturn( $namespace );
-		$title->method( 'getText' )->willReturn( $pageTitle );
-
-		// Ensure that `missingPermissionError` doesn't call User::newFatalPermissionDeniedStatus
-		// which uses the global state
-		$short = true;
-
-		$result = $permissionManager->checkQuickPermissions(
-			$action,
-			$user,
-			[], // Starting errors
-			PermissionManager::RIGOR_QUICK, // unused
-			$short,
-			$title
-		);
-		$this->assertEquals( $expectedErrors, $result );
-	}
-
-	public static function provideTestCheckQuickPermissions() {
-		// $namespace, $pageTitle, $userIsAnon, $action, $rights, $expectedError
-
-		// Four different possible errors when trying to create
-		yield 'Anon createtalk fail' => [
-			NS_TALK, 'Example', 'anon', 'create', [], 'nocreatetext'
-		];
-		yield 'Anon createpage fail' => [
-			NS_MAIN, 'Example', 'anon', 'create', [], 'nocreatetext'
-		];
-		yield 'User createtalk fail' => [
-			NS_TALK, 'Example', 'user', 'create', [], 'nocreate-loggedin'
-		];
-		yield 'User createpage fail' => [
-			NS_MAIN, 'Example', 'user', 'create', [], 'nocreate-loggedin'
-		];
-		yield 'Temp user createpage fail' => [
-			NS_MAIN, 'Example', 'temp', 'create', [], 'nocreatetext'
-		];
-
-		yield 'Createpage pass' => [
-			NS_MAIN, 'Example', 'anon', 'create', [ 'createpage' ], ''
-		];
-
-		// Three different namespace specific move failures, even if user has `move` rights
-		yield 'Move root user page fail' => [
-			NS_USER, 'Example', 'anon', 'move', [ 'move' ], 'cant-move-user-page'
-		];
-		yield 'Move file fail' => [
-			NS_FILE, 'Example', 'anon', 'move', [ 'move' ], 'movenotallowedfile'
-		];
-		yield 'Move category fail' => [
-			NS_CATEGORY, 'Example', 'anon', 'move', [ 'move' ], 'cant-move-category-page'
-		];
-
-		// No move rights at all. Different failures depending on who is allowed to move.
-		// Test method sets group permissions to [ 'autoconfirmed' => [ 'move' => true ] ]
-		yield 'Anon move fail, autoconfirmed can move' => [
-			NS_TALK, 'Example', 'anon', 'move', [], 'movenologintext'
-		];
-		yield 'User move fail, autoconfirmed can move' => [
-			NS_TALK, 'Example', 'user', 'move', [], 'movenotallowed'
-		];
-		yield 'Temp user move fail, autoconfirmed can move' => [
-			NS_TALK, 'Example', 'temp', 'move', [], 'movenologintext'
-		];
-		yield 'Move pass' => [ NS_MAIN, 'Example', 'anon', 'move', [ 'move' ], '' ];
-
-		// Three different possible failures for move target
-		yield 'Move-target no rights' => [
-			NS_MAIN, 'Example', 'user', 'move-target', [], 'movenotallowed'
-		];
-		yield 'Move-target to user root' => [
-			NS_USER, 'Example', 'user', 'move-target', [ 'move' ], 'cant-move-to-user-page'
-		];
-		yield 'Move-target to category' => [
-			NS_CATEGORY, 'Example', 'user', 'move-target', [ 'move' ], 'cant-move-to-category-page'
-		];
-		yield 'Move-target pass' => [
-			NS_MAIN, 'Example', 'user', 'move-target', [ 'move' ], ''
-		];
-
-		// Other actions without special handling
-		yield 'Missing rights for edit' => [
-			NS_MAIN, 'Example', 'user', 'edit', [], 'badaccess-group0'
-		];
-		yield 'Having rights for edit' => [
-			NS_MAIN, 'Example', 'user', 'edit', [ 'edit', ], ''
-		];
-	}
-
-	public function testCheckQuickPermissionsHook() {
+	public function testCheckQuickPermissionsHook( array $hookErrors, array $expectedResult ) {
 		$title = $this->createMock( Title::class );
 		$user = $this->createMock( User::class );
 		$action = 'FakeActionGoesHere';
 
 		$hookCallback = function ( $hookTitle, $hookUser, $hookAction, &$errors, $doExpensiveQueries, $short )
-			use ( $user, $title, $action )
+			use ( $user, $title, $action, $hookErrors )
 		{
 			$this->assertSame( $title, $hookTitle );
 			$this->assertSame( $user, $hookUser );
 			$this->assertSame( $action, $hookAction );
-			$errors[] = [ 'Hook failure goes here' ];
+			$errors = $hookErrors;
 			return false;
 		};
 
@@ -471,18 +352,27 @@ class PermissionManagerTest extends MediaWikiUnitTestCase {
 		$permissionManager = $this->getPermissionManager( [
 			'hookContainer' => $hookContainer,
 		] );
-		$result = $permissionManager->checkQuickPermissions(
+		$result = PermissionStatus::newEmpty();
+		$permissionManager->checkQuickPermissions(
 			$action,
 			$user,
-			[], // Starting errors
+			$result,
 			PermissionManager::RIGOR_QUICK, // unused
 			true, // $short, unused,
 			$title
 		);
 		$this->assertEquals(
-			[ [ 'Hook failure goes here' ] ],
-			$result
+			$expectedResult,
+			$result->toLegacyErrorArray()
 		);
+	}
+
+	public function provideTestCheckQuickPermissionsHook() {
+		// test name => [ $result / $errors, $status->toLegacyErrorArray() ]
+		yield 'Hook returns false but no errors' => [ [], [] ];
+		yield 'One error' => [ [ 'error-key' ], [ [ 'error-key' ] ] ];
+		yield 'One error with params as array' => [ [ 'error-key', 'param' ], [ [ 'error-key', 'param' ] ] ];
+		yield 'Multiple errors' => [ [ [ 'error-key' ], [ 'error-key-2' ] ], [ [ 'error-key' ], [ 'error-key-2' ] ] ];
 	}
 
 }

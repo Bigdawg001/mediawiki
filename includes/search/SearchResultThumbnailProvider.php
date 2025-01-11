@@ -5,6 +5,7 @@ namespace MediaWiki\Search;
 use File;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Search\Entity\SearchResultThumbnail;
 use RepoGroup;
@@ -18,16 +19,9 @@ class SearchResultThumbnailProvider {
 
 	public const THUMBNAIL_SIZE = 60;
 
-	/** @var RepoGroup */
-	private $repoGroup;
+	private RepoGroup $repoGroup;
+	private HookRunner $hookRunner;
 
-	/** @var HookRunner */
-	private $hookRunner;
-
-	/**
-	 * @param RepoGroup $repoGroup
-	 * @param HookContainer $hookContainer
-	 */
 	public function __construct( RepoGroup $repoGroup, HookContainer $hookContainer ) {
 		$this->repoGroup = $repoGroup;
 		$this->hookRunner = new HookRunner( $hookContainer );
@@ -63,7 +57,7 @@ class SearchResultThumbnailProvider {
 	 * @param int|null $size
 	 * @return SearchResultThumbnail|null
 	 */
-	public function buildSearchResultThumbnailFromFile( File $file, int $size = null ): ?SearchResultThumbnail {
+	public function buildSearchResultThumbnailFromFile( File $file, ?int $size = null ): ?SearchResultThumbnail {
 		$size ??= self::THUMBNAIL_SIZE;
 
 		$thumb = $file->transform( [ 'width' => $size ] );
@@ -71,13 +65,14 @@ class SearchResultThumbnailProvider {
 			return null;
 		}
 
+		$urlUtils = MediaWikiServices::getInstance()->getUrlUtils();
 		return new SearchResultThumbnail(
 			$thumb->getFile()->getMimeType(),
 			null,
 			$thumb->getWidth(),
 			$thumb->getHeight(),
 			null,
-			wfExpandUrl( $thumb->getUrl(), PROTO_RELATIVE ),
+			$urlUtils->expand( $thumb->getUrl(), PROTO_RELATIVE ) ?? false,
 			$file->getName()
 		);
 	}

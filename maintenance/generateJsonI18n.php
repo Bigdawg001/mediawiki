@@ -25,7 +25,12 @@
  * @ingroup Maintenance
  */
 
+use MediaWiki\Json\FormatJson;
+use MediaWiki\Maintenance\Maintenance;
+
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script to generate JSON i18n files from a PHP i18n file.
@@ -113,7 +118,7 @@ class GenerateJsonI18n extends Maintenance {
 		include $phpfile;
 		$phpfileContents = file_get_contents( $phpfile );
 
-		// @phan-suppress-next-line PhanImpossibleCondition Set by include of php file
+		// @phan-suppress-next-line PhanImpossibleCondition,MediaWikiNoIssetIfDefined Set by include of php file
 		if ( !isset( $messages ) ) {
 			$this->fatalError( "PHP file $phpfile does not define \$messages array" );
 		}
@@ -191,5 +196,7 @@ class GenerateJsonI18n extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = GenerateJsonI18n::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

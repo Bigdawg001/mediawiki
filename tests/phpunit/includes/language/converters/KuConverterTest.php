@@ -2,7 +2,7 @@
 
 /**
  * @group Language
- * @covers KuConverter
+ * @covers \KuConverter
  */
 class KuConverterTest extends MediaWikiIntegrationTestCase {
 
@@ -10,7 +10,6 @@ class KuConverterTest extends MediaWikiIntegrationTestCase {
 
 	/**
 	 * @dataProvider provideAutoConvertToAllVariants
-	 * @covers KuConverter::autoConvertToAllVariants
 	 */
 	public function testAutoConvertToAllVariants( $result, $value ) {
 		$this->assertEquals( $result, $this->getLanguageConverter()->autoConvertToAllVariants( $value ) );

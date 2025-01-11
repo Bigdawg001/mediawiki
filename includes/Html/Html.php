@@ -25,10 +25,11 @@
 
 namespace MediaWiki\Html;
 
+use MediaWiki\Json\FormatJson;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Request\ContentSecurityPolicy;
-use MWException;
+use UnexpectedValueException;
 
 /**
  * This class is a collection of static functions that serve two purposes:
@@ -107,95 +108,62 @@ class Html {
 	];
 
 	/**
-	 * Modifies a set of attributes meant for button elements
-	 * and apply a set of default attributes when $wgUseMediaWikiUIEverywhere enabled.
+	 * Modifies a set of attributes meant for button elements.
+	 *
 	 * @param array $attrs HTML attributes in an associative array
-	 * @param string[] $modifiers classes to add to the button
-	 * @see https://tools.wmflabs.org/styleguide/desktop/index.html for guidance on available modifiers
+	 * @param string[] $modifiers Unused
 	 * @return array Modified attributes array
+	 * @deprecated since 1.42 No-op
 	 */
 	public static function buttonAttributes( array $attrs, array $modifiers = [] ) {
-		$useMediaWikiUIEverywhere =
-			MediaWikiServices::getInstance()->getMainConfig()->get( MainConfigNames::UseMediaWikiUIEverywhere );
-		if ( $useMediaWikiUIEverywhere ) {
-			if ( isset( $attrs['class'] ) ) {
-				if ( is_array( $attrs['class'] ) ) {
-					$attrs['class'][] = 'mw-ui-button';
-					$attrs['class'] = array_merge( $attrs['class'], $modifiers );
-					// ensure compatibility with Xml
-					$attrs['class'] = implode( ' ', $attrs['class'] );
-				} else {
-					$attrs['class'] .= ' mw-ui-button ' . implode( ' ', $modifiers );
-				}
-			} else {
-				// ensure compatibility with Xml
-				$attrs['class'] = 'mw-ui-button ' . implode( ' ', $modifiers );
-			}
-		}
+		wfDeprecated( __METHOD__, '1.42' );
 		return $attrs;
 	}
 
 	/**
-	 * Modifies a set of attributes meant for text input elements
-	 * and apply a set of default attributes.
-	 * Removes size attribute when $wgUseMediaWikiUIEverywhere enabled.
+	 * Modifies a set of attributes meant for text input elements.
+	 *
 	 * @param array $attrs An attribute array.
 	 * @return array Modified attributes array
+	 * @deprecated since 1.42 No-op
 	 */
 	public static function getTextInputAttributes( array $attrs ) {
-		$useMediaWikiUIEverywhere = MediaWikiServices::getInstance()
-			->getMainConfig()->get( MainConfigNames::UseMediaWikiUIEverywhere );
-		if ( $useMediaWikiUIEverywhere ) {
-			if ( isset( $attrs['class'] ) ) {
-				if ( is_array( $attrs['class'] ) ) {
-					$attrs['class'][] = 'mw-ui-input';
-				} else {
-					$attrs['class'] .= ' mw-ui-input';
-				}
-			} else {
-				$attrs['class'] = 'mw-ui-input';
-			}
-		}
+		wfDeprecated( __METHOD__, '1.42' );
 		return $attrs;
 	}
 
 	/**
-	 * Returns an HTML link element in a string styled as a button
-	 * (when $wgUseMediaWikiUIEverywhere is enabled).
+	 * Returns an HTML link element in a string.
 	 *
 	 * @param string $text The text of the element. Will be escaped (not raw HTML)
 	 * @param array $attrs Associative array of attributes, e.g., [
 	 *   'href' => 'https://www.mediawiki.org/' ]. See expandAttributes() for
 	 *   further documentation.
-	 * @param string[] $modifiers classes to add to the button
-	 * @see https://tools.wmflabs.org/styleguide/desktop/index.html for guidance on available modifiers
+	 * @param string[] $modifiers Unused
 	 * @return string Raw HTML
 	 */
 	public static function linkButton( $text, array $attrs, array $modifiers = [] ) {
 		return self::element(
 			'a',
-			self::buttonAttributes( $attrs, $modifiers ),
+			$attrs,
 			$text
 		);
 	}
 
 	/**
-	 * Returns an HTML link element in a string styled as a button
-	 * (when $wgUseMediaWikiUIEverywhere is enabled).
+	 * Returns an HTML input element in a string.
 	 *
-	 * @param string $contents The raw HTML contents of the element: *not*
-	 *   escaped!
+	 * @param string $contents Plain text label for the button value
 	 * @param array $attrs Associative array of attributes, e.g., [
 	 *   'href' => 'https://www.mediawiki.org/' ]. See expandAttributes() for
 	 *   further documentation.
-	 * @param string[] $modifiers classes to add to the button
-	 * @see https://tools.wmflabs.org/styleguide/desktop/index.html for guidance on available modifiers
+	 * @param string[] $modifiers Unused
 	 * @return string Raw HTML
 	 */
-	public static function submitButton( $contents, array $attrs, array $modifiers = [] ) {
+	public static function submitButton( $contents, array $attrs = [], array $modifiers = [] ) {
 		$attrs['type'] = 'submit';
 		$attrs['value'] = $contents;
-		return self::element( 'input', self::buttonAttributes( $attrs, $modifiers ) );
+		return self::element( 'input', $attrs );
 	}
 
 	/**
@@ -209,18 +177,21 @@ class Html {
 	 * content model.
 	 *
 	 * @param string $element The element's name, e.g., 'a'
+	 * @param-taint $element tainted
 	 * @param array $attribs Associative array of attributes, e.g., [
 	 *   'href' => 'https://www.mediawiki.org/' ]. See expandAttributes() for
 	 *   further documentation.
+	 * @param-taint $attribs escapes_html
 	 * @param string $contents The raw HTML contents of the element: *not*
 	 *   escaped!
+	 * @param-taint $contents tainted
 	 * @return string Raw HTML
+	 * @return-taint escaped
 	 */
 	public static function rawElement( $element, $attribs = [], $contents = '' ) {
 		$start = self::openElement( $element, $attribs );
 		if ( isset( self::$voidElements[$element] ) ) {
-			// Silly XML.
-			return substr( $start, 0, -1 ) . '/>';
+			return $start;
 		} else {
 			return $start . $contents . self::closeElement( $element );
 		}
@@ -231,12 +202,16 @@ class Html {
 	 * Xml::element()).
 	 *
 	 * @param string $element Name of the element, e.g., 'a'
+	 * @param-taint $element tainted
 	 * @param array $attribs Associative array of attributes, e.g., [
 	 *   'href' => 'https://www.mediawiki.org/' ]. See expandAttributes() for
 	 *   further documentation.
+	 * @param-taint $attribs escapes_html
 	 * @param string $contents
+	 * @param-taint $contents escapes_html
 	 *
 	 * @return string
+	 * @return-taint escaped
 	 */
 	public static function element( $element, $attribs = [], $contents = '' ) {
 		return self::rawElement(
@@ -270,7 +245,7 @@ class Html {
 
 		// Some people were abusing this by passing things like
 		// 'h1 id="foo" to $element, which we don't want.
-		if ( strpos( $element, ' ' ) !== false ) {
+		if ( str_contains( $element, ' ' ) ) {
 			wfWarn( __METHOD__ . " given element name with space '$element'" );
 		}
 
@@ -429,18 +404,11 @@ class Html {
 			}
 		}
 		if ( $element === 'select' && isset( $attribs['size'] ) ) {
-			if ( in_array( 'multiple', $attribs )
-				|| ( isset( $attribs['multiple'] ) && $attribs['multiple'] !== false )
-			) {
-				// A multi-select
-				if ( strval( $attribs['size'] ) == '4' ) {
-					unset( $attribs['size'] );
-				}
-			} else {
-				// Single select
-				if ( strval( $attribs['size'] ) == '1' ) {
-					unset( $attribs['size'] );
-				}
+			$multiple = ( $attribs['multiple'] ?? false ) !== false ||
+				in_array( 'multiple', $attribs );
+			$default = $multiple ? 4 : 1;
+			if ( (int)$attribs['size'] === $default ) {
+				unset( $attribs['size'] );
 			}
 		}
 
@@ -482,7 +450,6 @@ class Html {
 	 *   you can omit the key, e.g., [ 'checked' ] instead of
 	 *   [ 'checked' => 'checked' ] or such.
 	 *
-	 * @throws MWException If an attribute that doesn't allow lists is set to an array
 	 * @return string HTML fragment that goes between element name and '>'
 	 *   (starting with a space if at least one attribute is output)
 	 */
@@ -562,7 +529,7 @@ class Html {
 				// phpcs:ignore Generic.PHP.DiscourageGoto
 				goto not_bool; // NOSONAR
 			} elseif ( is_array( $value ) ) {
-				throw new MWException( "HTML attribute $key can not contain a list of values" );
+				throw new UnexpectedValueException( "HTML attribute $key can not contain a list of values" );
 			}
 
 			if ( isset( self::$boolAttribs[$key] ) ) {
@@ -596,23 +563,16 @@ class Html {
 	 * a warning is logged server-side.
 	 *
 	 * @param string $contents JavaScript
-	 * @param string|null $nonce Nonce for CSP header, from OutputPage->getCSP()->getNonce()
+	 * @param string|null $nonce Unused
 	 * @return string Raw HTML
 	 */
 	public static function inlineScript( $contents, $nonce = null ) {
-		$attrs = [];
-		if ( $nonce !== null ) {
-			$attrs['nonce'] = $nonce;
-		} elseif ( ContentSecurityPolicy::isNonceRequired( MediaWikiServices::getInstance()->getMainConfig() ) ) {
-			wfWarn( "no nonce set on script. CSP will break it" );
-		}
-
 		if ( preg_match( '/<\/?script/i', $contents ) ) {
 			wfLogWarning( __METHOD__ . ': Illegal character sequence found in inline script.' );
 			$contents = '/* ERROR: Invalid script */';
 		}
 
-		return self::rawElement( 'script', $attrs, $contents );
+		return self::rawElement( 'script', [], $contents );
 	}
 
 	/**
@@ -684,7 +644,7 @@ class Html {
 	}
 
 	/**
-	 * Convenience function to produce an "<input>" element.  This supports the
+	 * Convenience function to produce an `<input>` element.  This supports the
 	 * new HTML5 input types and attributes.
 	 *
 	 * @param string $name Name attribute
@@ -698,24 +658,6 @@ class Html {
 		$attribs['type'] = $type;
 		$attribs['value'] = $value;
 		$attribs['name'] = $name;
-		$textInputAttributes = [
-			'text' => true,
-			'search' => true,
-			'email' => true,
-			'password' => true,
-			'number' => true,
-		];
-		if ( isset( $textInputAttributes[$type] ) ) {
-			$attribs = self::getTextInputAttributes( $attribs );
-		}
-		$buttonAttributes = [
-			'button' => true,
-			'reset' => true,
-			'submit' => true,
-		];
-		if ( isset( $buttonAttributes[$type] ) ) {
-			$attribs = self::buttonAttributes( $attribs );
-		}
 		return self::element( 'input', $attribs );
 	}
 
@@ -746,68 +688,117 @@ class Html {
 	 * Return the HTML for a message box.
 	 * @since 1.31
 	 * @param string $html of contents of box
+	 * @param-taint $html tainted
 	 * @param string|array $className corresponding to box
 	 * @param string $heading (optional)
+	 * @param string $iconClassName (optional) corresponding to box icon
 	 * @return string of HTML representing a box.
 	 */
-	private static function messageBox( $html, $className, $heading = '' ) {
+	private static function messageBox( $html, $className, $heading = '', $iconClassName = '' ) {
 		if ( $heading !== '' ) {
 			$html = self::element( 'h2', [], $heading ) . $html;
 		}
+		$coreClasses = [
+			'cdx-message',
+			'cdx-message--block'
+		];
 		if ( is_array( $className ) ) {
-			$className[] = 'mw-message-box';
+			$className = array_merge(
+				$coreClasses,
+				$className
+			);
 		} else {
-			$className .= ' mw-message-box';
+			$className .= ' ' . implode( ' ', $coreClasses );
 		}
-		return self::rawElement( 'div', [ 'class' => $className ], $html );
+		return self::rawElement( 'div', [ 'class' => $className ],
+			self::element( 'span', [ 'class' => [
+				'cdx-message__icon',
+				$iconClassName
+			] ] ) .
+			self::rawElement( 'div', [
+				'class' => 'cdx-message__content'
+			], $html )
+		);
 	}
 
 	/**
 	 * Return the HTML for a notice message box.
+	 *
+	 * This method produces HTML that requires CSS styles for the Codex MessageBox component
+	 * that need to be supplied by mediawiki.codex.messagebox.styles or another suitable
+	 * Codex style module.
+	 *
 	 * @since 1.38
 	 * @param string $html of contents of notice
+	 * @param-taint $html tainted
 	 * @param string|array $className corresponding to notice
+	 * @param string $heading (optional)
+	 * @param string|array $iconClassName (optional) corresponding to notice icon
 	 * @return string of HTML representing the notice
 	 */
-	public static function noticeBox( $html, $className ) {
-		return self::messageBox( $html, [ 'mw-message-box-notice', $className ] );
+	public static function noticeBox( $html, $className, $heading = '', $iconClassName = '' ) {
+		return self::messageBox( $html, [
+			'cdx-message--notice',
+			$className
+		], $heading, $iconClassName );
 	}
 
 	/**
 	 * Return a warning box.
+	 *
+	 * This method produces HTML that requires CSS styles for the Codex MessageBox component
+	 * that need to be supplied by mediawiki.codex.messagebox.styles or another suitable
+	 * Codex style module.
+	 *
 	 * @since 1.31
 	 * @since 1.34 $className optional parameter added
 	 * @param string $html of contents of box
+	 * @param-taint $html tainted
 	 * @param string $className (optional) corresponding to box
 	 * @return string of HTML representing a warning box.
 	 */
 	public static function warningBox( $html, $className = '' ) {
-		return self::messageBox( $html, [ 'mw-message-box-warning', $className ] );
+		return self::messageBox( $html, [
+			'cdx-message--warning', $className ] );
 	}
 
 	/**
 	 * Return an error box.
+	 *
+	 * This method produces HTML that requires CSS styles for the Codex MessageBox component
+	 * that need to be supplied by mediawiki.codex.messagebox.styles or another suitable
+	 * Codex style module.
+	 *
 	 * @since 1.31
 	 * @since 1.34 $className optional parameter added
 	 * @param string $html of contents of error box
+	 * @param-taint $html tainted
 	 * @param string $heading (optional)
 	 * @param string $className (optional) corresponding to box
 	 * @return string of HTML representing an error box.
 	 */
 	public static function errorBox( $html, $heading = '', $className = '' ) {
-		return self::messageBox( $html, [ 'mw-message-box-error', $className ], $heading );
+		return self::messageBox( $html, [
+			'cdx-message--error', $className ], $heading );
 	}
 
 	/**
 	 * Return a success box.
+	 *
+	 * This method produces HTML that requires CSS styles for the Codex MessageBox component
+	 * that need to be supplied by mediawiki.codex.messagebox.styles or another suitable
+	 * Codex style module.
+	 *
 	 * @since 1.31
 	 * @since 1.34 $className optional parameter added
 	 * @param string $html of contents of box
+	 * @param-taint $html tainted
 	 * @param string $className (optional) corresponding to box
 	 * @return string of HTML representing a success box.
 	 */
 	public static function successBox( $html, $className = '' ) {
-		return self::messageBox( $html, [ 'mw-message-box-success', $className ] );
+		return self::messageBox( $html, [
+			'cdx-message--success', $className ] );
 	}
 
 	/**
@@ -885,7 +876,7 @@ class Html {
 		} else {
 			$spacedValue = $value;
 		}
-		return self::element( 'textarea', self::getTextInputAttributes( $attribs ), $spacedValue );
+		return self::element( 'textarea', $attribs, $spacedValue );
 	}
 
 	/**
@@ -918,6 +909,14 @@ class Html {
 			if ( $nsId < NS_MAIN || in_array( $nsId, $params['exclude'] ) ) {
 				continue;
 			}
+			if (
+				isset( $params['include'] ) &&
+				is_array( $params['include'] ) &&
+				!in_array( $nsId, $params['include'] )
+			) {
+				continue;
+			}
+
 			if ( $nsId === NS_MAIN ) {
 				// For other namespaces use the namespace prefix as label, but for
 				// main we don't use "" but the user message describing it (e.g. "(Main)" or "(Article)")
@@ -988,19 +987,14 @@ class Html {
 			);
 		}
 
-		if ( !array_key_exists( 'id', $selectAttribs ) ) {
-			$selectAttribs['id'] = 'namespace';
-		}
-
-		if ( !array_key_exists( 'name', $selectAttribs ) ) {
-			$selectAttribs['name'] = 'namespace';
-		}
+		$selectAttribs['id'] ??= 'namespace';
+		$selectAttribs['name'] ??= 'namespace';
 
 		$ret = '';
 		if ( isset( $params['label'] ) ) {
 			$ret .= self::element(
 				'label', [
-					'for' => $selectAttribs['id'] ?? null,
+					'for' => $selectAttribs['id'],
 				], $params['label']
 			) . "\u{00A0}";
 		}
@@ -1114,6 +1108,178 @@ class Html {
 
 		return implode( ", ", $candidates );
 	}
+
+	/**
+	 * Encode a variable of arbitrary type to JavaScript.
+	 * If the value is an HtmlJsCode object, pass through the object's value verbatim.
+	 *
+	 * @note Only use this function for generating JavaScript code. If generating output
+	 *       for a proper JSON parser, just call FormatJson::encode() directly.
+	 *
+	 * @since 1.41 (previously on {@link Xml})
+	 * @param mixed $value The value being encoded. Can be any type except a resource.
+	 * @param-taint $value escapes_html
+	 * @param bool $pretty If true, add non-significant whitespace to improve readability.
+	 * @return string|false String if successful; false upon failure
+	 * @return-taint none
+	 */
+	public static function encodeJsVar( $value, $pretty = false ) {
+		if ( $value instanceof HtmlJsCode ) {
+			return $value->value;
+		}
+		return FormatJson::encode( $value, $pretty, FormatJson::UTF8_OK );
+	}
+
+	/**
+	 * Create a call to a JavaScript function. The supplied arguments will be
+	 * encoded using Html::encodeJsVar().
+	 *
+	 * @since 1.41 (previously on {@link Xml} since 1.17)
+	 * @param string $name The name of the function to call, or a JavaScript expression
+	 *    which evaluates to a function object which is called.
+	 * @param-taint $name tainted
+	 * @param array $args The arguments to pass to the function.
+	 * @param-taint $args escapes_html
+	 * @param bool $pretty If true, add non-significant whitespace to improve readability.
+	 * @return string|false String if successful; false upon failure
+	 * @return-taint none
+	 */
+	public static function encodeJsCall( $name, $args, $pretty = false ) {
+		$encodedArgs = self::encodeJsList( $args, $pretty );
+		if ( $encodedArgs === false ) {
+			return false;
+		}
+		return "$name($encodedArgs);";
+	}
+
+	/**
+	 * Encode a JavaScript comma-separated list. The supplied items will be encoded using
+	 * Html::encodeJsVar().
+	 *
+	 * @since 1.41.
+	 * @param array $args The elements of the list.
+	 * @param bool $pretty If true, add non-significant whitespace to improve readability.
+	 * @return false|string String if successful; false upon failure
+	 */
+	public static function encodeJsList( $args, $pretty = false ) {
+		foreach ( $args as &$arg ) {
+			$arg = self::encodeJsVar( $arg, $pretty );
+			if ( $arg === false ) {
+				return false;
+			}
+		}
+		if ( $pretty ) {
+			return ' ' . implode( ', ', $args ) . ' ';
+		} else {
+			return implode( ',', $args );
+		}
+	}
+
+	/**
+	 * Build options for a drop-down box from a textual list.
+	 *
+	 * The result of this function can be passed to XmlSelect::addOptions()
+	 * (to render a plain `<select>` dropdown box) or to Html::listDropdownOptionsOoui()
+	 * and then OOUI\DropdownInputWidget() (to render a pretty one).
+	 *
+	 * @param string $list Correctly formatted text (newline delimited) to be
+	 *   used to generate the options.
+	 * @param array $params Extra parameters:
+	 *   - string $params['other'] If set, add an option with this as text and a value of 'other'
+	 * @return array Array keys are textual labels, values are internal values
+	 */
+	public static function listDropdownOptions( $list, $params = [] ) {
+		$options = [];
+
+		if ( isset( $params['other'] ) ) {
+			$options[ $params['other'] ] = 'other';
+		}
+
+		$optgroup = false;
+		foreach ( explode( "\n", $list ) as $option ) {
+			$value = trim( $option );
+			if ( $value == '' ) {
+				continue;
+			}
+			if ( substr( $value, 0, 1 ) == '*' && substr( $value, 1, 1 ) != '*' ) {
+				# A new group is starting...
+				$value = trim( substr( $value, 1 ) );
+				if ( $value !== '' &&
+					// Do not use the value for 'other' as option group - T251351
+					( !isset( $params['other'] ) || $value !== $params['other'] )
+				) {
+					$optgroup = $value;
+				} else {
+					$optgroup = false;
+				}
+			} elseif ( substr( $value, 0, 2 ) == '**' ) {
+				# groupmember
+				$opt = trim( substr( $value, 2 ) );
+				if ( $optgroup === false ) {
+					$options[$opt] = $opt;
+				} else {
+					$options[$optgroup][$opt] = $opt;
+				}
+			} else {
+				# groupless reason list
+				$optgroup = false;
+				$options[$option] = $option;
+			}
+		}
+
+		return $options;
+	}
+
+	/**
+	 * Convert options for a drop-down box into a format accepted by OOUI\DropdownInputWidget etc.
+	 *
+	 * TODO Find a better home for this function.
+	 *
+	 * @param array $options Options, as returned e.g. by Html::listDropdownOptions()
+	 * @return array
+	 */
+	public static function listDropdownOptionsOoui( $options ) {
+		$optionsOoui = [];
+
+		foreach ( $options as $text => $value ) {
+			if ( is_array( $value ) ) {
+				$optionsOoui[] = [ 'optgroup' => (string)$text ];
+				foreach ( $value as $text2 => $value2 ) {
+					$optionsOoui[] = [ 'data' => (string)$value2, 'label' => (string)$text2 ];
+				}
+			} else {
+				$optionsOoui[] = [ 'data' => (string)$value, 'label' => (string)$text ];
+			}
+		}
+
+		return $optionsOoui;
+	}
+
+	/**
+	 * Convert options for a drop-down box into a format accepted by OOUI\DropdownInputWidget etc.
+	 *
+	 * TODO Find a better home for this function.
+	 *
+	 * @param array $options Options, as returned e.g. by Html::listDropdownOptions()
+	 * @return array
+	 */
+	public static function listDropdownOptionsCodex( $options ) {
+		$optionsCodex = [];
+
+		foreach ( $options as $text => $value ) {
+			if ( is_array( $value ) ) {
+				// No support for optgroups in Codex yet (T367241)
+				$optionsCodex[] = [ 'label' => (string)$text, 'value' => '', 'disabled' => true ];
+				foreach ( $value as $text2 => $value2 ) {
+					$optionsCodex[] = [ 'label' => (string)$text2, 'value' => (string)$value2 ];
+				}
+			} else {
+				$optionsCodex[] = [ 'label' => (string)$text, 'value' => (string)$value ];
+			}
+		}
+		return $optionsCodex;
+	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( Html::class, 'Html' );

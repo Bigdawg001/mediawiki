@@ -3,6 +3,7 @@
 namespace MediaWiki\Widget;
 
 use DateTime;
+use OOUI\TextInputWidget;
 
 /**
  * Date input widget.
@@ -11,15 +12,23 @@ use DateTime;
  * @copyright 2016 MediaWiki Widgets Team and others; see AUTHORS.txt
  * @license MIT
  */
-class DateInputWidget extends \OOUI\TextInputWidget {
+class DateInputWidget extends TextInputWidget {
 
+	/** @var string|null */
 	protected $inputFormat = null;
+	/** @var string|null */
 	protected $displayFormat = null;
+	/** @var string|null|false */
 	protected $longDisplayFormat = null;
+	/** @var string|null */
 	protected $placeholderLabel = null;
+	/** @var string|null */
 	protected $placeholderDateFormat = null;
+	/** @var string|null */
 	protected $precision = null;
+	/** @var string|null */
 	protected $mustBeAfter = null;
+	/** @var string|null */
 	protected $mustBeBefore = null;
 
 	/**
@@ -117,6 +126,7 @@ class DateInputWidget extends \OOUI\TextInputWidget {
 
 		// Initialization
 		$this->addClasses( [ 'mw-widget-dateInputWidget' ] );
+		$this->appendContent( new PendingTextInputWidget() );
 	}
 
 	protected function getJavaScriptClassName() {

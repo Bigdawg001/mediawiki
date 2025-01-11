@@ -21,8 +21,13 @@
  */
 
 use MediaWiki\MainConfigNames;
+use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\Registration\ExtensionDependencyError;
+use MediaWiki\Registration\ExtensionRegistry;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Checks dependencies for extensions, mostly without loading them
@@ -31,6 +36,7 @@ require_once __DIR__ . '/Maintenance.php';
  */
 class CheckDependencies extends Maintenance {
 
+	/** @var bool */
 	private $checkDev;
 
 	public function __construct() {
@@ -202,5 +208,7 @@ class CheckDependencies extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = CheckDependencies::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

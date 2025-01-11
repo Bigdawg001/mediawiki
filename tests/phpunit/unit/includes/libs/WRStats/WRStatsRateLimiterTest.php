@@ -1,8 +1,14 @@
 <?php
 
-namespace Wikimedia\WRStats;
+namespace Wikimedia\Tests\WRStats;
 
+use MediaWikiCoversValidator;
 use PHPUnit\Framework\TestCase;
+use Wikimedia\WRStats\ArrayStatsStore;
+use Wikimedia\WRStats\LimitCondition;
+use Wikimedia\WRStats\LimitOperation;
+use Wikimedia\WRStats\LocalEntityKey;
+use Wikimedia\WRStats\WRStatsRateLimiter;
 
 /**
  * @covers \Wikimedia\WRStats\WRStatsRateLimiter
@@ -13,6 +19,8 @@ use PHPUnit\Framework\TestCase;
  * @covers \Wikimedia\WRStats\LimitOperation
  */
 class WRStatsRateLimiterTest extends TestCase {
+	use MediaWikiCoversValidator;
+
 	public function testTryIncrBatch() {
 		$store = new ArrayStatsStore;
 		$conds = [

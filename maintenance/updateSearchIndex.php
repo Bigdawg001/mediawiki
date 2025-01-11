@@ -1,14 +1,5 @@
 <?php
 /**
- * Periodic off-peak updating of the search index.
- *
- * Usage: php updateSearchIndex.php [-s START] [-e END] [-p POSFILE] [-l LOCKTIME] [-q]
- * Where START is the starting timestamp
- * END is the ending timestamp
- * POSFILE is a file to load timestamps from and save them to, searchUpdate.WIKI_ID.pos by default
- * LOCKTIME is how long the searchindex and revision tables will be locked for
- * -q means quiet
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -25,19 +16,30 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup Maintenance
  */
 
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Revision\SlotRecord;
+use MediaWiki\Search\SearchUpdate;
 use MediaWiki\Title\Title;
 use MediaWiki\WikiMap\WikiMap;
+use Wikimedia\Rdbms\IDBAccessObject;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
- * Maintenance script for periodic off-peak updating of the search index.
+ * Periodic off-peak updating of the search index.
  *
+ * Usage: php updateSearchIndex.php [-s START] [-e END] [-p POSFILE] [-l LOCKTIME] [-q]
+ * Where START is the starting timestamp
+ * END is the ending timestamp
+ * POSFILE is a file to load timestamps from and save them to, searchUpdate.WIKI_ID.pos by default
+ * LOCKTIME is how long the searchindex and revision tables will be locked for
+ * -q means quiet
+ *
+ * @ingroup Search
  * @ingroup Maintenance
  */
 class UpdateSearchIndex extends Maintenance {
@@ -92,7 +94,7 @@ class UpdateSearchIndex extends Maintenance {
 
 		$wgDisableSearchUpdate = false;
 
-		$dbw = $this->getDB( DB_PRIMARY );
+		$dbw = $this->getPrimaryDB();
 
 		$this->output( "Updating searchindex between $start and $end\n" );
 
@@ -100,19 +102,16 @@ class UpdateSearchIndex extends Maintenance {
 		$start = $dbw->timestamp( $start );
 		$end = $dbw->timestamp( $end );
 
-		$res = $dbw->select(
-			[ 'recentchanges', 'page' ],
-			'rc_cur_id',
-			[
-				'rc_type != ' . $dbw->addQuotes( RC_LOG ),
-				'rc_timestamp BETWEEN ' . $dbw->addQuotes( $start ) . ' AND ' . $dbw->addQuotes( $end )
-			],
-			__METHOD__,
-			[],
-			[
-				'page' => [ 'JOIN', 'rc_cur_id=page_id AND rc_this_oldid=page_latest' ]
-			]
-		);
+		$res = $dbw->newSelectQueryBuilder()
+			->select( 'rc_cur_id' )
+			->from( 'recentchanges' )
+			->join( 'page', null, 'rc_cur_id=page_id AND rc_this_oldid=page_latest' )
+			->where( [
+				$dbw->expr( 'rc_type', '!=', RC_LOG ),
+				$dbw->expr( 'rc_timestamp', '>=', $start ),
+				$dbw->expr( 'rc_timestamp', '<=', $end ),
+			] )
+			->caller( __METHOD__ )->fetchResultSet();
 
 		foreach ( $res as $row ) {
 			$this->updateSearchIndexForPage( (int)$row->rc_cur_id );
@@ -127,7 +126,7 @@ class UpdateSearchIndex extends Maintenance {
 	 */
 	private function updateSearchIndexForPage( int $pageId ) {
 		// Get current revision
-		$rev = MediaWikiServices::getInstance()
+		$rev = $this->getServiceContainer()
 			->getRevisionLookup()
 			->getRevisionByPageId( $pageId, 0, IDBAccessObject::READ_LATEST );
 		$title = null;
@@ -145,5 +144,7 @@ class UpdateSearchIndex extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = UpdateSearchIndex::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

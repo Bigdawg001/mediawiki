@@ -2,7 +2,7 @@
 ( function () {
 
 	/**
-	 * mw.Upload.BookletLayout encapsulates the process of uploading a file
+	 * @classdesc Encapsulates the process of uploading a file
 	 * to MediaWiki using the {@link mw.Upload upload model}.
 	 * The booklet emits events that can be used to get the stashed
 	 * upload and the final file. It can be extended to accept
@@ -13,7 +13,7 @@
 	 *
 	 * The {@link OO.ui.BookletLayout booklet layout} has three steps:
 	 *
-	 *  - **Upload**: Has a {@link OO.ui.SelectFileWidget field} to get the file object.
+	 *  - **Upload**: Has a {@link OO.ui.SelectFileInputWidget field} to get the file object.
 	 *
 	 * - **Information**: Has a {@link OO.ui.FormLayout form} to collect metadata. This can be
 	 *   extended.
@@ -21,12 +21,12 @@
 	 * - **Insert**: Has details on how to use the file that was uploaded.
 	 *
 	 * Each step has a form associated with it defined in
-	 * {@link #renderUploadForm renderUploadForm},
-	 * {@link #renderInfoForm renderInfoForm}, and
-	 * {@link #renderInsertForm renderInfoForm}. The
-	 * {@link #getFile getFile},
-	 * {@link #getFilename getFilename}, and
-	 * {@link #getText getText} methods are used to get
+	 * {@link mw.Upload.BookletLayout#renderUploadForm renderUploadForm},
+	 * {@link mw.Upload.BookletLayout#renderInfoForm renderInfoForm}, and
+	 * {@link mw.Upload.BookletLayout#renderInsertForm renderInfoForm}. The
+	 * {@link mw.Upload.BookletLayout#getFile getFile},
+	 * {@link mw.Upload.BookletLayout#getFilename getFilename}, and
+	 * {@link mw.Upload.BookletLayout#getText getText} methods are used to get
 	 * the information filled in these forms, required to call
 	 * {@link mw.Upload mw.Upload}.
 	 *
@@ -34,38 +34,40 @@
 	 *
 	 * See the {@link mw.Upload.Dialog upload dialog}.
 	 *
-	 * The {@link #event-fileUploaded fileUploaded},
-	 * and {@link #event-fileSaved fileSaved} events can
+	 * The {@link mw.Upload.BookletLayout.event:fileUploaded fileUploaded},
+	 * and {@link mw.Upload.BookletLayout.event:fileSaved fileSaved} events can
 	 * be used to get details of the upload.
 	 *
 	 * ## Extending
 	 *
 	 * To extend using {@link mw.Upload mw.Upload}, override
-	 * {@link #renderInfoForm renderInfoForm} to render
+	 * {@link mw.Upload.BookletLayout#renderInfoForm renderInfoForm} to render
 	 * the form required for the specific use-case. Update the
-	 * {@link #getFilename getFilename}, and
-	 * {@link #getText getText} methods to return data
+	 * {@link mw.Upload.BookletLayout#getFilename getFilename}, and
+	 * {@link mw.Upload.BookletLayout#getText getText} methods to return data
 	 * from your newly created form. If you added new fields you'll also have
-	 * to update the {@link #clear} method.
+	 * to update the {@link mw.Upload.BookletLayout#clear} method.
 	 *
 	 * If you plan to use a different upload model, apart from what is mentioned
 	 * above, you'll also have to override the
-	 * {@link #createUpload createUpload} method to
+	 * {@link mw.Upload.BookletLayout#createUpload createUpload} method to
 	 * return the new model. The {@link #saveFile saveFile}, and
-	 * the {@link #uploadFile uploadFile} methods need to be
+	 * the {@link mw.Upload.BookletLayout#uploadFile uploadFile} methods need to be
 	 * overridden to use the new model and data returned from the forms.
 	 *
-	 * @class
+	 * @class mw.Upload.BookletLayout
 	 * @extends OO.ui.BookletLayout
 	 *
 	 * @constructor
-	 * @param {Object} config Configuration options
-	 * @cfg {jQuery} [$overlay] Overlay to use for widgets in the booklet
-	 * @cfg {string} [filekey] Sets the stashed file to finish uploading. Overrides most of the file selection process, and fetches a thumbnail from the server.
+	 * @description Create an instance of `mw.Upload.BookletLayout`.
+	 * @param {Object} config Configuration options; see also the config parameter for the
+	 *  {@link mw.Upload.BookletLayout} constructor.
+	 * @param {jQuery} [config.$overlay] Overlay to use for widgets in the booklet
+	 * @param {string} [config.filekey] Sets the stashed file to finish uploading. Overrides most of the file selection process, and fetches a thumbnail from the server.
 	 */
 	mw.Upload.BookletLayout = function ( config ) {
 		// Parent constructor
-		mw.Upload.BookletLayout.parent.call( this, config );
+		mw.Upload.BookletLayout.super.call( this, config );
 
 		this.$overlay = config.$overlay;
 
@@ -106,70 +108,74 @@
 	/* Events */
 
 	/**
-	 * Progress events for the uploaded file
+	 * Progress events for the uploaded file.
 	 *
-	 * @event fileUploadProgress
+	 * @event mw.Upload.BookletLayout.fileUploadProgress
 	 * @param {number} progress In percentage
 	 * @param {Object} duration Duration object from `moment.duration()`
 	 */
 
 	/**
-	 * The file has finished uploading
+	 * The file has finished uploading.
 	 *
-	 * @event fileUploaded
+	 * @event mw.Upload.BookletLayout.fileUploaded
 	 */
 
 	/**
-	 * The file has been saved to the database
+	 * The file has been saved to the database.
 	 *
-	 * @event fileSaved
-	 * @param {Object} imageInfo See mw.Upload#getImageInfo
+	 * @event mw.Upload.BookletLayout.fileSaved
+	 * @param {Object} imageInfo See {@link mw.Upload#getImageInfo}
 	 */
 
 	/**
-	 * The upload form has changed
+	 * The upload form has changed.
 	 *
-	 * @event uploadValid
+	 * @event mw.Upload.BookletLayout.uploadValid
 	 * @param {boolean} isValid The form is valid
 	 */
 
 	/**
-	 * The info form has changed
+	 * The info form has changed.
 	 *
-	 * @event infoValid
+	 * @event mw.Upload.BookletLayout.infoValid
 	 * @param {boolean} isValid The form is valid
 	 */
 
 	/* Properties */
 
 	/**
-	 * @property {OO.ui.FormLayout} uploadForm
 	 * The form rendered in the first step to get the file object.
-	 * Rendered in {@link #renderUploadForm renderUploadForm}.
+	 * Rendered in {@link mw.Upload.BookletLayout#renderUploadForm renderUploadForm}.
+	 *
+	 * @name mw.Upload.BookletLayout.prototype.uploadForm
+	 * @type {OO.ui.FormLayout}
 	 */
 
 	/**
-	 * @property {OO.ui.FormLayout} infoForm
 	 * The form rendered in the second step to get metadata.
-	 * Rendered in {@link #renderInfoForm renderInfoForm}
+	 * Rendered in {@link mw.Upload.BookletLayout#renderInfoForm renderInfoForm}.
+	 *
+	 * @name mw.Upload.BookletLayout.prototype.infoForm
+	 * @type {OO.ui.FormLayout}
 	 */
 
 	/**
-	 * @property {OO.ui.FormLayout} insertForm
-	 * The form rendered in the third step to show usage
-	 * Rendered in {@link #renderInsertForm renderInsertForm}
+	 * The form rendered in the third step to show usage.
+	 * Rendered in {@link mw.Upload.BookletLayout#renderInsertForm renderInsertForm}.
+	 *
+	 * @name mw.Upload.BookletLayout.prototype.insertForm
+	 * @type {OO.ui.FormLayout}
 	 */
 
 	/* Methods */
 
 	/**
-	 * Initialize for a new upload
+	 * Initialize for a new upload.
 	 *
 	 * @return {jQuery.Promise} Promise resolved when everything is initialized
 	 */
 	mw.Upload.BookletLayout.prototype.initialize = function () {
-		var booklet = this;
-
 		this.clear();
 		this.upload = this.createUpload();
 
@@ -180,38 +186,36 @@
 		}
 
 		return this.upload.getApi().then(
-			function ( api ) {
-				// If the user can't upload anything, don't give them the option to.
-				return api.getUserInfo().then(
-					function ( userInfo ) {
-						booklet.setPage( 'upload' );
-						if ( userInfo.rights.indexOf( 'upload' ) === -1 ) {
-							if ( mw.user.isAnon() ) {
-								booklet.getPage( 'upload' ).$element.msg( 'apierror-mustbeloggedin', mw.msg( 'action-upload' ) );
-							} else {
-								booklet.getPage( 'upload' ).$element.msg( 'apierror-permissiondenied', mw.msg( 'action-upload' ) );
-							}
+			// If the user can't upload anything, don't give them the option to.
+			( api ) => api.getUserInfo().then(
+				( userInfo ) => {
+					this.setPage( 'upload' );
+					if ( userInfo.rights.indexOf( 'upload' ) === -1 ) {
+						if ( !mw.user.isNamed() ) {
+							this.getPage( 'upload' ).$element.msg( 'apierror-mustbeloggedin', mw.msg( 'action-upload' ) );
+						} else {
+							this.getPage( 'upload' ).$element.msg( 'apierror-permissiondenied', mw.msg( 'action-upload' ) );
 						}
-						return $.Deferred().resolve();
-					},
-					// Always resolve, never reject
-					function () {
-						booklet.setPage( 'upload' );
-						return $.Deferred().resolve();
 					}
-				);
-			},
-			function ( errorMsg ) {
-				booklet.setPage( 'upload' );
+					return $.Deferred().resolve();
+				},
+				// Always resolve, never reject
+				() => {
+					this.setPage( 'upload' );
+					return $.Deferred().resolve();
+				}
+			),
+			( errorMsg ) => {
+				this.setPage( 'upload' );
 				// eslint-disable-next-line mediawiki/msg-doc
-				booklet.getPage( 'upload' ).$element.msg( errorMsg );
+				this.getPage( 'upload' ).$element.msg( errorMsg );
 				return $.Deferred().resolve();
 			}
 		);
 	};
 
 	/**
-	 * Create a new upload model
+	 * Create a new upload model.
 	 *
 	 * @protected
 	 * @return {mw.Upload} Upload model
@@ -231,18 +235,17 @@
 
 	/**
 	 * Uploads the file that was added in the upload form. Uses
-	 * {@link #getFile getFile} to get the HTML5
+	 * {@link mw.Upload.BookletLayout#getFile getFile} to get the HTML5
 	 * file object.
 	 *
 	 * @protected
-	 * @fires fileUploadProgress
-	 * @fires fileUploaded
+	 * @fires mw.Upload.BookletLayout.fileUploadProgress
+	 * @fires mw.Upload.BookletLayout.fileUploaded
 	 * @return {jQuery.Promise}
 	 */
 	mw.Upload.BookletLayout.prototype.uploadFile = function () {
-		var deferred = $.Deferred(),
+		const deferred = $.Deferred(),
 			startTime = mw.now(),
-			layout = this,
 			file = this.getFile();
 
 		this.setPage( 'info' );
@@ -267,24 +270,24 @@
 		this.upload.setFilename( this.getFilename() );
 
 		this.uploadPromise = this.upload.uploadToStash();
-		this.uploadPromise.then( function () {
+		this.uploadPromise.then( () => {
 			deferred.resolve();
-			layout.emit( 'fileUploaded' );
-		}, function () {
+			this.emit( 'fileUploaded' );
+		}, () => {
 			// These errors will be thrown while the user is on the info page.
-			layout.getErrorMessageForStateDetails().then( function ( errorMessage ) {
+			this.getErrorMessageForStateDetails().then( ( errorMessage ) => {
 				deferred.reject( errorMessage );
 			} );
-		}, function ( progress ) {
-			var elapsedTime = mw.now() - startTime,
+		}, ( progress ) => {
+			const elapsedTime = mw.now() - startTime,
 				estimatedTotalTime = ( 1 / progress ) * elapsedTime,
 				estimatedRemainingTime = moment.duration( estimatedTotalTime - elapsedTime );
-			layout.emit( 'fileUploadProgress', progress, estimatedRemainingTime );
+			this.emit( 'fileUploadProgress', progress, estimatedRemainingTime );
 		} );
 
 		// If there is an error in uploading, come back to the upload page
-		deferred.fail( function () {
-			layout.setPage( 'upload' );
+		deferred.fail( () => {
+			this.setPage( 'upload' );
 		} );
 
 		return deferred;
@@ -292,35 +295,32 @@
 
 	/**
 	 * Saves the stash finalizes upload. Uses
-	 * {@link #getFilename getFilename}, and
-	 * {@link #getText getText} to get details from
+	 * {@link mw.Upload.BookletLayout#getFilename getFilename}, and
+	 * {@link mw.Upload.BookletLayout#getText getText} to get details from
 	 * the form.
 	 *
 	 * @protected
-	 * @fires fileSaved
+	 * @fires mw.Upload.BookletLayout.fileSaved
 	 * @return {jQuery.Promise} Rejects the promise with an
 	 * {@link OO.ui.Error error}, or resolves if the upload was successful.
 	 */
 	mw.Upload.BookletLayout.prototype.saveFile = function () {
-		var layout = this,
-			deferred = $.Deferred();
+		const deferred = $.Deferred();
 
 		this.upload.setFilename( this.getFilename() );
 		this.upload.setText( this.getText() );
 
-		this.uploadPromise.then( function () {
-			layout.upload.finishStashUpload().then( function () {
-				var name;
-
+		this.uploadPromise.then( () => {
+			this.upload.finishStashUpload().then( () => {
 				// Normalize page name and localise the 'File:' prefix
-				name = new mw.Title( 'File:' + layout.upload.getFilename() ).toString();
-				layout.filenameUsageWidget.setValue( '[[' + name + ']]' );
-				layout.setPage( 'insert' );
+				const name = new mw.Title( 'File:' + this.upload.getFilename() ).toString();
+				this.filenameUsageWidget.setValue( '[[' + name + ']]' );
+				this.setPage( 'insert' );
 
 				deferred.resolve();
-				layout.emit( 'fileSaved', layout.upload.getImageInfo() );
-			}, function () {
-				layout.getErrorMessageForStateDetails().then( function ( errorMessage ) {
+				this.emit( 'fileSaved', this.upload.getImageInfo() );
+			}, () => {
+				this.getErrorMessageForStateDetails().then( ( errorMessage ) => {
 					deferred.reject( errorMessage );
 				} );
 			} );
@@ -334,17 +334,16 @@
 	 * state and state details.
 	 *
 	 * @protected
-	 * @return {jQuery.Promise} A Promise that will be resolved with an OO.ui.Error.
+	 * @return {jQuery.Promise|undefined} A Promise that will be resolved with an OO.ui.Error.
 	 */
 	mw.Upload.BookletLayout.prototype.getErrorMessageForStateDetails = function () {
-		var state = this.upload.getState(),
+		const state = this.upload.getState(),
 			stateDetails = this.upload.getStateDetails(),
 			warnings = stateDetails.upload && stateDetails.upload.warnings,
-			$ul = $( '<ul>' ),
-			$error;
+			$ul = $( '<ul>' );
 
 		if ( state === mw.Upload.State.ERROR ) {
-			$error = ( new mw.Api() ).getErrorMessage( stateDetails );
+			const $error = ( new mw.Api() ).getErrorMessage( stateDetails );
 
 			return $.Deferred().resolve( new OO.ui.Error(
 				$error,
@@ -372,8 +371,8 @@
 					{ recoverable: false }
 				) );
 			} else if ( Array.isArray( warnings.duplicate ) ) {
-				warnings.duplicate.forEach( function ( filename ) {
-					var $a = $( '<a>' ).text( filename ),
+				warnings.duplicate.forEach( ( filename ) => {
+					const $a = $( '<a>' ).text( filename ),
 						href = mw.Title.makeTitle( mw.config.get( 'wgNamespaceIds' ).file, filename ).getUrl( {} );
 
 					$a.attr( { href: href, target: '_blank' } );
@@ -425,26 +424,22 @@
 
 	/**
 	 * Renders and returns the upload form and sets the
-	 * {@link #uploadForm uploadForm} property.
+	 * {@link mw.Upload.BookletLayout#uploadForm uploadForm} property.
 	 *
 	 * @protected
-	 * @fires selectFile
 	 * @return {OO.ui.FormLayout}
 	 */
 	mw.Upload.BookletLayout.prototype.renderUploadForm = function () {
-		var fieldset,
-			layout = this;
-
 		this.selectFileWidget = this.getFileWidget();
-		fieldset = new OO.ui.FieldsetLayout();
+		const fieldset = new OO.ui.FieldsetLayout();
 		fieldset.addItems( [ this.selectFileWidget ] );
 		this.uploadForm = new OO.ui.FormLayout( { items: [ fieldset ] } );
 
 		// Validation (if the SFW is for a stashed file, this never fires)
 		this.selectFileWidget.on( 'change', this.onUploadFormChange.bind( this ) );
 
-		this.selectFileWidget.on( 'change', function () {
-			layout.updateFilePreview();
+		this.selectFileWidget.on( 'change', () => {
+			this.updateFilePreview();
 		} );
 
 		return this.uploadForm;
@@ -453,7 +448,7 @@
 	/**
 	 * Gets the widget for displaying or inputting the file to upload.
 	 *
-	 * @return {OO.ui.SelectFileWidget|mw.widgets.StashedFileWidget}
+	 * @return {OO.ui.SelectFileInputWidget|mw.widgets.StashedFileWidget}
 	 */
 	mw.Upload.BookletLayout.prototype.getFileWidget = function () {
 		if ( this.filekey ) {
@@ -462,7 +457,7 @@
 			} );
 		}
 
-		return new OO.ui.SelectFileWidget( {
+		return new OO.ui.SelectFileInputWidget( {
 			showDropTarget: true
 		} );
 	};
@@ -473,11 +468,11 @@
 	 * @protected
 	 */
 	mw.Upload.BookletLayout.prototype.updateFilePreview = function () {
-		this.selectFileWidget.loadAndGetImageUrl().done( function ( url ) {
+		this.selectFileWidget.loadAndGetImageUrl().done( ( url ) => {
 			this.filePreview.$element.find( 'p' ).remove();
 			this.filePreview.$element.css( 'background-image', 'url(' + url + ')' );
 			this.infoForm.$element.addClass( 'mw-upload-bookletLayout-hasThumbnail' );
-		}.bind( this ) ).fail( function () {
+		} ).fail( () => {
 			this.filePreview.$element.find( 'p' ).remove();
 			if ( this.selectFileWidget.getValue() ) {
 				this.filePreview.$element.append(
@@ -486,14 +481,14 @@
 			}
 			this.filePreview.$element.css( 'background-image', '' );
 			this.infoForm.$element.removeClass( 'mw-upload-bookletLayout-hasThumbnail' );
-		}.bind( this ) );
+		} );
 	};
 
 	/**
-	 * Handle change events to the upload form
+	 * Handle change events to the upload form.
 	 *
 	 * @protected
-	 * @fires uploadValid
+	 * @fires mw.Upload.BookletLayout.uploadValid
 	 */
 	mw.Upload.BookletLayout.prototype.onUploadFormChange = function () {
 		this.emit( 'uploadValid', !!this.selectFileWidget.getValue() );
@@ -501,15 +496,13 @@
 
 	/**
 	 * Renders and returns the information form for collecting
-	 * metadata and sets the {@link #infoForm infoForm}
+	 * metadata and sets the {@link mw.Upload.BookletLayout#infoForm infoForm}
 	 * property.
 	 *
 	 * @protected
 	 * @return {OO.ui.FormLayout}
 	 */
 	mw.Upload.BookletLayout.prototype.renderInfoForm = function () {
-		var fieldset;
-
 		this.filePreview = new OO.ui.Widget( {
 			classes: [ 'mw-upload-bookletLayout-filePreview' ]
 		} );
@@ -530,7 +523,7 @@
 			autosize: true
 		} );
 
-		fieldset = new OO.ui.FieldsetLayout( {
+		const fieldset = new OO.ui.FieldsetLayout( {
 			label: mw.msg( 'upload-form-label-infoform-title' )
 		} );
 		fieldset.addItems( [
@@ -550,9 +543,9 @@
 			items: [ this.filePreview, fieldset ]
 		} );
 
-		this.on( 'fileUploadProgress', function ( progress ) {
+		this.on( 'fileUploadProgress', ( progress ) => {
 			this.progressBarWidget.setProgress( progress * 100 );
-		}.bind( this ) );
+		} );
 
 		this.filenameWidget.on( 'change', this.onInfoFormChange.bind( this ) );
 		this.descriptionWidget.on( 'change', this.onInfoFormChange.bind( this ) );
@@ -561,35 +554,32 @@
 	};
 
 	/**
-	 * Handle change events to the info form
+	 * Handle change events to the info form.
 	 *
 	 * @protected
-	 * @fires infoValid
+	 * @fires mw.Upload.BookletLayout.infoValid
 	 */
 	mw.Upload.BookletLayout.prototype.onInfoFormChange = function () {
-		var layout = this;
 		$.when(
 			this.filenameWidget.getValidity(),
 			this.descriptionWidget.getValidity()
-		).done( function () {
-			layout.emit( 'infoValid', true );
-		} ).fail( function () {
-			layout.emit( 'infoValid', false );
+		).done( () => {
+			this.emit( 'infoValid', true );
+		} ).fail( () => {
+			this.emit( 'infoValid', false );
 		} );
 	};
 
 	/**
 	 * Renders and returns the insert form to show file usage and
-	 * sets the {@link #insertForm insertForm} property.
+	 * sets the {@link mw.Upload.BookletLayout#insertForm insertForm} property.
 	 *
 	 * @protected
 	 * @return {OO.ui.FormLayout}
 	 */
 	mw.Upload.BookletLayout.prototype.renderInsertForm = function () {
-		var fieldset;
-
 		this.filenameUsageWidget = new OO.ui.TextInputWidget();
-		fieldset = new OO.ui.FieldsetLayout( {
+		const fieldset = new OO.ui.FieldsetLayout( {
 			label: mw.msg( 'upload-form-label-usage-title' )
 		} );
 		fieldset.addItems( [
@@ -607,7 +597,7 @@
 
 	/**
 	 * Gets the file object from the
-	 * {@link #uploadForm upload form}.
+	 * {@link mw.Upload.BookletLayout#uploadForm upload form}.
 	 *
 	 * @protected
 	 * @return {File|null}
@@ -618,13 +608,13 @@
 
 	/**
 	 * Gets the file name from the
-	 * {@link #infoForm information form}.
+	 * {@link mw.Upload.BookletLayout#infoForm information form}.
 	 *
 	 * @protected
 	 * @return {string}
 	 */
 	mw.Upload.BookletLayout.prototype.getFilename = function () {
-		var filename = this.filenameWidget.getValue();
+		let filename = this.filenameWidget.getValue();
 		if ( this.filenameExtension ) {
 			filename += '.' + this.filenameExtension;
 		}
@@ -632,13 +622,13 @@
 	};
 
 	/**
-	 * Prefills the {@link #infoForm information form} with the given filename.
+	 * Prefills the {@link mw.Upload.BookletLayout#infoForm information form} with the given filename.
 	 *
 	 * @protected
 	 * @param {string} filename
 	 */
 	mw.Upload.BookletLayout.prototype.setFilename = function ( filename ) {
-		var title = mw.Title.newFromFileName( filename );
+		const title = mw.Title.newFromFileName( filename );
 
 		if ( title ) {
 			this.filenameWidget.setValue( title.getNameText() );
@@ -652,7 +642,7 @@
 
 	/**
 	 * Gets the page text from the
-	 * {@link #infoForm information form}.
+	 * {@link mw.Upload.BookletLayout#infoForm information form}.
 	 *
 	 * @protected
 	 * @return {string}
@@ -664,7 +654,7 @@
 	/* Setters */
 
 	/**
-	 * Sets the file object
+	 * Sets the file object.
 	 *
 	 * @protected
 	 * @param {File|null} file File to select
@@ -688,7 +678,7 @@
 	};
 
 	/**
-	 * Clear the values of all fields
+	 * Clear the values of all fields.
 	 *
 	 * @protected
 	 */

@@ -4,21 +4,18 @@ namespace MediaWiki\Search\SearchWidgets;
 
 use ISearchResultSet;
 use MediaWiki\MediaWikiServices;
-use Message;
-use SpecialSearch;
-use Status;
+use MediaWiki\Message\Message;
+use MediaWiki\Specials\SpecialSearch;
+use MediaWiki\Status\Status;
 
 /**
  * Renders the search result area. Handles Title and Full-Text search results,
  * along with inline and sidebar secondary (interwiki) results.
  */
 class BasicSearchResultSetWidget {
-	/** @var SpecialSearch */
-	protected $specialPage;
-	/** @var SearchResultWidget */
-	protected $resultWidget;
-	/** @var InterwikiSearchResultSetWidget */
-	protected $sidebarWidget;
+	protected SpecialSearch $specialPage;
+	protected SearchResultWidget $resultWidget;
+	protected SearchResultSetWidget $sidebarWidget;
 
 	public function __construct(
 		SpecialSearch $specialPage,
@@ -40,8 +37,8 @@ class BasicSearchResultSetWidget {
 	public function render(
 		$term,
 		$offset,
-		ISearchResultSet $titleResultSet = null,
-		ISearchResultSet $textResultSet = null
+		?ISearchResultSet $titleResultSet = null,
+		?ISearchResultSet $textResultSet = null
 	) {
 		$hasTitle = $titleResultSet && $titleResultSet->numRows() > 0;
 		$hasText = $textResultSet && $textResultSet->numRows() > 0;

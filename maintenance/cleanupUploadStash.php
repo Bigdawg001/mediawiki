@@ -26,9 +26,11 @@
  */
 
 use MediaWiki\MainConfigNames;
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Maintenance\Maintenance;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script to remove old or broken uploads from temporary uploaded
@@ -45,7 +47,7 @@ class CleanupUploadStash extends Maintenance {
 	}
 
 	public function execute() {
-		$repo = MediaWikiServices::getInstance()->getRepoGroup()->getLocalRepo();
+		$repo = $this->getServiceContainer()->getRepoGroup()->getLocalRepo();
 		$tempRepo = $repo->getTempRepo();
 
 		$dbr = $repo->getReplicaDB();
@@ -57,7 +59,7 @@ class CleanupUploadStash extends Maintenance {
 		$res = $dbr->newSelectQueryBuilder()
 			->select( 'us_key' )
 			->from( 'uploadstash' )
-			->where( 'us_timestamp < ' . $dbr->addQuotes( $dbr->timestamp( $cutoff ) ) )
+			->where( $dbr->expr( 'us_timestamp', '<', $dbr->timestamp( $cutoff ) ) )
 			->caller( __METHOD__ )
 			->fetchResultSet();
 
@@ -129,7 +131,7 @@ class CleanupUploadStash extends Maintenance {
 		}
 		$this->output( "Deleting orphaned temp files...\n" );
 		if ( strpos( $dir, '/local-temp' ) === false ) {
-			$this->fatalError( "Temp repo is not using the temp container." );
+			$this->output( "Temp repo might be misconfigured. It points to directory: '$dir' \n" );
 		}
 
 		$i = 0;
@@ -155,10 +157,12 @@ class CleanupUploadStash extends Maintenance {
 	protected function doOperations( FileRepo $tempRepo, array $ops ) {
 		$status = $tempRepo->getBackend()->doQuickOperations( $ops );
 		if ( !$status->isOK() ) {
-			$this->error( print_r( Status::wrap( $status )->getErrorsArray(), true ) );
+			$this->error( $status );
 		}
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = CleanupUploadStash::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

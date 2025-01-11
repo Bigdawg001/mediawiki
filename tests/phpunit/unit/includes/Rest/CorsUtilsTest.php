@@ -11,11 +11,12 @@ use MediaWiki\Rest\Response;
 use MediaWiki\Rest\ResponseFactory;
 use MediaWiki\Rest\ResponseInterface;
 use MediaWiki\User\UserIdentityValue;
+use MediaWikiUnitTestCase;
 
 /**
  * @covers \MediaWiki\Rest\CorsUtils
  */
-class CorsUtilsTest extends \MediaWikiUnitTestCase {
+class CorsUtilsTest extends MediaWikiUnitTestCase {
 
 	private function createServiceOptions( array $options = [] ) {
 		$defaults = [
@@ -56,7 +57,7 @@ class CorsUtilsTest extends \MediaWikiUnitTestCase {
 
 		$handler = $this->createMock( Handler::class );
 		$handler->method( 'needsWriteAccess' )
-			->willReturn( false );
+			->willReturn( $needsWriteAccess );
 
 		$result = $cors->authorize(
 			$request,
@@ -320,6 +321,6 @@ class CorsUtilsTest extends \MediaWikiUnitTestCase {
 		$header = $response->getHeader( 'Access-Control-Allow-Headers' );
 		$this->assertContains( 'Authorization', $header );
 		$this->assertContains( 'Content-Type', $header );
-		$this->assertSame( count( $header ), count( array_unique( $header ) ) );
+		$this->assertSameSize( $header, array_unique( $header ) );
 	}
 }

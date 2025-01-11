@@ -38,7 +38,7 @@ class SvgHandlerTest extends MediaWikiMediaTestCase {
 	}
 
 	/**
-	 * @covers SvgHandler::getMatchedLanguage()
+	 * @covers \SvgHandler::getMatchedLanguage()
 	 * @dataProvider provideGetMatchedLanguage
 	 *
 	 * @param string $userPreferredLanguage
@@ -200,14 +200,14 @@ class SvgHandlerTest extends MediaWikiMediaTestCase {
 	}
 
 	/**
-	 * @covers SvgHandler::normaliseParamsInternal()
+	 * @covers \SvgHandler::normaliseParamsInternal()
 	 * @dataProvider provideNormaliseParamsInternal
 	 */
 	public function testNormaliseParamsInternal( $message,
 		$width,
 		$height,
 		array $params,
-		array $paramsExpected = null
+		?array $paramsExpected = null
 	) {
 		$this->overrideConfigValue( MainConfigNames::SVGMaxSize, 1000 );
 
@@ -294,7 +294,10 @@ class SvgHandlerTest extends MediaWikiMediaTestCase {
 	 * @param bool $expected
 	 */
 	public function testIsEnabled( $converter, $expected ) {
-		$this->overrideConfigValue( MainConfigNames::SVGConverter, $converter );
+		$this->overrideConfigValues( [
+			MainConfigNames::SVGConverter => $converter,
+			MainConfigNames::SVGNativeRendering => false,
+		] );
 
 		$handler = new SvgHandler();
 		self::assertEquals( $expected, $handler->isEnabled() );
@@ -356,7 +359,7 @@ class SvgHandlerTest extends MediaWikiMediaTestCase {
 	}
 
 	/**
-	 * @covers SvgHandler::getLanguageFromParams()
+	 * @covers \SvgHandler::getLanguageFromParams()
 	 * @dataProvider provideGetLanguageFromParams
 	 *
 	 * @param array $params
@@ -381,7 +384,7 @@ class SvgHandlerTest extends MediaWikiMediaTestCase {
 	}
 
 	/**
-	 * @covers SvgHandler::parseParamString()
+	 * @covers \SvgHandler::parseParamString()
 	 * @dataProvider provideParseParamString
 	 *
 	 * @param string $paramString
@@ -416,6 +419,39 @@ class SvgHandlerTest extends MediaWikiMediaTestCase {
 				[ 'width' => '100', 'lang' => 'he-il-u-ca-hebrew-tz-jeruslm' ],
 				'Very complex IETF language code'
 			],
+		];
+	}
+
+	/**
+	 * @covers \SvgHandler::allowRenderingByUserAgent()
+	 * @dataProvider provideNativeSVGDataRendering
+	 *
+	 * @param string $filename of the file to test
+	 * @param bool $svgEnabled value of MainConfigNames::SVGNativeRendering
+	 * @param int $filesizeLimit value of MainConfigNames::SVGNativeRenderingSizeLimit
+	 * @param bool $expected if the SVG is expected to be rendered natively by browser agent
+	 * @return void
+	 */
+	public function testNativeSVGDataRendering( $filename, $svgEnabled, $filesizeLimit, $expected ) {
+		$this->filePath = __DIR__ . '/../../data/media/';
+		$this->overrideConfigValues( [
+			MainConfigNames::SVGNativeRendering => $svgEnabled,
+			MainConfigNames::SVGNativeRenderingSizeLimit => $filesizeLimit,
+		] );
+
+		$file = $this->dataFile( $filename, 'image/svg+xml' );
+		$handler = new SvgHandler();
+		self::assertEquals( $expected, $handler->allowRenderingByUserAgent( $file ) );
+	}
+
+	public static function provideNativeSVGDataRendering() {
+		return [
+			[ 'Tux.svg', false, 50 * 1024, false, 'SVG without Native rendering enabled' ],
+			[ 'Tux.svg', true, 50 * 1024, true, 'SVG with Native rendering enforced' ],
+			[ 'Tux.svg', true, 1, true, 'SVG with Native rendering enforced ignoring filesize limit' ],
+			[ 'Tux.svg', 'partial', 223250, true, 'SVG with partial Native rendering' ],
+			[ 'Tux.svg', 'partial', 1, false, 'SVG with partial Native rendering, where filesize is bigger than the limit' ],
+			[ 'translated.svg', 'partial', null, false, 'SVG with translations should not be left to native rendering' ],
 		];
 	}
 }

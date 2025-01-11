@@ -4,15 +4,14 @@ namespace MediaWiki\Search\SearchWidgets;
 
 use ISearchResultSet;
 use MediaWiki\Html\Html;
-use SpecialSearch;
+use MediaWiki\Specials\SpecialSearch;
 
 /**
  * Renders a suggested search for the user, or tells the user
  * a suggested search was run instead of the one provided.
  */
 class DidYouMeanWidget {
-	/** @var SpecialSearch */
-	protected $specialSearch;
+	protected SpecialSearch $specialSearch;
 
 	public function __construct( SpecialSearch $specialSearch ) {
 		$this->specialSearch = $specialSearch;

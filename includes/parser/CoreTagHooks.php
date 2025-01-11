@@ -21,10 +21,15 @@
  * @ingroup Parser
  */
 
+namespace MediaWiki\Parser;
+
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Html\Html;
+use MediaWiki\Language\LanguageCode;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use StringUtils;
+use UnexpectedValueException;
 
 /**
  * Various tag hooks, registered in every Parser
@@ -45,7 +50,6 @@ class CoreTagHooks {
 	 * @param ServiceOptions $options
 	 *
 	 * @return void
-	 * @throws MWException
 	 * @internal
 	 */
 	public static function register( Parser $parser, ServiceOptions $options ) {
@@ -84,7 +88,6 @@ class CoreTagHooks {
 			[ '&gt;', '&lt;' ],
 			$content
 		);
-		// @phan-suppress-next-line SecurityCheck-XSS Ad-hoc escaping above.
 		return Html::rawElement( 'pre', $attribs, $content );
 	}
 
@@ -101,7 +104,6 @@ class CoreTagHooks {
 	 * @param ?string $content
 	 * @param array $attributes
 	 * @param Parser $parser
-	 * @throws MWException
 	 * @return array|string Output of tag hook
 	 * @internal
 	 */
@@ -123,7 +125,7 @@ class CoreTagHooks {
 				);
 			}
 		} else {
-			throw new MWException( '<html> extension tag encountered unexpectedly' );
+			throw new UnexpectedValueException( '<html> extension tag encountered unexpectedly' );
 		}
 	}
 
@@ -253,3 +255,6 @@ class CoreTagHooks {
 	}
 
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( CoreTagHooks::class, 'CoreTagHooks' );

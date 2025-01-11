@@ -1,7 +1,6 @@
 <?php
+
 /**
- * Core installer command line interface.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -21,8 +20,17 @@
  * @ingroup Installer
  */
 
-use MediaWiki\Installer\InstallException;
+namespace MediaWiki\Installer;
+
+use MediaWiki\Context\RequestContext;
+use MediaWiki\Installer\Task\Task;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
+use MediaWiki\Parser\Sanitizer;
+use MediaWiki\Password\UserPasswordPolicy;
+use MediaWiki\Status\Status;
+use MediaWiki\User\User;
+use Wikimedia\Message\MessageSpecifier;
 
 /**
  * Class for the core installer command line interface.
@@ -31,9 +39,10 @@ use MediaWiki\MediaWikiServices;
  * @since 1.17
  */
 class CliInstaller extends Installer {
+	/** @var bool */
 	private $specifiedScriptPath = false;
 
-	private $optionMap = [
+	private const OPTION_MAP = [
 		'dbtype' => 'wgDBtype',
 		'dbserver' => 'wgDBserver',
 		'dbname' => 'wgDBname',
@@ -42,6 +51,7 @@ class CliInstaller extends Installer {
 		'dbprefix' => 'wgDBprefix',
 		'dbtableoptions' => 'wgDBTableOptions',
 		'dbport' => 'wgDBport',
+		'dbssl' => 'wgDBssl',
 		'dbschema' => 'wgDBmwschema',
 		'dbpath' => 'wgSQLiteDataDir',
 		'server' => 'wgServer',
@@ -63,7 +73,7 @@ class CliInstaller extends Installer {
 			$this->specifiedScriptPath = true;
 		}
 
-		foreach ( $this->optionMap as $opt => $global ) {
+		foreach ( self::OPTION_MAP as $opt => $global ) {
 			if ( isset( $options[$opt] ) ) {
 				$GLOBALS[$global] = $options[$opt];
 				$this->setVar( $global, $options[$opt] );
@@ -161,6 +171,8 @@ class CliInstaller extends Installer {
 			$skinNames = array_map( 'strtolower', $skins );
 			$this->setVar( 'wgDefaultSkin', $this->getDefaultSkin( $skinNames ) );
 		}
+
+		$this->setVar( '_WithDevelopmentSettings', isset( $options['with-developmentsettings'] ) );
 	}
 
 	private function validateExtensions( $type, $directory, $nameLists ) {
@@ -206,17 +218,14 @@ class CliInstaller extends Installer {
 			return $status;
 		}
 
-		$result = $this->performInstallation(
+		$status = $this->performInstallation(
 			[ $this, 'startStage' ],
 			[ $this, 'endStage' ]
 		);
-		// PerformInstallation bails on a fatal, so make sure the last item
-		// completed before giving 'next.' Likewise, only provide back on failure
-		$lastStepStatus = end( $result );
-		if ( $lastStepStatus->isOK() ) {
+		if ( $status->isOK() ) {
 			return Status::newGood();
 		} else {
-			return $lastStepStatus;
+			return $status;
 		}
 	}
 
@@ -230,14 +239,19 @@ class CliInstaller extends Installer {
 		$ls->writeFile( "$path/LocalSettings.php" );
 	}
 
-	public function startStage( $step ) {
-		// Messages: config-install-database, config-install-tables, config-install-interwiki,
-		// config-install-stats, config-install-keys, config-install-sysop, config-install-mainpage,
-		// config-install-extensions
-		$this->showMessage( "config-install-$step" );
+	/**
+	 * @param Task $task
+	 */
+	public function startStage( $task ) {
+		// @phan-suppress-next-line SecurityCheck-XSS -- it's CLI
+		echo $this->formatMessage( $task->getDescriptionMessage() ) . '... ';
 	}
 
-	public function endStage( $step, $status ) {
+	/**
+	 * @param Task $task
+	 * @param Status $status
+	 */
+	public function endStage( $task, $status ) {
 		$this->showStatusMessage( $status );
 		if ( $status->isOK() ) {
 			$this->showMessage( 'config-install-step-done' );
@@ -259,35 +273,31 @@ class CliInstaller extends Installer {
 	}
 
 	/**
-	 * @param string $msg
-	 * @param array $params
-	 *
+	 * @param string|MessageSpecifier $msg
+	 * @param (string|int|float)[] $params Message parameters
 	 * @return string
 	 */
 	protected function getMessageText( $msg, $params ) {
-		$text = wfMessage( $msg, $params )->parse();
-
-		$text = preg_replace( '/<a href="(.*?)".*?>(.*?)<\/a>/', '$2 &lt;$1&gt;', $text );
-
-		return Sanitizer::stripAllTags( $text );
+		return $this->formatMessage( wfMessage( $msg, $params ) );
 	}
 
 	/**
-	 * Dummy
-	 * @param string $msg Key for wfMessage()
-	 * @param mixed ...$params
+	 * @param Message $message
+	 * @return string
 	 */
-	public function showHelpBox( $msg, ...$params ) {
+	protected function formatMessage( $message ) {
+		$text = $message->parse();
+		$text = preg_replace( '/<a href="(.*?)".*?>(.*?)<\/a>/', '$2 &lt;$1&gt;', $text );
+		return Sanitizer::stripAllTags( $text );
 	}
 
 	public function showStatusMessage( Status $status ) {
-		$warnings = array_merge( $status->getWarningsArray(),
-			$status->getErrorsArray() );
-
-		if ( count( $warnings ) !== 0 ) {
-			foreach ( $warnings as $w ) {
-				$this->showMessage( ...$w );
-			}
+		// Show errors at the end in CLI installer to make them easier to notice
+		foreach ( $status->getMessages( 'warning' ) as $msg ) {
+			$this->showMessage( $msg );
+		}
+		foreach ( $status->getMessages( 'error' ) as $msg ) {
+			$this->showMessage( $msg );
 		}
 	}
 

@@ -33,17 +33,10 @@ use StatusValue;
  */
 class SimpleAntiSpamConstraint implements IEditConstraint {
 
-	/** @var LoggerInterface */
-	private $logger;
-
-	/** @var string */
-	private $input;
-
-	/** @var UserIdentity */
-	private $user;
-
-	/** @var Title */
-	private $title;
+	private LoggerInterface $logger;
+	private string $input;
+	private UserIdentity $user;
+	private Title $title;
 
 	/**
 	 * @param LoggerInterface $logger for logging hits
@@ -81,7 +74,7 @@ class SimpleAntiSpamConstraint implements IEditConstraint {
 	public function getLegacyStatus(): StatusValue {
 		$statusValue = StatusValue::newGood();
 		if ( $this->input !== '' ) {
-			$statusValue->fatal( 'spamprotectionmatch', false );
+			$statusValue->fatal( 'spamprotectionmatch', '' );
 			$statusValue->value = self::AS_SPAM_ERROR;
 		}
 		return $statusValue;

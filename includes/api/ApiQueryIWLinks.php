@@ -23,7 +23,10 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
 use MediaWiki\Title\Title;
+use MediaWiki\Utils\UrlUtils;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\ParamValidator\TypeDef\IntegerDef;
 
@@ -34,8 +37,12 @@ use Wikimedia\ParamValidator\TypeDef\IntegerDef;
  */
 class ApiQueryIWLinks extends ApiQueryBase {
 
-	public function __construct( ApiQuery $query, $moduleName ) {
+	private UrlUtils $urlUtils;
+
+	public function __construct( ApiQuery $query, string $moduleName, UrlUtils $urlUtils ) {
 		parent::__construct( $query, $moduleName, 'iw' );
+
+		$this->urlUtils = $urlUtils;
 	}
 
 	public function execute() {
@@ -128,7 +135,7 @@ class ApiQueryIWLinks extends ApiQueryBase {
 			if ( isset( $prop['url'] ) ) {
 				$title = Title::newFromText( "{$row->iwl_prefix}:{$row->iwl_title}" );
 				if ( $title ) {
-					$entry['url'] = wfExpandUrl( $title->getFullURL(), PROTO_CURRENT );
+					$entry['url'] = (string)$this->urlUtils->expand( $title->getFullURL(), PROTO_CURRENT );
 				}
 			}
 
@@ -184,8 +191,11 @@ class ApiQueryIWLinks extends ApiQueryBase {
 	}
 
 	protected function getExamplesMessages() {
+		$title = Title::newMainPage()->getPrefixedText();
+		$mp = rawurlencode( $title );
+
 		return [
-			'action=query&prop=iwlinks&titles=Main%20Page'
+			"action=query&prop=iwlinks&titles={$mp}"
 				=> 'apihelp-query+iwlinks-example-simple',
 		];
 	}
@@ -194,3 +204,6 @@ class ApiQueryIWLinks extends ApiQueryBase {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Iwlinks';
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiQueryIWLinks::class, 'ApiQueryIWLinks' );

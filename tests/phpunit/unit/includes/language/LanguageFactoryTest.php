@@ -2,29 +2,27 @@
 
 namespace MediaWiki\Tests\Languages;
 
-use HashConfig;
 use LocalisationCache;
+use MediaWiki\Config\HashConfig;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\Languages\LanguageConverterFactory;
 use MediaWiki\Languages\LanguageFactory;
 use MediaWiki\Languages\LanguageFallback;
 use MediaWiki\Languages\LanguageNameUtils;
+use MediaWiki\Title\NamespaceInfo;
 use MediaWikiUnitTestCase;
-use NamespaceInfo;
 use Wikimedia\Bcp47Code\Bcp47CodeValue;
 
 /**
- * @coversDefaultClass MediaWiki\Languages\LanguageFactory
+ * @group Language
+ * @covers \MediaWiki\Languages\LanguageFactory
  */
 class LanguageFactoryTest extends MediaWikiUnitTestCase {
 	private function createFactory() {
 		$options = new ServiceOptions(
 			LanguageFactory::CONSTRUCTOR_OPTIONS,
-			array_combine(
-				LanguageFactory::CONSTRUCTOR_OPTIONS,
-				array_fill( 0, count( LanguageFactory::CONSTRUCTOR_OPTIONS ), null )
-			)
+			array_fill_keys( LanguageFactory::CONSTRUCTOR_OPTIONS, null )
 		);
 		$languageNameUtils = $this->createMock( LanguageNameUtils::class );
 		$languageNameUtils
@@ -44,7 +42,6 @@ class LanguageFactoryTest extends MediaWikiUnitTestCase {
 	}
 
 	/**
-	 * @covers ::getLanguage()
 	 * @dataProvider provideCodes
 	 * @dataProvider provideDeprecatedCodes
 	 */
@@ -55,7 +52,6 @@ class LanguageFactoryTest extends MediaWikiUnitTestCase {
 	}
 
 	/**
-	 * @covers ::getLanguage()
 	 * @dataProvider provideCodes
 	 */
 	public function testGetLanguageBcp47Code( $code, $bcp47code ) {
@@ -65,9 +61,6 @@ class LanguageFactoryTest extends MediaWikiUnitTestCase {
 		$this->assertSame( $code, $lang->getCode() );
 	}
 
-	/**
-	 * @covers ::getLanguage()
-	 */
 	public function testGetLanguageAmbig() {
 		// At this moment, `egl` is a valid internal code, and should *not*
 		// be remapped.  Its BCP-47 equivalent is also `egl`.

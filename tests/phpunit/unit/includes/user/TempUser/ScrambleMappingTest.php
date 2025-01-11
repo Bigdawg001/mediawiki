@@ -3,12 +3,14 @@
 namespace MediaWiki\Tests\User\TempUser;
 
 use MediaWiki\User\TempUser\ScrambleMapping;
-use PHPUnit\Framework\TestCase;
+use MediaWikiUnitTestCase;
+use OutOfBoundsException;
 
 /**
  * @covers \MediaWiki\User\TempUser\ScrambleMapping
  */
-class ScrambleMappingTest extends TestCase {
+class ScrambleMappingTest extends MediaWikiUnitTestCase {
+
 	public function testMap() {
 		if ( !extension_loaded( 'gmp' ) && !extension_loaded( 'bcmath' ) ) {
 			$this->markTestSkipped( 'need extension gmp or bcmath' );
@@ -30,5 +32,11 @@ class ScrambleMappingTest extends TestCase {
 			$bitArray[$major] = chr( $newBits );
 		}
 		$this->assertSame( 0, $duplicates, 'duplicate detected' );
+	}
+
+	public function testOffsetTooLarge() {
+		$map = new ScrambleMapping( [ 'offset' => 10 ] );
+		$this->expectException( OutOfBoundsException::class );
+		$map->getSerialIdForIndex( 1 );
 	}
 }

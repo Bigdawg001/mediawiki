@@ -3,7 +3,7 @@
 namespace MediaWiki\ParamValidator\TypeDef;
 
 use ChangeTags;
-use MediaWiki\Message\Converter as MessageConverter;
+use MediaWiki\ChangeTags\ChangeTagsStore;
 use Wikimedia\Message\DataMessageValue;
 use Wikimedia\ParamValidator\Callbacks;
 use Wikimedia\ParamValidator\TypeDef\EnumDef;
@@ -22,15 +22,16 @@ use Wikimedia\ParamValidator\ValidationException;
  */
 class TagsDef extends EnumDef {
 
-	/** @var MessageConverter */
-	private $messageConverter;
+	private ChangeTagsStore $changeTagsStore;
 
-	public function __construct( Callbacks $callbacks ) {
+	public function __construct( Callbacks $callbacks, ChangeTagsStore $changeTagsStore ) {
 		parent::__construct( $callbacks );
-		$this->messageConverter = new MessageConverter();
+		$this->changeTagsStore = $changeTagsStore;
 	}
 
 	public function validate( $name, $value, array $settings, array $options ) {
+		$this->failIfNotString( $name, $value, $settings, $options );
+
 		// Validate the full list of tags at once, because the caller will
 		// *probably* stop at the first exception thrown.
 		if ( isset( $options['values-list'] ) ) {
@@ -43,7 +44,7 @@ class TagsDef extends EnumDef {
 		}
 
 		if ( !$tagsStatus->isGood() ) {
-			$msg = $this->messageConverter->convertMessage( $tagsStatus->getMessage() );
+			$msg = $tagsStatus->getMessage();
 			$data = [];
 			if ( $tagsStatus->value ) {
 				// Specific tags are not allowed.
@@ -68,7 +69,7 @@ class TagsDef extends EnumDef {
 	}
 
 	public function getEnumValues( $name, array $settings, array $options ) {
-		return ChangeTags::listExplicitlyDefinedTags();
+		return $this->changeTagsStore->listExplicitlyDefinedTags();
 	}
 
 }

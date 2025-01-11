@@ -3,6 +3,7 @@
 		"authors": [
 			"2nd-player",
 			"Fryed-peach",
+			"Hzy980512",
 			"Likibp",
 			"Marine-Blue",
 			"Ohgi",
@@ -197,7 +198,6 @@
 	"exif-originalimageheight": "トリミングされる前の画像の高さ",
 	"exif-originalimagewidth": "トリミングされる前の画像の幅",
 	"exif-contact-value": "$1\n\n$2\n<div class=\"adr\">\n$3\n\n$4, $5, $6 $7\n</div>\n$8",
-	"exif-subjectnewscode-value": "$2 ($1)",
 	"exif-compression-1": "無圧縮",
 	"exif-compression-2": "CCITT Group 3 1次元修正ハフマン連長符号化",
 	"exif-compression-3": "CCITT Group 3 ファックス符号化",
@@ -398,6 +398,8 @@
 	"exif-urgency-low": "低 ($1)",
 	"exif-urgency-high": "高 ($1)",
 	"exif-urgency-other": "利用者定義の優先度 ($1)",
+	"exif-firstphotodate": "初回撮影日",
+	"exif-lastphotodate": "最後撮影日",
 	"exif-projectiontype": "投影方式",
 	"exif-projectiontype-equirectangular": "正距円筒図法",
 	"exif-usepanoramaviewer": "パノラマビューワーを使用するか",
@@ -406,5 +408,11 @@
 	"exif-exposurelockused": "露出を固定していたか",
 	"exif-exposurelockused-true": "はい",
 	"exif-exposurelockused-false": "いいえ",
+	"exif-poseheadingdegrees": "コンパスの向首方向（度数）",
+	"exif-posepitchdegrees": "ピッチ（度数）",
+	"exif-poserolldegrees": "ロール（度数）",
+	"exif-initialviewheadingdegrees": "初回ビューの向首角（度数）",
+	"exif-initialviewpitchdegrees": "初回ビューのピッチ角（度数）",
+	"exif-initialviewrolldegrees": "初回ビューのロール角（度数）",
 	"exif-stitchingsoftware": "スティッチングソフトウェア"
 }

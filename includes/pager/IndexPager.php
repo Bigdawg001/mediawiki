@@ -18,12 +18,18 @@
  * @file
  */
 
-use MediaWiki\HookContainer\HookContainer;
+namespace MediaWiki\Pager;
+
+use HtmlArmor;
+use MediaWiki\Context\ContextSource;
+use MediaWiki\Context\IContextSource;
 use MediaWiki\Html\Html;
 use MediaWiki\Linker\LinkRenderer;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Navigation\PagerNavigationBuilder;
-use Wikimedia\Rdbms\IDatabase;
+use MediaWiki\Request\WebRequest;
+use stdClass;
+use Wikimedia\Rdbms\IReadableDatabase;
 use Wikimedia\Rdbms\IResultWrapper;
 
 /**
@@ -96,7 +102,7 @@ abstract class IndexPager extends ContextSource implements Pager {
 	public $mLimit;
 	/** @var bool Whether the listing query completed */
 	public $mQueryDone = false;
-	/** @var IDatabase */
+	/** @var IReadableDatabase */
 	public $mDb;
 	/** @var stdClass|bool|null Extra row fetched at the end to see if the end was reached */
 	public $mPastTheEndRow;
@@ -128,7 +134,7 @@ abstract class IndexPager extends ContextSource implements Pager {
 	 *
 	 * Like $mIndexField, $mDefaultDirection will be a single value even if the
 	 * class supports multiple default directions for different order types.
-	 * @var bool
+	 * @var bool|null
 	 */
 	public $mDefaultDirection;
 	/** @var bool */
@@ -145,9 +151,9 @@ abstract class IndexPager extends ContextSource implements Pager {
 	protected $mFirstShown;
 	/** @var array */
 	protected $mPastTheEndIndex;
-	/** @var array */
+	/** @var array|null */
 	protected $mDefaultQuery;
-	/** @var string */
+	/** @var string|null */
 	protected $mNavigationBar;
 
 	/**
@@ -172,7 +178,7 @@ abstract class IndexPager extends ContextSource implements Pager {
 	 * @param IContextSource|null $context
 	 * @param LinkRenderer|null $linkRenderer
 	 */
-	public function __construct( IContextSource $context = null, LinkRenderer $linkRenderer = null ) {
+	public function __construct( ?IContextSource $context = null, ?LinkRenderer $linkRenderer = null ) {
 		if ( $context ) {
 			$this->setContext( $context );
 		}
@@ -194,9 +200,11 @@ abstract class IndexPager extends ContextSource implements Pager {
 				->getLimitOffsetForUser( $this->getUser() );
 		}
 
-		$this->mIsBackwards = ( $this->mRequest->getVal( 'dir' ) == 'prev' );
-		# Let the subclass set the DB here; otherwise use a replica DB for the current wiki
-		$this->mDb = $this->mDb ?: wfGetDB( DB_REPLICA );
+		$this->mIsBackwards = ( $this->mRequest->getRawVal( 'dir' ) === 'prev' );
+		// Let the subclass set the DB here; otherwise use a replica DB for the current wiki
+		if ( !$this->mDb ) {
+			$this->mDb = MediaWikiServices::getInstance()->getConnectionProvider()->getReplicaDatabase();
+		}
 
 		$index = $this->getIndexField(); // column to sort on
 		$extraSort = $this->getExtraSortFields(); // extra columns to sort on for query planning
@@ -229,7 +237,7 @@ abstract class IndexPager extends ContextSource implements Pager {
 			}
 		}
 
-		if ( !isset( $this->mDefaultDirection ) ) {
+		if ( $this->mDefaultDirection === null ) {
 			$dir = $this->getDefaultDirections();
 			$this->mDefaultDirection = is_array( $dir )
 				? $dir[$this->mOrderType]
@@ -243,7 +251,7 @@ abstract class IndexPager extends ContextSource implements Pager {
 	 *
 	 * @since 1.20
 	 *
-	 * @return IDatabase
+	 * @return IReadableDatabase
 	 */
 	public function getDatabase() {
 		return $this->mDb;
@@ -456,7 +464,14 @@ abstract class IndexPager extends ContextSource implements Pager {
 		[ $tables, $fields, $conds, $fname, $options, $join_conds ] =
 			$this->buildQueryInfo( $offset, $limit, $order );
 
-		return $this->mDb->select( $tables, $fields, $conds, $fname, $options, $join_conds );
+		return $this->mDb->newSelectQueryBuilder()
+			->rawTables( $tables )
+			->fields( $fields )
+			->conds( $conds )
+			->caller( $fname )
+			->options( $options )
+			->joinConds( $join_conds )
+			->fetchResultSet();
 	}
 
 	/**
@@ -466,7 +481,7 @@ abstract class IndexPager extends ContextSource implements Pager {
 	 *
 	 * @stable to override
 	 *
-	 * @param int|string $offset Index offset, inclusive
+	 * @param int|string|null $offset Index offset, inclusive
 	 * @param int $limit Exact query limit
 	 * @param bool $order IndexPager::QUERY_ASCENDING or IndexPager::QUERY_DESCENDING
 	 * @return array
@@ -493,7 +508,7 @@ abstract class IndexPager extends ContextSource implements Pager {
 			$options['ORDER BY'] = $orderBy;
 			$operator = $this->mIncludeOffset ? '<=' : '<';
 		}
-		if ( $offset != '' ) {
+		if ( $offset ) {
 			$offsets = explode( '|', $offset, /* Limit to max of indices */ count( $indexColumns ) );
 
 			$conds[] = $this->buildOffsetConds(
@@ -627,7 +642,7 @@ abstract class IndexPager extends ContextSource implements Pager {
 	 *  "title". Valid values (non-exhaustive list): 'first', 'last', 'prev', 'next', 'asc', 'desc'.
 	 * @return string HTML fragment
 	 */
-	protected function makeLink( $text, array $query = null, $type = null ) {
+	protected function makeLink( $text, ?array $query = null, $type = null ) {
 		$attrs = [];
 		if ( $query !== null && in_array( $type, [ 'prev', 'next' ] ) ) {
 			$attrs['rel'] = $type;
@@ -708,7 +723,7 @@ abstract class IndexPager extends ContextSource implements Pager {
 	 * @return array Associative array
 	 */
 	public function getDefaultQuery() {
-		if ( !isset( $this->mDefaultQuery ) ) {
+		if ( $this->mDefaultQuery === null ) {
 			$this->mDefaultQuery = $this->getRequest()->getQueryValues();
 			unset( $this->mDefaultQuery['title'] );
 			unset( $this->mDefaultQuery['dir'] );
@@ -956,14 +971,7 @@ abstract class IndexPager extends ContextSource implements Pager {
 		}
 		return $this->linkRenderer;
 	}
-
-	/**
-	 * @since 1.35 (moved from trait to class in 1.40)
-	 * @deprecated and emits warnings since 1.40 Inject a HookContainer instead
-	 * @return HookContainer
-	 */
-	protected function getHookContainer() {
-		wfDeprecated( __METHOD__, '1.40' );
-		return MediaWikiServices::getInstance()->getHookContainer();
-	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( IndexPager::class, 'IndexPager' );

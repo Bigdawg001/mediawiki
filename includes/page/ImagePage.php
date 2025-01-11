@@ -19,11 +19,15 @@
  */
 
 use MediaWiki\Html\Html;
+use MediaWiki\Language\LanguageCode;
 use MediaWiki\Linker\Linker;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Request\WebRequest;
+use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Title\Title;
-use MediaWiki\Title\TitleArray;
+use MediaWiki\Title\TitleArrayFromResult;
+use MediaWiki\Xml\Xml;
 use Wikimedia\Rdbms\IResultWrapper;
 
 /**
@@ -144,16 +148,12 @@ class ImagePage extends Article {
 
 		# No need to display noarticletext, we use our own message, output in openShowImage()
 		if ( $this->getPage()->getId() ) {
-			# NS_FILE is in the user language, but this section (the actual wikitext)
-			# should be in page content language
-			$pageLang = $this->getTitle()->getPageViewLanguage();
-			$out->addHTML( Xml::openElement( 'div', [ 'id' => 'mw-imagepage-content',
-				'lang' => $pageLang->getHtmlCode(), 'dir' => $pageLang->getDir(),
-				'class' => 'mw-content-' . $pageLang->getDir() ] ) );
-
+			$out->addHTML( Html::openElement( 'div', [ 'id' => 'mw-imagepage-content' ] ) );
+			// NS_FILE pages render mostly in the user language (like special pages),
+			// except the editable wikitext content, which is rendered in the page content
+			// language by the parent class.
 			parent::view();
-
-			$out->addHTML( Xml::closeElement( 'div' ) );
+			$out->addHTML( Html::closeElement( 'div' ) );
 		} else {
 			# Just need to set the right headers
 			$out->setArticleFlag( true );
@@ -219,7 +219,6 @@ class ImagePage extends Article {
 		}
 
 		$out->addModuleStyles( [
-			'filepage', // always show the local local Filepage.css, T31277
 			'mediawiki.action.view.filepage', // Add MediaWiki styles for a file page
 		] );
 	}
@@ -283,7 +282,10 @@ class ImagePage extends Article {
 			);
 		}
 
-		return Html::rawElement( 'ul', [ 'id' => 'filetoc' ], implode( "\n", $r ) );
+		return Html::rawElement( 'ul', [
+			'id' => 'filetoc',
+			'role' => 'navigation'
+		], implode( "\n", $r ) );
 	}
 
 	/**
@@ -330,10 +332,16 @@ class ImagePage extends Article {
 			return null;
 		}
 
-		$requestLanguage =
-			$request->getVal( 'lang',
-				LanguageCode::bcp47( $this->getTitle()->getPageViewLanguage()->getCode() )
-			);
+		$requestLanguage = $request->getVal( 'lang' );
+		if ( $requestLanguage === null ) {
+			// For on File pages about a translatable SVG, decide which
+			// language to render the large thumbnail in (T310445)
+			$services = MediaWikiServices::getInstance();
+			$variantLangCode = $services->getLanguageConverterFactory()
+				->getLanguageConverter( $services->getContentLanguage() )
+				->getPreferredVariant();
+			$requestLanguage = LanguageCode::bcp47( $variantLangCode );
+		}
 		if ( $handler->validateParam( 'lang', $requestLanguage ) ) {
 			return $file->getMatchedLanguage( $requestLanguage );
 		}
@@ -347,11 +355,12 @@ class ImagePage extends Article {
 		$enableUploads = $mainConfig->get( MainConfigNames::EnableUploads );
 		$send404Code = $mainConfig->get( MainConfigNames::Send404Code );
 		$svgMaxSize = $mainConfig->get( MainConfigNames::SVGMaxSize );
+		$enableLegacyMediaDOM = $mainConfig->get( MainConfigNames::ParserEnableLegacyMediaDOM );
 		$this->loadFile();
 		$out = $context->getOutput();
 		$user = $context->getUser();
 		$lang = $context->getLanguage();
-		$dirmark = $lang->getDirMarkEntity();
+		$sitedir = MediaWikiServices::getInstance()->getContentLanguage()->getDir();
 		$request = $context->getRequest();
 
 		if ( $this->displayImg->exists() ) {
@@ -484,13 +493,15 @@ class ImagePage extends Article {
 				if ( $isMulti ) {
 					$linkPrev = $linkNext = '';
 					$count = $this->displayImg->pageCount();
-					$linkRenderer = MediaWikiServices::getInstance()->getLinkRenderer();
+					if ( !$enableLegacyMediaDOM ) {
+						$out->addModules( 'mediawiki.page.media' );
+					}
 
 					if ( $page > 1 ) {
 						$label = $context->msg( 'imgmultipageprev' )->text();
 						// on the client side, this link is generated in ajaxifyPageNavigation()
 						// in the mediawiki.page.image.pagination module
-						$linkPrev = $linkRenderer->makeKnownLink(
+						$linkPrev = $this->linkRenderer->makeKnownLink(
 							$this->getTitle(),
 							$label,
 							[],
@@ -510,7 +521,7 @@ class ImagePage extends Article {
 
 					if ( $page < $count ) {
 						$label = $context->msg( 'imgmultipagenext' )->text();
-						$linkNext = $linkRenderer->makeKnownLink(
+						$linkNext = $this->linkRenderer->makeKnownLink(
 							$this->getTitle(),
 							$label,
 							[],
@@ -546,12 +557,12 @@ class ImagePage extends Article {
 					$out->addHTML(
 						'<div class="mw-filepage-multipage-navigation multipageimagenavbox">' .
 						$linkPrev .
-						Xml::openElement( 'form', $formParams ) .
-						Html::hidden( 'title', $this->getTitle()->getPrefixedDBkey() ) .
-						$context->msg( 'imgmultigoto' )->rawParams( $select )->parse() .
-						$context->msg( 'word-separator' )->escaped() .
-						Xml::submitButton( $context->msg( 'imgmultigo' )->text() ) .
-						Xml::closeElement( 'form' ) .
+						Html::rawElement( 'form', $formParams,
+							Html::hidden( 'title', $this->getTitle()->getPrefixedDBkey() ) .
+							$context->msg( 'imgmultigoto' )->rawParams( $select )->parse() .
+							$context->msg( 'word-separator' )->escaped() .
+							Xml::submitButton( $context->msg( 'imgmultigo' )->text() )
+						) .
 						"$thumbPrevPage\n$thumbNextPage\n$linkNext</div></div>"
 					);
 				}
@@ -590,23 +601,19 @@ class ImagePage extends Article {
 
 			if ( !$this->displayImg->isSafeFile() ) {
 				$warning = $context->msg( 'mediawarning' )->plain();
-				// dirmark is needed here to separate the file name, which
+				// <bdi> is needed here to separate the file name, which
 				// most likely ends in Latin characters, from the description,
 				// which may begin with the file type. In RTL environment
 				// this will get messy.
-				// The dirmark, however, must not be immediately adjacent
-				// to the filename, because it can get copied with it.
-				// See T27277.
-				// phpcs:disable Generic.Files.LineLength
 				$out->wrapWikiTextAsInterface( 'fullMedia', <<<EOT
-<span class="dangerousLink">{$medialink}</span> $dirmark<span class="fileInfo">$longDesc</span>
+<bdi dir="$sitedir"><span class="dangerousLink">$medialink</span></bdi> <span class="fileInfo">$longDesc</span>
 EOT
 				);
 				// phpcs:enable
 				$out->wrapWikiTextAsInterface( 'mediaWarning', $warning );
 			} else {
 				$out->wrapWikiTextAsInterface( 'fullMedia', <<<EOT
-{$medialink} {$dirmark}<span class="fileInfo">$longDesc</span>
+<bdi dir="$sitedir">$medialink</bdi> <span class="fileInfo">$longDesc</span>
 EOT
 				);
 			}
@@ -638,17 +645,17 @@ EOT
 		} else {
 			# Image does not exist
 			if ( !$this->getPage()->getId() ) {
-				$dbr = wfGetDB( DB_REPLICA );
+				$dbr = $this->dbProvider->getReplicaDatabase();
 
 				# No article exists either
 				# Show deletion log to be consistent with normal articles
 				LogEventsList::showLogExtract(
 					$out,
-					[ 'delete', 'move', 'protect' ],
+					[ 'delete', 'move', 'protect', 'merge' ],
 					$this->getTitle()->getPrefixedText(),
 					'',
 					[ 'lim' => 10,
-						'conds' => [ 'log_action != ' . $dbr->addQuotes( 'revision' ) ],
+						'conds' => [ $dbr->expr( 'log_action', '!=', 'revision' ) ],
 						'showIfEmpty' => false,
 						'msgKey' => [ 'moveddeleted-notice' ]
 					]
@@ -809,9 +816,10 @@ EOT
 				$this->getFile() )
 		) {
 			// "Upload a new version of this file" link
-			$ulink = Linker::makeExternalLink(
+			$ulink = $this->linkRenderer->makeExternalLink(
 				$this->getUploadUrl(),
-				$this->getContext()->msg( 'uploadnewversion-linktext' )->text()
+				$this->getContext()->msg( 'uploadnewversion-linktext' ),
+				$this->getTitle()
 			);
 			$attrs = [ 'class' => 'plainlinks', 'id' => 'mw-imagepage-reupload-link' ];
 			$linkPara = Html::rawElement( 'p', $attrs, $ulink );
@@ -844,7 +852,7 @@ EOT
 			MediaWikiServices::getInstance()->getLinkBatchFactory()
 		);
 		$out->addHTML( $pager->getBody() );
-		$out->setPreventClickjacking( $pager->getPreventClickjacking() );
+		$out->getMetadata()->setPreventClickjacking( $pager->getPreventClickjacking() );
 
 		$this->getFile()->resetHistory(); // free db resources
 
@@ -861,15 +869,14 @@ EOT
 	 * @return IResultWrapper
 	 */
 	protected function queryImageLinks( $target, $limit ) {
-		$dbr = wfGetDB( DB_REPLICA );
-
-		return $dbr->select(
-			[ 'imagelinks', 'page' ],
-			[ 'page_namespace', 'page_title', 'il_to' ],
-			[ 'il_to' => $target, 'il_from = page_id' ],
-			__METHOD__,
-			[ 'LIMIT' => $limit + 1, 'ORDER BY' => 'il_from', ]
-		);
+		return $this->dbProvider->getReplicaDatabase()->newSelectQueryBuilder()
+			->select( [ 'page_namespace', 'page_title', 'il_to' ] )
+			->from( 'imagelinks' )
+			->join( 'page', null, 'il_from = page_id' )
+			->where( [ 'il_to' => $target ] )
+			->orderBy( 'il_from' )
+			->limit( $limit + 1 )
+			->caller( __METHOD__ )->fetchResultSet();
 	}
 
 	protected function imageLinks() {
@@ -931,8 +938,6 @@ EOT
 		// Sort the list by namespace:title
 		usort( $rows, [ $this, 'compare' ] );
 
-		$linkRenderer = MediaWikiServices::getInstance()->getLinkRenderer();
-
 		// Create links for every element
 		$currentCount = 0;
 		foreach ( $rows as $element ) {
@@ -941,7 +946,7 @@ EOT
 				break;
 			}
 
-			$link = $linkRenderer->makeKnownLink(
+			$link = $this->linkRenderer->makeKnownLink(
 				Title::makeTitle( $element->page_namespace, $element->page_title ),
 				null,
 				[],
@@ -965,7 +970,7 @@ EOT
 						break;
 					}
 
-					$link2 = $linkRenderer->makeKnownLink(
+					$link2 = $this->linkRenderer->makeKnownLink(
 						Title::makeTitle( $row->page_namespace, $row->page_title ) );
 					$li .= Html::rawElement(
 						'li',
@@ -1015,18 +1020,19 @@ EOT
 		);
 		$out->addHTML( "<ul class='mw-imagepage-duplicates'>\n" );
 
-		$linkRenderer = MediaWikiServices::getInstance()->getLinkRenderer();
-
 		/**
 		 * @var File $file
 		 */
 		foreach ( $dupes as $file ) {
 			$fromSrc = '';
 			if ( $file->isLocal() ) {
-				$link = $linkRenderer->makeKnownLink( $file->getTitle() );
+				$link = $this->linkRenderer->makeKnownLink( $file->getTitle() );
 			} else {
-				$link = Linker::makeExternalLink( $file->getDescriptionUrl(),
-					$file->getTitle()->getPrefixedText() );
+				$link = $this->linkRenderer->makeExternalLink(
+					$file->getDescriptionUrl(),
+					$file->getTitle()->getPrefixedText(),
+					$this->getTitle()
+				);
 				$fromSrc = $this->getContext()->msg(
 					'shared-repo-from',
 					$file->getRepo()->getDisplayName()
@@ -1044,7 +1050,7 @@ EOT
 	 */
 	public function showError( $description ) {
 		$out = $this->getContext()->getOutput();
-		$out->setPageTitle( $this->getContext()->msg( 'internalerror' ) );
+		$out->setPageTitleMsg( $this->getContext()->msg( 'internalerror' ) );
 		$out->setRobotPolicy( 'noindex,nofollow' );
 		$out->setArticleRelated( false );
 		$out->disableClientCache();
@@ -1199,7 +1205,7 @@ EOT
 
 	/**
 	 * @see WikiFilePage::getForeignCategories
-	 * @return TitleArray|Title[]
+	 * @return TitleArrayFromResult
 	 */
 	public function getForeignCategories() {
 		return $this->getPage()->getForeignCategories();

@@ -1,5 +1,7 @@
 <?php
 
+use JsonSchema\Validator;
+use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Request\FauxRequest;
 use MediaWiki\ResourceLoader as RL;
@@ -17,6 +19,7 @@ use Wikimedia\TestingAccessWrapper;
  * @copyright © 2012, Santhosh Thottingal
  *
  * @coversNothing
+ * @group Database
  */
 class ResourcesTest extends MediaWikiIntegrationTestCase {
 
@@ -37,7 +40,7 @@ class ResourcesTest extends MediaWikiIntegrationTestCase {
 	 * exist and are not illegal.
 	 *
 	 * @todo Modules can dynamically choose dependencies based on context. This method
-	 * does not find all such variations. The same applies to testUnsatisfiableDependencies().
+	 * does not find all such variations.
 	 */
 	public function testValidDependencies() {
 		$data = self::getAllModules();
@@ -79,6 +82,30 @@ class ResourcesTest extends MediaWikiIntegrationTestCase {
 		$this->assertEquals( $expectedIllegal, $actualIllegal, 'Dependencies that are not legal' );
 	}
 
+	public function testSchema() {
+		$data = include __DIR__ . '/../../../resources/Resources.php';
+		$schemaPath = __DIR__ . '/../../../docs/extension.schema.v2.json';
+
+		// Replace inline functions with fake callables
+		array_walk_recursive( $data, static function ( &$item, $key ) {
+			if ( $item instanceof Closure ) {
+				$item = 'Test::test';
+			}
+		} );
+		// Convert PHP associative arrays to stdClass objects recursively
+		$data = json_decode( json_encode( $data ) );
+
+		$validator = new Validator;
+		$validator->validate( $data, (object)[ '$ref' => 'file://' . $schemaPath . '#/properties/ResourceModules' ] );
+
+		$this->assertEquals(
+			[],
+			$validator->getErrors(),
+			'Found errors when validating Resources.php against the ResourceModules schema: ' .
+				json_encode( $validator->getErrors(), JSON_PRETTY_PRINT )
+		);
+	}
+
 	/**
 	 * Verify that all specified messages actually exist.
 	 */
@@ -95,63 +122,6 @@ class ResourcesTest extends MediaWikiIntegrationTestCase {
 				);
 			}
 		}
-	}
-
-	/**
-	 * Verify that dependencies of all modules are actually registered in the same client context.
-	 *
-	 * Example:
-	 * - A depends on B. A has targets: mobile, desktop. B has targets: desktop. Therefore the
-	 *   dependency is sometimes unregistered: it's impossible to load module A on mobile.
-	 */
-	public function testUnsatisfiableDependencies() {
-		$data = self::getAllModules();
-
-		/** @var RL\Module $module */
-		$incompatibleTargetNames = [];
-		$targetsErrMsg = '';
-		foreach ( $data['modules'] as $moduleName => $module ) {
-			$depNames = $module->getDependencies( $data['context'] );
-			$moduleTargets = $module->getTargets();
-
-			foreach ( $depNames as $depName ) {
-				$dep = $data['modules'][$depName] ?? null;
-				if ( !$dep ) {
-					// Missing dependencies reported by testMissingDependencies
-					continue;
-				}
-				if ( $moduleTargets === [ 'test' ] ) {
-					// Target filter does not apply under tests, which may include
-					// both mobile-only and desktop-only dependencies.
-					continue;
-				}
-				$targets = $dep->getTargets();
-				foreach ( $moduleTargets as $moduleTarget ) {
-					if ( !in_array( $moduleTarget, $targets ) ) {
-						$incompatibleTargetNames[] = $moduleName;
-						$targetsErrMsg .= "* The module '$moduleName' must not have target '$moduleTarget' "
-								. "because its dependency '$depName' does not have it\n";
-					}
-				}
-			}
-		}
-		$this->assertEquals( [], $incompatibleTargetNames, $targetsErrMsg );
-	}
-
-	/**
-	 * CSSMin::getLocalFileReferences should ignore url(...) expressions
-	 * that have been commented out.
-	 */
-	public function testCommentedLocalFileReferences() {
-		$basepath = __DIR__ . '/../data/css/';
-		$css = file_get_contents( $basepath . 'comments.css' );
-		$files = CSSMin::getLocalFileReferences( $css, $basepath );
-		$expected = [ $basepath . 'not-commented.gif' ];
-		$this->assertSame(
-			$expected,
-			$files,
-			'Url(...) expression in comment should be omitted.'
-		);
 	}
 
 	/**
@@ -224,6 +194,11 @@ class ResourcesTest extends MediaWikiIntegrationTestCase {
 	 * Check all resource files from RL\FileModule modules.
 	 */
 	public function testResourceFiles() {
+		$this->overrideConfigValues( [
+			MainConfigNames::Logo => false,
+			MainConfigNames::Logos => [],
+		] );
+
 		$data = self::getAllModules();
 
 		// See also RL\FileModule::__construct
@@ -233,6 +208,7 @@ class ResourcesTest extends MediaWikiIntegrationTestCase {
 				'scripts',
 				'debugScripts',
 				'styles',
+				'packageFiles',
 			],
 
 			// Collated lists of file paths
@@ -254,6 +230,9 @@ class ResourcesTest extends MediaWikiIntegrationTestCase {
 
 			foreach ( $filePathProps['lists'] as $propName ) {
 				$list = $moduleProxy->$propName;
+				if ( $list === null ) {
+					continue;
+				}
 				foreach ( $list as $key => $value ) {
 					// 'scripts' are numeral arrays.
 					// 'styles' can be numeral or associative.
@@ -282,10 +261,15 @@ class ResourcesTest extends MediaWikiIntegrationTestCase {
 				}
 			}
 
-			foreach ( $files as $file ) {
-				$relativePath = ( $file instanceof RL\FilePath ? $file->getPath() : $file );
+			foreach ( $files as $key => $file ) {
+				$fileInfo = $moduleProxy->expandFileInfo( $data['context'], $file, "files[$key]" );
+				if ( !isset( $fileInfo['filePath'] ) ) {
+					continue;
+				}
+				$relativePath = $fileInfo['filePath']->getPath();
+				$localPath = $fileInfo['filePath']->getLocalPath();
 				$this->assertFileExists(
-					$moduleProxy->getLocalPath( $file ),
+					$localPath,
 					"File '$relativePath' referenced by '$moduleName' must exist."
 				);
 			}
@@ -327,5 +311,41 @@ class ResourcesTest extends MediaWikiIntegrationTestCase {
 				);
 			}
 		}
+	}
+
+	public static function provideRespond() {
+		$services = MediaWikiServices::getInstance();
+		$rl = $services->getResourceLoader();
+		$skinFactory = $services->getSkinFactory();
+		foreach ( array_keys( $skinFactory->getInstalledSkins() ) as $skin ) {
+			foreach ( $rl->getModuleNames() as $moduleName ) {
+				yield [ $moduleName, $skin ];
+			}
+		}
+	}
+
+	/**
+	 * @dataProvider provideRespond
+	 * @param string $moduleName
+	 * @param string $skin
+	 */
+	public function testRespond( $moduleName, $skin ) {
+		$rl = $this->getServiceContainer()->getResourceLoader();
+		$module = $rl->getModule( $moduleName );
+		if ( $module->shouldSkipStructureTest() ) {
+			// Private modules cannot be served from load.php
+			$this->assertTrue( true );
+			return;
+		}
+		// Test only general (scripts) or only=styles responses.
+		$only = $module->getType() === RL\Module::LOAD_STYLES ? 'styles' : null;
+		$context = new RL\Context(
+			$rl,
+			new FauxRequest( [ 'modules' => $moduleName, 'only' => $only, 'skin' => $skin ] )
+		);
+		ob_start();
+		$rl->respond( $context );
+		ob_end_clean();
+		$this->assertSame( [], $rl->getErrors() );
 	}
 }

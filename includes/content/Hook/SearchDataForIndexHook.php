@@ -2,8 +2,8 @@
 
 namespace MediaWiki\Content\Hook;
 
-use ContentHandler;
-use ParserOutput;
+use MediaWiki\Content\ContentHandler;
+use MediaWiki\Parser\ParserOutput;
 use SearchEngine;
 use WikiPage;
 

@@ -3,9 +3,9 @@
 namespace MediaWiki\Tests\Parser\Parsoid;
 
 use Composer\Semver\Semver;
-use JsonContent;
-use Liuggio\StatsdClient\Factory\StatsdDataFactoryInterface;
 use LogicException;
+use MediaWiki\Content\JsonContent;
+use MediaWiki\Content\WikitextContent;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MainConfigSchema;
 use MediaWiki\Page\PageIdentityValue;
@@ -14,12 +14,15 @@ use MediaWiki\Parser\Parsoid\HtmlToContentTransform;
 use MediaWiki\Revision\MutableRevisionRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWikiIntegrationTestCase;
+use Psr\Log\NullLogger;
 use Wikimedia\Parsoid\Core\ClientError;
 use Wikimedia\Parsoid\Core\SelserData;
 use Wikimedia\Parsoid\Parsoid;
 use Wikimedia\Parsoid\Utils\ContentUtils;
+use Wikimedia\Stats\Emitters\NullEmitter;
+use Wikimedia\Stats\StatsCache;
+use Wikimedia\Stats\StatsFactory;
 use Wikimedia\TestingAccessWrapper;
-use WikitextContent;
 
 /**
  * @covers \MediaWiki\Parser\Parsoid\HtmlToContentTransform
@@ -66,14 +69,16 @@ class HtmlToContentTransformTest extends MediaWikiIntegrationTestCase {
 		);
 	}
 
-	private function createHtmlToContentTransformWithOriginalData( $html = '' ) {
+	private function createHtmlToContentTransformWithOriginalData( $html = '', ?array $options = null ) {
 		$transform = $this->createHtmlToContentTransform( $html );
 
-		// Set some options to assert on $transform object.
-		$transform->setOptions( [
+		$options ??= [
 			'contentmodel' => 'wikitext',
 			'offsetType' => 'byte',
-		] );
+		];
+
+		// Set some options to assert on $transform object.
+		$transform->setOptions( $options );
 
 		$this->setOriginalData( $transform );
 
@@ -229,14 +234,44 @@ class HtmlToContentTransformTest extends MediaWikiIntegrationTestCase {
 		$this->assertSame( CONTENT_MODEL_JSON, $transform->getContentModel() );
 	}
 
-	public function testGetContentModel() {
-		$transform = $this->createHtmlToContentTransformWithOriginalData();
+	public function testOptions() {
+		$transform = $this->createHtmlToContentTransformWithOriginalData( '', [] );
+
 		$this->assertSame( 'wikitext', $transform->getContentModel() );
+		$this->assertSame( 'byte', $transform->getOffsetType() );
+
+		$transform->setOptions( [
+			'contentmodel' => 'text',
+			'offsetType' => 'ucs2',
+		] );
+
+		$this->assertSame( 'text', $transform->getContentModel() );
+		$this->assertSame( 'ucs2', $transform->getOffsetType() );
 	}
 
-	public function testGetEnvOpts() {
-		$transform = $this->createHtmlToContentTransformWithOriginalData();
+	/**
+	 * Assert that in case we set only one of the options, the other(s)
+	 * should fall back to their correct defaults.
+	 */
+	public function testOptionsForIndividualDefaults() {
+		$transform = $this->createHtmlToContentTransformWithOriginalData( '', [] );
+
+		$this->assertSame( 'wikitext', $transform->getContentModel() );
 		$this->assertSame( 'byte', $transform->getOffsetType() );
+
+		$transform = $this->createHtmlToContentTransformWithOriginalData( '', [] );
+		// Set only content model
+		$transform->setOptions( [ 'contentmodel' => 'text' ] );
+
+		$this->assertSame( 'text', $transform->getContentModel() );
+		$this->assertSame( 'byte', $transform->getOffsetType() );
+
+		$transform = $this->createHtmlToContentTransformWithOriginalData( '', [] );
+		// Set only offset type
+		$transform->setOptions( [ 'offsetType' => 'ucs2' ] );
+
+		$this->assertSame( 'wikitext', $transform->getContentModel() );
+		$this->assertSame( 'ucs2', $transform->getOffsetType() );
 	}
 
 	private function getTextFromFile( string $name ): string {
@@ -246,6 +281,7 @@ class HtmlToContentTransformTest extends MediaWikiIntegrationTestCase {
 	public function testDowngrade() {
 		$html = $this->getTextFromFile( 'Minimal.html' ); // Uses profile version 2.4.0
 		$transform = $this->createHtmlToContentTransform( $html );
+		$transform->setMetrics( StatsFactory::newNull() );
 
 		$transform->setOriginalSchemaVersion( '999.0.0' );
 		$transform->setOriginalHtml( $html );
@@ -280,13 +316,21 @@ class HtmlToContentTransformTest extends MediaWikiIntegrationTestCase {
 		$html = '<html><body>xyz</body></html>'; // no schema version!
 		$transform = $this->createHtmlToContentTransform( $html );
 
-		$metrics = $this->createNoOpMock( StatsdDataFactoryInterface::class, [ 'increment' ] );
-		$metrics->expects( $this->atLeastOnce() )->method( 'increment' );
-		$transform->setMetrics( $metrics );
+		$statsCache = new StatsCache();
+		$statsFactory = new StatsFactory( $statsCache, new NullEmitter(), new NullLogger() );
+		$transform->setMetrics( $statsFactory );
 
 		// getSchemaVersion should ioncrement the html2wt.original.version.notinline counter
 		// because the input HTML doesn't contain a schema version.
 		$transform->getSchemaVersion();
+		$this->assertCount( 1, $statsCache->getAllMetrics() );
+		$this->assertNotNull(
+			$statsCache->get(
+				'',
+				'html2wt_original_version_total',
+				'Wikimedia\Stats\Metrics\CounterMetric'
+			)->getName()
+		);
 	}
 
 	public function testHtmlSize() {

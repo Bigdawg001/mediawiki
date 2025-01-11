@@ -1,7 +1,5 @@
 <?php
 /**
- * Implements Special:Uncategorizedcategories
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,16 +16,20 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
  */
+
+namespace MediaWiki\Specials;
 
 use MediaWiki\Cache\LinkBatchFactory;
 use MediaWiki\Languages\LanguageConverterFactory;
+use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\Title\Title;
-use Wikimedia\Rdbms\ILoadBalancer;
+use Skin;
+use stdClass;
+use Wikimedia\Rdbms\IConnectionProvider;
 
 /**
- * A special page that lists uncategorized categories
+ * List of uncategorized category pages.
  *
  * @ingroup SpecialPage
  */
@@ -41,19 +43,19 @@ class SpecialUncategorizedCategories extends SpecialUncategorizedPages {
 
 	/**
 	 * @param NamespaceInfo $namespaceInfo
-	 * @param ILoadBalancer $loadBalancer
+	 * @param IConnectionProvider $dbProvider
 	 * @param LinkBatchFactory $linkBatchFactory
 	 * @param LanguageConverterFactory $languageConverterFactory
 	 */
 	public function __construct(
 		NamespaceInfo $namespaceInfo,
-		ILoadBalancer $loadBalancer,
+		IConnectionProvider $dbProvider,
 		LinkBatchFactory $linkBatchFactory,
 		LanguageConverterFactory $languageConverterFactory
 	) {
 		parent::__construct(
 			$namespaceInfo,
-			$loadBalancer,
+			$dbProvider,
 			$linkBatchFactory,
 			$languageConverterFactory
 		);
@@ -94,8 +96,8 @@ class SpecialUncategorizedCategories extends SpecialUncategorizedPages {
 		$query = parent::getQueryInfo();
 		$exceptionList = $this->getExceptionList();
 		if ( $exceptionList ) {
-			$dbr = $this->getDBLoadBalancer()->getConnectionRef( ILoadBalancer::DB_REPLICA );
-			$query['conds'][] = 'page_title not in ( ' . $dbr->makeList( $exceptionList ) . ' )';
+			$dbr = $this->getDatabaseProvider()->getReplicaDatabase();
+			$query['conds'][] = $dbr->expr( 'page_title', '!=', $exceptionList );
 		}
 
 		return $query;
@@ -114,3 +116,9 @@ class SpecialUncategorizedCategories extends SpecialUncategorizedPages {
 		return $this->getLinkRenderer()->makeKnownLink( $title, $text );
 	}
 }
+
+/**
+ * Retain the old class name for backwards compatibility.
+ * @deprecated since 1.41
+ */
+class_alias( SpecialUncategorizedCategories::class, 'SpecialUncategorizedCategories' );

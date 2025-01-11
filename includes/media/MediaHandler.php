@@ -16,10 +16,14 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup Media
  */
 
+use MediaWiki\Context\IContextSource;
+use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Parser\Parser;
+use MediaWiki\Status\Status;
+use Wikimedia\FileBackend\FSFile\FSFile;
 
 /**
  * @defgroup Media Media
@@ -32,7 +36,6 @@ use MediaWiki\MediaWikiServices;
  * Base media handler class
  *
  * @stable to extend
- *
  * @ingroup Media
  */
 abstract class MediaHandler {
@@ -230,7 +233,7 @@ abstract class MediaHandler {
 				$info += [ 'width' => 0, 'height' => 0, 'metadata' => [] ];
 				if ( !is_array( $info['metadata'] ) ) {
 					throw new InvalidArgumentException( 'Media handler ' .
-						static::class . ' returned ' . gettype( $info['metadata'] ) .
+						static::class . ' returned ' . get_debug_type( $info['metadata'] ) .
 						' for metadata, should be array' );
 				}
 				return $info;
@@ -293,7 +296,7 @@ abstract class MediaHandler {
 	 */
 	public static function getMetadataVersion() {
 		$version = [ '2' ]; // core metadata version
-		Hooks::runner()->onGetMetadataVersion( $version );
+		( new HookRunner( MediaWikiServices::getInstance()->getHookContainer() ) )->onGetMetadataVersion( $version );
 
 		return implode( ';', $version );
 	}
@@ -788,7 +791,7 @@ abstract class MediaHandler {
 	 * Note, everything here is passed through the parser later on (!)
 	 */
 	protected static function addMeta( &$array, $visibility, $type, $id, $value, $param = false ) {
-		$msg = wfMessage( "$type-$id", $param );
+		$msg = wfMessage( "$type-$id", (string)$param );
 		if ( $msg->exists() ) {
 			$name = $msg->text();
 		} else {

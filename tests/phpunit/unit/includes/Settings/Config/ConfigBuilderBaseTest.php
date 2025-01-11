@@ -2,11 +2,12 @@
 
 namespace MediaWiki\Tests\Unit\Settings\Config;
 
-use Config;
-use HashConfig;
+use MediaWiki\Config\Config;
+use MediaWiki\Config\HashConfig;
 use MediaWiki\Settings\Config\ConfigBuilder;
 use MediaWiki\Settings\Config\ConfigBuilderBase;
 use MediaWiki\Settings\Config\GlobalConfigBuilder;
+use MediaWikiCoversValidator;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -14,6 +15,7 @@ use PHPUnit\Framework\TestCase;
  */
 class ConfigBuilderBaseTest extends TestCase {
 	use ConfigSinkTestTrait;
+	use MediaWikiCoversValidator;
 
 	/** @var ConfigBuilder */
 	private $builder;

@@ -20,12 +20,25 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
+use ChangesList;
+use LogEventsList;
+use LogFormatterFactory;
+use LogPage;
+use MediaWiki\Cache\GenderCache;
 use MediaWiki\CommentFormatter\CommentFormatter;
 use MediaWiki\CommentStore\CommentStore;
+use MediaWiki\Language\Language;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\ParamValidator\TypeDef\UserDef;
 use MediaWiki\Revision\RevisionRecord;
+use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\Title\Title;
+use MediaWiki\User\TempUser\TempUserConfig;
+use MediaWiki\Watchlist\WatchedItem;
+use MediaWiki\Watchlist\WatchedItemQueryService;
+use RecentChange;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\ParamValidator\TypeDef\IntegerDef;
 
@@ -37,43 +50,26 @@ use Wikimedia\ParamValidator\TypeDef\IntegerDef;
  */
 class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 
-	/** @var CommentStore */
-	private $commentStore;
+	private CommentStore $commentStore;
+	private WatchedItemQueryService $watchedItemQueryService;
+	private Language $contentLanguage;
+	private NamespaceInfo $namespaceInfo;
+	private GenderCache $genderCache;
+	private CommentFormatter $commentFormatter;
+	private TempUserConfig $tempUserConfig;
+	private LogFormatterFactory $logFormatterFactory;
 
-	/** @var WatchedItemQueryService */
-	private $watchedItemQueryService;
-
-	/** @var Language */
-	private $contentLanguage;
-
-	/** @var NamespaceInfo */
-	private $namespaceInfo;
-
-	/** @var GenderCache */
-	private $genderCache;
-
-	/** @var CommentFormatter */
-	private $commentFormatter;
-
-	/**
-	 * @param ApiQuery $query
-	 * @param string $moduleName
-	 * @param CommentStore $commentStore
-	 * @param WatchedItemQueryService $watchedItemQueryService
-	 * @param Language $contentLanguage
-	 * @param NamespaceInfo $namespaceInfo
-	 * @param GenderCache $genderCache
-	 * @param CommentFormatter $commentFormatter
-	 */
 	public function __construct(
 		ApiQuery $query,
-		$moduleName,
+		string $moduleName,
 		CommentStore $commentStore,
 		WatchedItemQueryService $watchedItemQueryService,
 		Language $contentLanguage,
 		NamespaceInfo $namespaceInfo,
 		GenderCache $genderCache,
-		CommentFormatter $commentFormatter
+		CommentFormatter $commentFormatter,
+		TempUserConfig $tempUserConfig,
+		LogFormatterFactory $logFormatterFactory
 	) {
 		parent::__construct( $query, $moduleName, 'wl' );
 		$this->commentStore = $commentStore;
@@ -82,6 +78,8 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 		$this->namespaceInfo = $namespaceInfo;
 		$this->genderCache = $genderCache;
 		$this->commentFormatter = $commentFormatter;
+		$this->tempUserConfig = $tempUserConfig;
+		$this->logFormatterFactory = $logFormatterFactory;
 	}
 
 	public function execute() {
@@ -92,14 +90,20 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 		$this->run( $resultPageSet );
 	}
 
-	private $fld_ids = false, $fld_title = false, $fld_patrol = false,
-		$fld_flags = false, $fld_timestamp = false, $fld_user = false,
-		$fld_comment = false, $fld_parsedcomment = false, $fld_sizes = false,
-		$fld_notificationtimestamp = false, $fld_userid = false,
-		$fld_loginfo = false, $fld_tags;
-
-	/** @var bool */
-	private $fld_expiry = false;
+	private bool $fld_ids = false;
+	private bool $fld_title = false;
+	private bool $fld_patrol = false;
+	private bool $fld_flags = false;
+	private bool $fld_timestamp = false;
+	private bool $fld_user = false;
+	private bool $fld_comment = false;
+	private bool $fld_parsedcomment = false;
+	private bool $fld_sizes = false;
+	private bool $fld_notificationtimestamp = false;
+	private bool $fld_userid = false;
+	private bool $fld_loginfo = false;
+	private bool $fld_tags = false;
+	private bool $fld_expiry = false;
 
 	/**
 	 * @param ApiPageSet|null $resultPageSet
@@ -193,13 +197,9 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 		}
 
 		if ( $params['type'] !== null ) {
-			try {
-				$rcTypes = RecentChange::parseToRCType( $params['type'] );
-				if ( $rcTypes ) {
-					$options['rcTypes'] = $rcTypes;
-				}
-			} catch ( Exception $e ) {
-				ApiBase::dieDebug( __METHOD__, $e->getMessage() );
+			$rcTypes = RecentChange::parseToRCType( $params['type'] );
+			if ( $rcTypes ) {
+				$options['rcTypes'] = $rcTypes;
 			}
 		}
 
@@ -321,7 +321,7 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 		if ( $target instanceof LinkTarget ) {
 			$title = Title::newFromLinkTarget( $target );
 		} else {
-			$title = Title::castFromPageIdentity( $target );
+			$title = Title::newFromPageIdentity( $target );
 		}
 		$user = $this->getUser();
 
@@ -346,7 +346,6 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 				)
 			) {
 				if ( $this->fld_title ) {
-					// @phan-suppress-next-line PhanTypeMismatchArgumentNullable castFrom does not return null here
 					ApiQueryBase::addTitleInfo( $vals, $title );
 				}
 				if ( $this->fld_ids ) {
@@ -357,7 +356,6 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 			}
 		}
 
-		/* Add user data and 'anon' flag, if user is anonymous. */
 		if ( $this->fld_user || $this->fld_userid ) {
 			if ( $recentChangeInfo['rc_deleted'] & RevisionRecord::DELETED_USER ) {
 				$vals['userhidden'] = true;
@@ -376,9 +374,17 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 
 				if ( $this->fld_user ) {
 					$vals['user'] = $recentChangeInfo['rc_user_text'];
+					$vals['temp'] = $this->tempUserConfig->isTempName(
+						$recentChangeInfo['rc_user_text']
+					);
 				}
 
+				// Whether the user is a logged-out user (IP user). This does
+				// not include temporary users, though they are grouped with IP
+				// users for FILTER_NOT_ANON and FILTER_ANON, to match the
+				// recent changes filters (T343322).
 				$vals['anon'] = !$recentChangeInfo['rc_user'];
+
 			}
 		}
 
@@ -449,7 +455,7 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 				$vals['logtype'] = $recentChangeInfo['rc_log_type'];
 				$vals['logaction'] = $recentChangeInfo['rc_log_action'];
 
-				$logFormatter = LogFormatter::newFromRow( $recentChangeInfo );
+				$logFormatter = $this->logFormatterFactory->newFromRow( $recentChangeInfo );
 				$vals['logparams'] = $logFormatter->formatParametersForApi();
 				$vals['logdisplay'] = $logFormatter->getActionText();
 			}
@@ -496,11 +502,11 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 			],
 			'user' => [
 				ParamValidator::PARAM_TYPE => 'user',
-				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'id', 'interwiki' ],
+				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'temp', 'id', 'interwiki' ],
 			],
 			'excludeuser' => [
 				ParamValidator::PARAM_TYPE => 'user',
-				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'id', 'interwiki' ],
+				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'temp', 'id', 'interwiki' ],
 			],
 			'dir' => [
 				ParamValidator::PARAM_DEFAULT => 'older',
@@ -509,6 +515,10 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 					'older'
 				],
 				ApiBase::PARAM_HELP_MSG => 'api-help-param-direction',
+				ApiBase::PARAM_HELP_MSG_PER_VALUE => [
+					'newer' => 'api-help-paramvalue-direction-newer',
+					'older' => 'api-help-paramvalue-direction-older',
+				],
 			],
 			'limit' => [
 				ParamValidator::PARAM_DEFAULT => 10,
@@ -598,3 +608,6 @@ class ApiQueryWatchlist extends ApiQueryGeneratorBase {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Watchlist';
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiQueryWatchlist::class, 'ApiQueryWatchlist' );

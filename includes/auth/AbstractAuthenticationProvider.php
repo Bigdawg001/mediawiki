@@ -21,7 +21,7 @@
 
 namespace MediaWiki\Auth;
 
-use Config;
+use MediaWiki\Config\Config;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\User\UserNameUtils;
@@ -34,23 +34,12 @@ use Psr\Log\LoggerInterface;
  * @since 1.27
  */
 abstract class AbstractAuthenticationProvider implements AuthenticationProvider {
-	/** @var LoggerInterface */
-	protected $logger;
-
-	/** @var AuthManager */
-	protected $manager;
-
-	/** @var Config */
-	protected $config;
-
-	/** @var HookContainer */
-	private $hookContainer;
-
-	/** @var HookRunner */
-	private $hookRunner;
-
-	/** @var UserNameUtils */
-	protected $userNameUtils;
+	protected LoggerInterface $logger;
+	protected AuthManager $manager;
+	protected Config $config;
+	private HookContainer $hookContainer;
+	private HookRunner $hookRunner;
+	protected UserNameUtils $userNameUtils;
 
 	/**
 	 * Initialise with dependencies of an AuthenticationProvider
@@ -59,12 +48,6 @@ abstract class AbstractAuthenticationProvider implements AuthenticationProvider 
 	 * @internal In production code AuthManager will initialize the
 	 * AbstractAuthenticationProvider, in tests
 	 * AuthenticationProviderTestTrait must be used.
-	 *
-	 * @param LoggerInterface $logger
-	 * @param AuthManager $manager
-	 * @param HookContainer $hookContainer
-	 * @param Config $config
-	 * @param UserNameUtils $userNameUtils
 	 */
 	public function init(
 		LoggerInterface $logger,
@@ -90,60 +73,6 @@ abstract class AbstractAuthenticationProvider implements AuthenticationProvider 
 	 * @stable to override
 	 */
 	protected function postInitSetup() {
-	}
-
-	/**
-	 * @deprecated since 1.37. For extension-defined authentication providers
-	 * that were using this method to trigger other work, please override
-	 * AbstractAuthenticationProvider::postInitSetup instead. If your extension
-	 * was using this to explicitly change the logger of an existing
-	 * AuthenticationProvider object, please file a report on phabricator -
-	 * there is no non-deprecated way to do this anymore.
-	 */
-	public function setLogger( LoggerInterface $logger ) {
-		wfDeprecated( __METHOD__, '1.37' );
-		$this->logger = $logger;
-	}
-
-	/**
-	 * @deprecated since 1.37. For extension-defined authentication providers
-	 * that were using this method to trigger other work, please override
-	 * AbstractAuthenticationProvider::postInitSetup instead. If your extension
-	 * was using this to explicitly change the AuthManager of an existing
-	 * AuthenticationProvider object, please file a report on phabricator -
-	 * there is no non-deprecated way to do this anymore.
-	 */
-	public function setManager( AuthManager $manager ) {
-		wfDeprecated( __METHOD__, '1.37' );
-		$this->manager = $manager;
-	}
-
-	/**
-	 * @deprecated since 1.37. For extension-defined authentication providers
-	 * that were using this method to trigger other work, please override
-	 * AbstractAuthenticationProvider::postInitSetup instead. If your extension
-	 * was using this to explicitly change the Config of an existing
-	 * AuthenticationProvider object, please file a report on phabricator -
-	 * there is no non-deprecated way to do this anymore.
-	 * @param Config $config
-	 */
-	public function setConfig( Config $config ) {
-		wfDeprecated( __METHOD__, '1.37' );
-		$this->config = $config;
-	}
-
-	/**
-	 * @deprecated since 1.37. For extension-defined authentication providers
-	 * that were using this method to trigger other work, please override
-	 * AbstractAuthenticationProvider::postInitSetup instead. If your extension
-	 * was using this to explicitly change the HookContainer of an existing
-	 * AuthenticationProvider object, please file a report on phabricator -
-	 * there is no non-deprecated way to do this anymore.
-	 */
-	public function setHookContainer( HookContainer $hookContainer ) {
-		wfDeprecated( __METHOD__, '1.37' );
-		$this->hookContainer = $hookContainer;
-		$this->hookRunner = new HookRunner( $hookContainer );
 	}
 
 	/**

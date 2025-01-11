@@ -1,7 +1,9 @@
 <?php
 
+use MediaWiki\Title\TitleValue;
+
 /**
- * @covers BlockLogFormatter
+ * @covers \BlockLogFormatter
  */
 class BlockLogFormatterTest extends LogFormatterTestCase {
 
@@ -354,21 +356,6 @@ class BlockLogFormatterTest extends LogFormatterTestCase {
 	}
 
 	/**
-	 * @dataProvider provideSuppressBlockLogDatabaseRows
-	 */
-	public function testSuppressBlockLogDatabaseRows( $row, $extra ) {
-		$this->setGroupPermissions(
-			[
-				'oversight' => [
-					'viewsuppressed' => true,
-					'suppressionlog' => true,
-				],
-			]
-		);
-		$this->doTestLogFormatter( $row, $extra, [ 'oversight' ] );
-	}
-
-	/**
 	 * Provide different rows from the logging table to test
 	 * for backward compatibility.
 	 * Do not change the existing data, just add a new database row
@@ -494,9 +481,10 @@ class BlockLogFormatterTest extends LogFormatterTestCase {
 	}
 
 	/**
+	 * @dataProvider provideSuppressBlockLogDatabaseRows
 	 * @dataProvider provideSuppressReblockLogDatabaseRows
 	 */
-	public function testSuppressReblockLogDatabaseRows( $row, $extra ) {
+	public function testSuppressBlockLogDatabaseRows( $row, $extra ) {
 		$this->setGroupPermissions(
 			[
 				'oversight' => [
@@ -714,6 +702,47 @@ class BlockLogFormatterTest extends LogFormatterTestCase {
 	 * @dataProvider providePartialBlockLogDatabaseRows
 	 */
 	public function testPartialBlockLogDatabaseRows( $row, $extra ) {
+		$this->doTestLogFormatter( $row, $extra );
+	}
+
+	public static function provideMultiblocksDatabaseRows() {
+		return [
+			// Sitewide multiblock with expiry
+			[
+				[
+					'type' => 'block',
+					'action' => 'block',
+					'comment' => 'multiblock',
+					'user' => 0,
+					'user_text' => 'Sysop',
+					'namespace' => NS_USER,
+					'title' => 'Target',
+					'timestamp' => '20240101000000',
+					'params' => [
+						'5::duration' => '1 day',
+						'6::flags' => '',
+						'sitewide' => true,
+						'finalTargetCount' => 2,
+					]
+				],
+				[
+					'text' => 'Sysop added a block for Target with an expiration time of 1 day',
+					'api' => [
+						'duration' => '1 day',
+						'flags' => [],
+						'finalTargetCount' => 2,
+						'sitewide' => true,
+						'expiry' => '2024-01-02T00:00:00Z',
+					]
+				]
+			],
+		];
+	}
+
+	/**
+	 * @dataProvider provideMultiblocksDatabaseRows
+	 */
+	public function testMultiblocksDatabaseRows( $row, $extra ) {
 		$this->doTestLogFormatter( $row, $extra );
 	}
 }

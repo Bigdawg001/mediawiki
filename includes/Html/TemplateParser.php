@@ -2,14 +2,13 @@
 
 namespace MediaWiki\Html;
 
-use BagOStuff;
 use FileContentsHasher;
 use LightnCandy\LightnCandy;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
-use ObjectCache;
 use RuntimeException;
 use UnexpectedValueException;
+use Wikimedia\ObjectCache\BagOStuff;
 
 /**
  * Handles compiling Mustache templates into PHP rendering functions
@@ -63,7 +62,8 @@ class TemplateParser {
 	 */
 	public function __construct( $templateDir = null, ?BagOStuff $cache = null ) {
 		$this->templateDir = $templateDir ?: __DIR__ . '/../templates';
-		$this->cache = $cache ?: ObjectCache::getLocalServerInstance( CACHE_ANYTHING );
+		$this->cache = $cache ?: MediaWikiServices::getInstance()->getObjectCacheFactory()
+			->getLocalServerInstance( CACHE_ANYTHING );
 
 		// Do not add more flags here without discussion.
 		// If you do add more flags, be sure to update unit tests as well.
@@ -173,6 +173,7 @@ class TemplateParser {
 			$compiledTemplate = $this->compile( $templateName );
 		}
 
+		// phpcs:ignore MediaWiki.Usage.ForbiddenFunctions.eval
 		$renderer = eval( $compiledTemplate['phpCode'] );
 		if ( !is_callable( $renderer ) ) {
 			throw new RuntimeException( "Compiled template `{$templateName}` is not callable" );
@@ -284,7 +285,7 @@ class TemplateParser {
 	 *     );
 	 * @endcode
 	 * @param string $templateName The name of the template
-	 * @param-taint $templateName exec_misc
+	 * @param-taint $templateName exec_path
 	 * @param mixed $args
 	 * @param-taint $args none
 	 * @param array $scopes
@@ -297,4 +298,5 @@ class TemplateParser {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( TemplateParser::class, 'TemplateParser' );

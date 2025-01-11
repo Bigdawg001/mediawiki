@@ -8,7 +8,6 @@ use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\ResponseInterface;
 use MediaWiki\Revision\RevisionRecord;
-use MediaWiki\Revision\SlotRecord;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
 
@@ -16,7 +15,6 @@ use Wikimedia\ParamValidator\ParamValidator;
  * @internal for use by core REST infrastructure
  */
 class RevisionContentHelper extends PageContentHelper {
-
 	/**
 	 * @return int|null The ID of the target revision
 	 */
@@ -85,7 +83,7 @@ class RevisionContentHelper extends PageContentHelper {
 		return (bool)$this->getTargetRevision();
 	}
 
-	public function setCacheControl( ResponseInterface $response, int $expiry = null ) {
+	public function setCacheControl( ResponseInterface $response, ?int $expiry = null ) {
 		$revision = $this->getTargetRevision();
 
 		if ( $revision && $revision->getVisibility() !== 0 ) {
@@ -103,14 +101,12 @@ class RevisionContentHelper extends PageContentHelper {
 		$page = $this->getPage();
 		$revision = $this->getTargetRevision();
 
-		$mainSlot = $revision->getSlot( SlotRecord::MAIN, RevisionRecord::RAW );
-
 		$metadata = [
 			'id' => $revision->getId(),
 			'size' => $revision->getSize(),
 			'minor' => $revision->isMinor(),
 			'timestamp' => wfTimestampOrNull( TS_ISO_8601, $revision->getTimestamp() ),
-			'content_model' => $mainSlot->getModel(),
+			'content_model' => $revision->getMainContentModel(),
 			'page' => [
 				'id' => $page->getId(),
 				// @phan-suppress-next-line PhanTypeMismatchArgumentNullable
@@ -158,6 +154,7 @@ class RevisionContentHelper extends PageContentHelper {
 				Handler::PARAM_SOURCE => 'path',
 				ParamValidator::PARAM_TYPE => 'integer',
 				ParamValidator::PARAM_REQUIRED => true,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-revision-id' )
 			],
 		];
 	}
@@ -185,6 +182,3 @@ class RevisionContentHelper extends PageContentHelper {
 	}
 
 }
-
-/** @deprecated since 1.40, remove in 1.41 */
-class_alias( RevisionContentHelper::class, "MediaWiki\\Rest\\Handler\\RevisionContentHelper" );

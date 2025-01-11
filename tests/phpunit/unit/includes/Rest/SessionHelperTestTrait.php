@@ -13,7 +13,6 @@ use PHPUnit\Framework\MockObject\MockObject;
  * or MediaWikiIntegrationTestCase.
  *
  * @stable to use
- * @package MediaWiki\Tests\Rest
  */
 trait SessionHelperTestTrait {
 	/**
@@ -29,6 +28,7 @@ trait SessionHelperTestTrait {
 		$session = $this->createMock( Session::class );
 		$session->method( 'getSessionId' )->willReturn( new SessionId( 'test' ) );
 		$session->method( 'getProvider' )->willReturn( $sessionProvider );
+		$session->method( 'isPersistent' )->willReturn( true );
 
 		return $session;
 	}

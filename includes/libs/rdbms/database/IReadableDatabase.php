@@ -20,6 +20,7 @@
 namespace Wikimedia\Rdbms;
 
 use stdClass;
+use Stringable;
 use Wikimedia\Rdbms\Database\DbQuoter;
 use Wikimedia\Rdbms\Database\IDatabaseFlags;
 use Wikimedia\Rdbms\Platform\ISQLPlatform;
@@ -30,7 +31,13 @@ use Wikimedia\Rdbms\Platform\ISQLPlatform;
  * @since 1.40
  * @ingroup Database
  */
-interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
+interface IReadableDatabase extends Stringable, ISQLPlatform, DbQuoter, IDatabaseFlags {
+
+	/** Parameter to unionQueries() for UNION ALL */
+	public const UNION_ALL = true;
+	/** Parameter to unionQueries() for UNION DISTINCT */
+	public const UNION_DISTINCT = false;
+
 	/**
 	 * Get a human-readable string describing the current software version
 	 *
@@ -55,13 +62,6 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 * @return string The previous db schema
 	 */
 	public function dbSchema( $schema = null );
-
-	/**
-	 * Get the last query that sent on account of IDatabase::query()
-	 *
-	 * @return string SQL text or empty string if there was no such query
-	 */
-	public function lastQuery();
 
 	/**
 	 * @return bool Whether a connection to the database open
@@ -108,7 +108,7 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	public function getSoftwareLink();
 
 	/**
-	 * A string describing the current software version, like from mysql_get_server_info()
+	 * A string describing the current software version
 	 *
 	 * @return string Version information from the database server.
 	 */
@@ -123,7 +123,7 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 *
 	 * @internal Only for use by LoadBalancer
 	 *
-	 * @param string $fname Caller name
+	 * @param string $fname Caller name @phan-mandatory-param
 	 * @return bool Success
 	 * @throws DBError
 	 */
@@ -142,6 +142,19 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	public function newSelectQueryBuilder(): SelectQueryBuilder;
 
 	/**
+	 * Create an empty UnionQueryBuilder which can be used to run queries
+	 * against this connection.
+	 *
+	 * @note A new query builder must be created per query. Query builders
+	 *   should not be reused since this uses a fluent interface and the state of
+	 *   the builder changes during the query which may cause unexpected results.
+	 *
+	 * @since 1.41
+	 * @return UnionQueryBuilder
+	 */
+	public function newUnionQueryBuilder(): UnionQueryBuilder;
+
+	/**
 	 * A SELECT wrapper which returns a single field from a single result row
 	 *
 	 * If no result rows are returned from the query, false is returned.
@@ -149,19 +162,31 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 * New callers should use {@link newSelectQueryBuilder} with {@link SelectQueryBuilder::fetchField}
 	 * instead, which is more readable and less error-prone.
 	 *
-	 * @param string|array $table Table name. {@see select} for details.
+	 * @internal callers outside of rdbms library should use SelectQueryBuilder instead.
+	 *
+	 * @param string|array $tables Table reference(s), using the unqualified name of tables
+	 *  or of the form "information_schema.<identifier>". {@see select} for details.
+	 * @param-taint $tables exec_sql
 	 * @param string|array $var The field name to select. This must be a valid SQL fragment: do not
 	 *  use unvalidated user input. Can be an array, but must contain exactly 1 element then.
 	 *  {@see select} for details.
-	 * @param string|array $cond The condition array. {@see select} for details.
-	 * @param string $fname The function name of the caller.
+	 * @param-taint $var exec_sql
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param string|IExpression|array<string,?scalar|non-empty-array<int,?scalar>|RawSQLValue>|array<int,string|IExpression> $cond
+	 *  The condition array. {@see select} for details.
+	 * @param-taint $cond exec_sql_numkey
+	 * @param string $fname The function name of the caller. @phan-mandatory-param
+	 * @param-taint $fname exec_sql
 	 * @param string|array $options The query options. {@see select} for details.
+	 * @param-taint $options none This is special-cased in MediaWikiSecurityCheckPlugin
 	 * @param string|array $join_conds The query join conditions. {@see select} for details.
+	 * @param-taint $join_conds none This is special-cased in MediaWikiSecurityCheckPlugin
 	 * @return mixed|false The value from the field, or false if nothing was found
+	 * @return-taint tainted
 	 * @throws DBError If an error occurs, {@see query}
 	 */
 	public function selectField(
-		$table, $var, $cond = '', $fname = __METHOD__, $options = [], $join_conds = []
+		$tables, $var, $cond = '', $fname = __METHOD__, $options = [], $join_conds = []
 	);
 
 	/**
@@ -172,20 +197,32 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 * New callers should use {@link newSelectQueryBuilder} with {@link SelectQueryBuilder::fetchFieldValues}
 	 * instead, which is more readable and less error-prone.
 	 *
-	 * @param string|array $table Table name. {@see select} for details.
+	 * @internal callers outside of rdbms library should use SelectQueryBuilder instead.
+	 *
+	 * @param string|array $tables Table reference(s), using the unqualified name of tables
+	 *   or of the form "information_schema.<identifier>". {@see select} for details.
+	 * @param-taint $tables exec_sql
 	 * @param string $var The field name to select. This must be a valid SQL
 	 *   fragment: do not use unvalidated user input.
-	 * @param string|array $cond The condition array. {@see select} for details.
-	 * @param string $fname The function name of the caller.
+	 * @param-taint $var exec_sql
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param string|IExpression|array<string,?scalar|non-empty-array<int,?scalar>|RawSQLValue>|array<int,string|IExpression> $cond
+	 *   The condition array. {@see select} for details.
+	 * @param-taint $cond exec_sql_numkey
+	 * @param string $fname The function name of the caller. @phan-mandatory-param
+	 * @param-taint $fname exec_sql
 	 * @param string|array $options The query options. {@see select} for details.
+	 * @param-taint $options none This is special-cased in MediaWikiSecurityCheckPlugin
 	 * @param string|array $join_conds The query join conditions. {@see select} for details.
+	 * @param-taint $join_conds none This is special-cased in MediaWikiSecurityCheckPlugin
 	 *
 	 * @return array The values from the field in the order they were returned from the DB
+	 * @return-taint tainted
 	 * @throws DBError If an error occurs, {@see query}
 	 * @since 1.25
 	 */
 	public function selectFieldValues(
-		$table, $var, $cond = '', $fname = __METHOD__, $options = [], $join_conds = []
+		$tables, $var, $cond = '', $fname = __METHOD__, $options = [], $join_conds = []
 	): array;
 
 	/**
@@ -194,10 +231,26 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 * New callers should use {@link newSelectQueryBuilder} with {@link SelectQueryBuilder::fetchResultSet}
 	 * instead, which is more readable and less error-prone.
 	 *
-	 * @param string|array $table Table name(s)
+	 * @param string|array $tables Table reference(s), using the unqualified name of tables
+	 *   or of the form "information_schema.<identifier>".
+	 * @param-taint $tables exec_sql
 	 *
-	 * May be either an array of table names, or a single string holding a table
-	 * name. If an array is given, table aliases can be specified, for example:
+	 * Each table reference assigns a table name to a specified collection of rows
+	 * for the context of the query (e.g. field expressions, WHERE clause, GROUP BY
+	 * clause, HAVING clause, ect...). Use of multiple table references implies a JOIN.
+	 *
+	 * If a string is given, it must hold the name of the table having the specified
+	 * collection of rows. If an array is given, each entry must be one of the following:
+	 *   - A string holding the name of the existing table which has the collection
+	 *     of rows. If keyed by a string, the key will be the assigned table name.
+	 *   - A Subquery instance which specifies the collection of rows derived from
+	 *     a subquery. If keyed by a string, the key will be the assigned table name.
+	 *     Otherwise, the SQL text of the subquery will be the assigned table name.
+	 *   - An array specifying the collection of rows derived from a parenthesized
+	 *     JOIN. It must be keyed by a string, which will be used as the assigned
+	 *     table name.
+	 *
+	 * String keys allow table aliases to be specified, for example:
 	 *
 	 *    [ 'a' => 'user' ]
 	 *
@@ -230,6 +283,7 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 * not have characters outside of the Basic multilingual plane.
 	 *
 	 * @param string|array $vars Field name(s)
+	 * @param-taint $vars exec_sql
 	 *
 	 * May be either a field name or an array of field names. The field names
 	 * can be complete fragments of SQL, for direct inclusion into the SELECT
@@ -244,7 +298,9 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 *
 	 * Untrusted user input must not be passed to this parameter.
 	 *
-	 * @param string|array $conds
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param string|IExpression|array<string,?scalar|non-empty-array<int,?scalar>|RawSQLValue>|array<int,string|IExpression> $conds
+	 * @param-taint $conds exec_sql_numkey
 	 *
 	 * May be either a string containing a single condition, or an array of
 	 * conditions. If an array is given, the conditions constructed from each
@@ -287,9 +343,11 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 *     // $join_conds...
 	 *     'actor' => [ 'JOIN', 'rev_actor = actor_id' ],
 	 *
-	 * @param string $fname Caller function name
+	 * @param string $fname Caller function name @phan-mandatory-param
+	 * @param-taint $fname exec_sql
 	 *
 	 * @param string|array $options Query options
+	 * @param-taint $options none This is special-cased in MediaWikiSecurityCheckPlugin
 	 *
 	 * Optional: Array of query options. Boolean options are specified by
 	 * including them in the array as a string value with a numeric key, for
@@ -355,6 +413,7 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 *    - SQL_CALC_FOUND_ROWS
 	 *
 	 * @param string|array $join_conds Join conditions
+	 * @param-taint $join_conds none This is special-cased in MediaWikiSecurityCheckPlugin
 	 *
 	 * Optional associative array of table-specific join conditions.
 	 * Simple conditions can also be specified in the regular $conds,
@@ -368,11 +427,13 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 *
 	 *    [ 'page' => [ 'LEFT JOIN', 'page_latest=rev_id' ] ]
 	 *
+	 * @internal
 	 * @return IResultWrapper Resulting rows
+	 * @return-taint tainted
 	 * @throws DBError If an error occurs, {@see query}
 	 */
 	public function select(
-		$table,
+		$tables,
 		$vars,
 		$conds = '',
 		$fname = __METHOD__,
@@ -390,17 +451,28 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 * New callers should use {@link newSelectQueryBuilder} with {@link SelectQueryBuilder::fetchRow}
 	 * instead, which is more readable and less error-prone.
 	 *
-	 * @param string|array $table Table name
+	 * @internal
+	 * @param string|array $tables Table reference(s), using the unqualified name of tables
+	 *   or of the form "information_schema.<identifier>". {@see select} for details.
+	 * @param-taint $tables exec_sql
 	 * @param string|array $vars Field names
-	 * @param string|array $conds Conditions
-	 * @param string $fname Caller function name
+	 * @param-taint $vars exec_sql
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param string|IExpression|array<string,?scalar|non-empty-array<int,?scalar>|RawSQLValue>|array<int,string|IExpression> $conds
+	 *   Conditions
+	 * @param-taint $conds exec_sql_numkey
+	 * @param string $fname Caller function name @phan-mandatory-param
+	 * @param-taint $fname exec_sql
 	 * @param string|array $options Query options
+	 * @param-taint $options none This is special-cased in MediaWikiSecurityCheckPlugin
 	 * @param array|string $join_conds Join conditions
+	 * @param-taint $join_conds none This is special-cased in MediaWikiSecurityCheckPlugin
 	 * @return stdClass|false
+	 * @return-taint tainted
 	 * @throws DBError If an error occurs, {@see query}
 	 */
 	public function selectRow(
-		$table,
+		$tables,
 		$vars,
 		$conds,
 		$fname = __METHOD__,
@@ -424,10 +496,14 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 * New callers should use {@link newSelectQueryBuilder} with {@link SelectQueryBuilder::estimateRowCount}
 	 * instead, which is more readable and less error-prone.
 	 *
-	 * @param string|string[] $tables Table name(s)
+	 * @internal
+	 * @param string|string[] $tables Table reference(s), using the unqualified name of tables
+	 *   or of the form "information_schema.<identifier>". {@see select} for details.
 	 * @param string $var Column for which NULL values are not counted [default "*"]
-	 * @param array|string $conds Filters on the table
-	 * @param string $fname Function name for profiling
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param string|IExpression|array<string,?scalar|non-empty-array<int,?scalar>|RawSQLValue>|array<int,string|IExpression> $conds
+	 *   Filters on the table
+	 * @param string $fname Function name for profiling @phan-mandatory-param
 	 * @param array $options Options for select
 	 * @param array|string $join_conds Join conditions
 	 * @return int Row count
@@ -435,7 +511,7 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 */
 	public function estimateRowCount(
 		$tables, $var = '*', $conds = '', $fname = __METHOD__, $options = [], $join_conds = []
-	);
+	): int;
 
 	/**
 	 * Get the number of rows in dataset
@@ -449,18 +525,29 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 *
 	 * @since 1.27 Added $join_conds parameter
 	 *
-	 * @param string|string[] $tables Table name(s)
+	 * @internal
+	 * @param string|string[] $tables Table reference(s), using the unqualified name of tables
+	 *   or of the form "information_schema.<identifier>". {@see select} for details.
+	 * @param-taint $tables exec_sql
 	 * @param string $var Column for which NULL values are not counted [default "*"]
-	 * @param array|string $conds Filters on the table
-	 * @param string $fname Function name for profiling
+	 * @param-taint $var exec_sql
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param string|IExpression|array<string,?scalar|non-empty-array<int,?scalar>|RawSQLValue>|array<int,string|IExpression> $conds
+	 *   Filters on the table
+	 * @param-taint $conds exec_sql_numkey
+	 * @param string $fname Function name for profiling @phan-mandatory-param
+	 * @param-taint $fname exec_sql
 	 * @param array $options Options for select
+	 * @param-taint $options none This is special-cased in MediaWikiSecurityCheckPlugin
 	 * @param array $join_conds Join conditions (since 1.27)
+	 * @param-taint $join_conds none This is special-cased in MediaWikiSecurityCheckPlugin
 	 * @return int Row count
+	 * @return-taint none
 	 * @throws DBError If an error occurs, {@see query}
 	 */
 	public function selectRowCount(
 		$tables, $var = '*', $conds = '', $fname = __METHOD__, $options = [], $join_conds = []
-	);
+	): int;
 
 	/**
 	 * Returns true if DBs are assumed to be on potentially different servers
@@ -513,78 +600,6 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	public function getServerName();
 
 	/**
-	 * Determines if the last failure was due to a deadlock
-	 *
-	 * Note that during a deadlock, the prior transaction will have been lost
-	 *
-	 * @return bool
-	 */
-	public function wasDeadlock();
-
-	/**
-	 * Determines if the last failure was due to a lock timeout
-	 *
-	 * Note that during a lock wait timeout, the prior transaction will have been lost
-	 *
-	 * @return bool
-	 */
-	public function wasLockTimeout();
-
-	/**
-	 * Determines if the last query error was due to a dropped connection
-	 *
-	 * Note that during a connection loss, the prior transaction will have been lost
-	 *
-	 * @return bool
-	 * @since 1.31
-	 */
-	public function wasConnectionLoss();
-
-	/**
-	 * Determines if the last failure was due to the database being read-only
-	 *
-	 * @return bool
-	 */
-	public function wasReadOnlyError();
-
-	/**
-	 * Determines if the last query error was due to something outside of the query itself
-	 *
-	 * Note that the transaction may have been lost, discarding prior writes and results
-	 *
-	 * @return bool
-	 * @deprecated Since 1.40
-	 */
-	public function wasErrorReissuable();
-
-	/**
-	 * Wait for the replica server to catch up to a given primary server position
-	 *
-	 * Note that this does not start any new transactions.
-	 *
-	 * Callers might want to flush any existing transaction before invoking this method.
-	 * Upon success, this assures that replica server queries will reflect all changes up
-	 * to the given position, without interference from prior REPEATABLE-READ snapshots.
-	 *
-	 * @param DBPrimaryPos $pos
-	 * @param int $timeout The maximum number of seconds to wait for synchronisation
-	 * @return int|null Zero if the replica DB server was past that position already,
-	 *   greater than zero if we waited for some period of time, less than
-	 *   zero if it timed out, and null on error
-	 * @throws DBError If an error occurs, {@see query}
-	 * @since 1.37
-	 */
-	public function primaryPosWait( DBPrimaryPos $pos, $timeout );
-
-	/**
-	 * Get the replication position of this replica DB
-	 *
-	 * @return DBPrimaryPos|false False if this is not a replica DB
-	 * @throws DBError If an error occurs, {@see query}
-	 */
-	public function getReplicaPos();
-
-	/**
 	 * Ping the server and try to reconnect if it there is no connection
 	 *
 	 * @return bool Success or failure
@@ -592,7 +607,7 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	public function ping();
 
 	/**
-	 * Get the amount of replication lag for this database server
+	 * Get the seconds of replication lag on this database server
 	 *
 	 * Callers should avoid using this method while a transaction is active
 	 *
@@ -602,13 +617,12 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	public function getLag();
 
 	/**
-	 * Get the replica server lag when the current transaction started
-	 * or a general lag estimate if not transaction is active
+	 * Get a cached estimate of the seconds of replication lag on this database server,
+	 * using the estimate obtained at the start of the current transaction if one is active
 	 *
-	 * This is useful when transactions might use snapshot isolation
-	 * (e.g. REPEATABLE-READ in innodb), so the "real" lag of that data
-	 * is this lag plus transaction duration. If they don't, it is still
-	 * safe to be pessimistic. In AUTOCOMMIT mode, this still gives an
+	 * This is useful when transactions might use snapshot isolation (e.g. REPEATABLE-READ in
+	 * innodb), so the "real" lag of that data is this lag plus transaction duration. If they
+	 * don't, it is still safe to be pessimistic. In AUTOCOMMIT mode, this still gives an
 	 * indication of the staleness of subsequent reads.
 	 *
 	 * @return array ('lag': seconds or false on error, 'since': UNIX timestamp of BEGIN)
@@ -639,6 +653,46 @@ interface IReadableDatabase extends ISQLPlatform, DbQuoter, IDatabaseFlags {
 	 * @throws DBError
 	 */
 	public function decodeBlob( $b );
+
+	/**
+	 * See Expression::__construct()
+	 *
+	 * @since 1.42
+	 * @param string $field
+	 * @param-taint $field exec_sql
+	 * @param string $op One of '>', '<', '!=', '=', '>=', '<=', IExpression::LIKE, IExpression::NOT_LIKE
+	 * @phan-param '\x3E'|'\x3C'|'!='|'='|'\x3E='|'\x3C='|'LIKE'|'NOT LIKE' $op
+	 * @param-taint $op exec_sql
+	 * @param ?scalar|RawSQLValue|Blob|LikeValue|non-empty-list<scalar|Blob> $value
+	 * @param-taint $value escapes_sql
+	 * @return Expression
+	 * @phan-side-effect-free
+	 */
+	public function expr( string $field, string $op, $value ): Expression;
+
+	/**
+	 * See Expression::__construct()
+	 *
+	 * @since 1.43
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param non-empty-array<string,?scalar|RawSQLValue|Blob|LikeValue|non-empty-list<scalar|Blob>>|non-empty-array<int,IExpression> $conds
+	 * @param-taint $conds exec_sql_numkey
+	 * @return AndExpressionGroup
+	 * @phan-side-effect-free
+	 */
+	public function andExpr( array $conds ): AndExpressionGroup;
+
+	/**
+	 * See Expression::__construct()
+	 *
+	 * @since 1.43
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param non-empty-array<string,?scalar|RawSQLValue|Blob|LikeValue|non-empty-list<scalar|Blob>>|non-empty-array<int,IExpression> $conds
+	 * @param-taint $conds exec_sql_numkey
+	 * @return OrExpressionGroup
+	 * @phan-side-effect-free
+	 */
+	public function orExpr( array $conds ): OrExpressionGroup;
 
 	/**
 	 * Get a debugging string that mentions the database type, the ID of this instance,

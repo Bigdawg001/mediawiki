@@ -2,14 +2,14 @@
 
 namespace MediaWiki\Tests\Rest\Handler;
 
-use ApiBase;
-use ApiMain;
 use Exception;
-use Language;
+use MediaWiki\Api\ApiBase;
+use MediaWiki\Api\ApiMain;
+use MediaWiki\Context\RequestContext;
+use MediaWiki\Language\Language;
 use MediaWiki\Request\FauxRequest;
 use PHPUnit\Framework\MockObject\MockBuilder;
 use PHPUnit\Framework\MockObject\MockObject;
-use RequestContext;
 
 /**
  * A trait providing utility functions for testing Handler classes
@@ -17,7 +17,6 @@ use RequestContext;
  * This trait is intended to be used on subclasses of MediaWikiUnitTestCase
  * or MediaWikiIntegrationTestCase.
  *
- * @package MediaWiki\Tests\Rest\Handler
  * @method MockBuilder getMockBuilder(string $className)
  */
 trait ActionModuleBasedHandlerTestTrait {
@@ -36,7 +35,7 @@ trait ActionModuleBasedHandlerTestTrait {
 		ApiMain $main,
 		$name,
 		$resultData,
-		Exception $throwException = null
+		?Exception $throwException = null
 	) {
 		/** @var ApiBase|MockObject $module */
 		$module = $this->getMockBuilder( ApiBase::class )
@@ -71,7 +70,7 @@ trait ActionModuleBasedHandlerTestTrait {
 		// NOTE: This being a MediaWiki\Request\FauxRequest instance triggers special case behavior
 		// in ApiMain, causing ApiMain::isInternalMode() to return true. Among other things,
 		// this causes ApiMain to throw errors rather than encode them in the result data.
-		/** @var MockObject|\MediaWiki\Request\FauxRequest $fauxRequest */
+		/** @var MockObject|FauxRequest $fauxRequest */
 		$fauxRequest = $this->getMockBuilder( FauxRequest::class )
 			->onlyMethods( [ 'getSession', 'getSessionId' ] )
 			->getMock();

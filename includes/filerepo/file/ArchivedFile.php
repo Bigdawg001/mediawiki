@@ -18,13 +18,15 @@
  * @file
  */
 
+use MediaWiki\FileRepo\File\FileSelectQueryBuilder;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Permissions\Authority;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Title\Title;
 use MediaWiki\User\UserIdentity;
 use Wikimedia\Rdbms\Blob;
-use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IReadableDatabase;
+use Wikimedia\Rdbms\SelectQueryBuilder;
 
 /**
  * Deleted file in the 'filearchive' table.
@@ -66,13 +68,13 @@ class ArchivedFile {
 	/** @var int File size in bytes */
 	private $size;
 
-	/** @var int Size in bytes */
+	/** @var int Bitdepth */
 	private $bits;
 
-	/** @var int Width */
+	/** @var int */
 	private $width;
 
-	/** @var int Height */
+	/** @var int */
 	private $height;
 
 	/** @var array Unserialized metadata */
@@ -149,7 +151,6 @@ class ArchivedFile {
 
 	/**
 	 * @stable to call
-	 * @throws MWException
 	 * @param Title|null $title
 	 * @param int $id
 	 * @param string $key
@@ -193,7 +194,7 @@ class ArchivedFile {
 		}
 
 		if ( !$id && !$key && !( $title instanceof Title ) && !$sha1 ) {
-			throw new MWException( "No specifications provided to ArchivedFile constructor." );
+			throw new BadMethodCallException( "No specifications provided to ArchivedFile constructor." );
 		}
 
 		$this->repo = MediaWikiServices::getInstance()->getRepoGroup()->getLocalRepo();
@@ -203,7 +204,6 @@ class ArchivedFile {
 	/**
 	 * Loads a file object from the filearchive table
 	 * @stable to override
-	 * @throws MWException
 	 * @return bool|null True on success or null
 	 */
 	public function load() {
@@ -227,21 +227,16 @@ class ArchivedFile {
 		}
 
 		if ( $conds === [] ) {
-			throw new MWException( "No specific information for retrieving archived file" );
+			throw new RuntimeException( "No specific information for retrieving archived file" );
 		}
 
 		if ( !$this->title || $this->title->getNamespace() === NS_FILE ) {
 			$this->dataLoaded = true; // set it here, to have also true on miss
-			$dbr = wfGetDB( DB_REPLICA );
-			$fileQuery = self::getQueryInfo();
-			$row = $dbr->selectRow(
-				$fileQuery['tables'],
-				$fileQuery['fields'],
-				$conds,
-				__METHOD__,
-				[ 'ORDER BY' => 'fa_timestamp DESC' ],
-				$fileQuery['joins']
-			);
+			$dbr = $this->repo->getReplicaDB();
+			$queryBuilder = FileSelectQueryBuilder::newForArchivedFile( $dbr );
+			$row = $queryBuilder->where( $conds )
+				->orderBy( 'fa_timestamp', SelectQueryBuilder::SORT_DESC )
+				->caller( __METHOD__ )->fetchRow();
 			if ( !$row ) {
 				// this revision does not exist?
 				return null;
@@ -250,9 +245,8 @@ class ArchivedFile {
 			// initialize fields for filestore image object
 			$this->loadFromRow( $row );
 		} else {
-			throw new MWException( 'This title does not correspond to an image page.' );
+			throw new UnexpectedValueException( 'This title does not correspond to an image page.' );
 		}
-		$this->exists = true;
 
 		return true;
 	}
@@ -281,6 +275,7 @@ class ArchivedFile {
 	 *
 	 * @since 1.31
 	 * @stable to override
+	 * @deprecated since 1.41 use FileSelectQueryBuilder instead
 	 * @return array[] With three keys:
 	 *   - tables: (string[]) to include in the `$table` to `IDatabase->select()` or `SelectQueryBuilder::tables`
 	 *   - fields: (string[]) to include in the `$vars` to `IDatabase->select()` or `SelectQueryBuilder::fields`
@@ -288,37 +283,12 @@ class ArchivedFile {
 	 * @phan-return array{tables:string[],fields:string[],joins:array}
 	 */
 	public static function getQueryInfo() {
-		$commentQuery = MediaWikiServices::getInstance()->getCommentStore()->getJoin( 'fa_description' );
+		$dbr = MediaWikiServices::getInstance()->getConnectionProvider()->getReplicaDatabase();
+		$queryInfo = ( FileSelectQueryBuilder::newForArchivedFile( $dbr ) )->getQueryInfo();
 		return [
-			'tables' => [
-				'filearchive',
-				'filearchive_actor' => 'actor'
-			] + $commentQuery['tables'],
-			'fields' => [
-				'fa_id',
-				'fa_name',
-				'fa_archive_name',
-				'fa_storage_key',
-				'fa_storage_group',
-				'fa_size',
-				'fa_bits',
-				'fa_width',
-				'fa_height',
-				'fa_metadata',
-				'fa_media_type',
-				'fa_major_mime',
-				'fa_minor_mime',
-				'fa_timestamp',
-				'fa_deleted',
-				'fa_deleted_timestamp', /* Used by LocalFileRestoreBatch */
-				'fa_sha1',
-				'fa_actor',
-				'fa_user' => 'filearchive_actor.actor_user',
-				'fa_user_text' => 'filearchive_actor.actor_name'
-			] + $commentQuery['fields'],
-			'joins' => [
-				'filearchive_actor' => [ 'JOIN', 'actor_id=fa_actor' ]
-			] + $commentQuery['joins'],
+			'tables' => $queryInfo['tables'],
+			'fields' => $queryInfo['fields'],
+			'joins' => $queryInfo['join_conds'],
 		];
 	}
 
@@ -346,7 +316,7 @@ class ArchivedFile {
 		$services = MediaWikiServices::getInstance();
 		$this->description = $services->getCommentStore()
 			// Legacy because $row may have come from self::selectFields()
-			->getCommentLegacy( wfGetDB( DB_REPLICA ), 'fa_description', $row )->text;
+			->getCommentLegacy( $this->repo->getReplicaDB(), 'fa_description', $row )->text;
 		$this->user = $services->getUserFactory()
 			->newFromAnyId( $row->fa_user, $row->fa_user_text, $row->fa_actor );
 		$this->timestamp = $row->fa_timestamp;
@@ -360,6 +330,7 @@ class ArchivedFile {
 		if ( !$this->title ) {
 			$this->title = Title::makeTitleSafe( NS_FILE, $row->fa_name );
 		}
+		$this->exists = $row->fa_archive_name !== '';
 	}
 
 	/**
@@ -522,10 +493,10 @@ class ArchivedFile {
 	 * returning their addresses.
 	 *
 	 * @internal
-	 * @param IDatabase $db
+	 * @param IReadableDatabase $db
 	 * @return string|Blob
 	 */
-	public function getMetadataForDb( IDatabase $db ) {
+	public function getMetadataForDb( IReadableDatabase $db ) {
 		$this->load();
 		if ( !$this->metadataArray && !$this->metadataBlobs ) {
 			$s = '';
@@ -535,7 +506,7 @@ class ArchivedFile {
 			$s = serialize( $this->getMetadataArray() );
 		}
 		if ( !is_string( $s ) ) {
-			throw new MWException( 'Could not serialize image metadata value for DB' );
+			throw new RuntimeException( 'Could not serialize image metadata value for DB' );
 		}
 		return $db->encodeBlob( $s );
 	}
@@ -570,16 +541,16 @@ class ArchivedFile {
 	 * in $this.
 	 *
 	 * @since 1.39
-	 * @param IDatabase $db
+	 * @param IReadableDatabase $db
 	 * @param string|Blob $metadataBlob
 	 */
-	protected function loadMetadataFromDbFieldValue( IDatabase $db, $metadataBlob ) {
+	protected function loadMetadataFromDbFieldValue( IReadableDatabase $db, $metadataBlob ) {
 		$this->loadMetadataFromString( $db->decodeBlob( $metadataBlob ) );
 	}
 
 	/**
 	 * Unserialize a metadata string which came from some non-DB source, or is
-	 * the return value of IDatabase::decodeBlob().
+	 * the return value of IReadableDatabase::decodeBlob().
 	 *
 	 * @since 1.37
 	 * @param string $metadataString
@@ -634,7 +605,6 @@ class ArchivedFile {
 	}
 
 	/**
-	 * Return the bits of the image file, in bytes
 	 * @return int
 	 */
 	public function getBits() {
@@ -658,7 +628,7 @@ class ArchivedFile {
 	 * @return MediaHandler
 	 */
 	private function getHandler() {
-		if ( !isset( $this->handler ) ) {
+		if ( !$this->handler ) {
 			$this->handler = MediaHandler::getHandler( $this->getMimeType() );
 		}
 
@@ -672,7 +642,7 @@ class ArchivedFile {
 	 * @return int|false
 	 */
 	public function pageCount() {
-		if ( !isset( $this->pageCount ) ) {
+		if ( $this->pageCount === null ) {
 			// @FIXME: callers expect File objects
 			// @phan-suppress-next-line PhanTypeMismatchArgument
 			if ( $this->getHandler() && $this->handler->isMultiPage( $this ) ) {
@@ -731,7 +701,7 @@ class ArchivedFile {
 	 *   passed to the $audience parameter
 	 * @return UserIdentity|null
 	 */
-	public function getUploader( int $audience = self::FOR_PUBLIC, Authority $performer = null ): ?UserIdentity {
+	public function getUploader( int $audience = self::FOR_PUBLIC, ?Authority $performer = null ): ?UserIdentity {
 		$this->load();
 		if ( $audience === self::FOR_PUBLIC && $this->isDeleted( File::DELETED_USER ) ) {
 			return null;
@@ -754,7 +724,7 @@ class ArchivedFile {
 	 *   passed to the $audience parameter
 	 * @return string
 	 */
-	public function getDescription( int $audience = self::FOR_PUBLIC, Authority $performer = null ): string {
+	public function getDescription( int $audience = self::FOR_PUBLIC, ?Authority $performer = null ): string {
 		$this->load();
 		if ( $audience === self::FOR_PUBLIC && $this->isDeleted( File::DELETED_COMMENT ) ) {
 			return '';

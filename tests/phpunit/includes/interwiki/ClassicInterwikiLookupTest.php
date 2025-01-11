@@ -4,17 +4,20 @@ use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Interwiki\ClassicInterwikiLookup;
 use MediaWiki\MainConfigNames;
 use MediaWiki\WikiMap\WikiMap;
+use Wikimedia\ObjectCache\WANObjectCache;
 
 /**
- * @covers MediaWiki\Interwiki\ClassicInterwikiLookup
+ * @covers \MediaWiki\Interwiki\ClassicInterwikiLookup
  * @group Database
  */
 class ClassicInterwikiLookupTest extends MediaWikiIntegrationTestCase {
 
 	private function populateDB( $iwrows ) {
-		$this->db->delete( 'interwiki', '*', __METHOD__ );
-		$this->db->insert( 'interwiki', array_values( $iwrows ), __METHOD__ );
-		$this->tablesUsed[] = 'interwiki';
+		$this->db->newInsertQueryBuilder()
+			->insertInto( 'interwiki' )
+			->rows( $iwrows )
+			->caller( __METHOD__ )
+			->execute();
 	}
 
 	/**
@@ -29,6 +32,8 @@ class ClassicInterwikiLookupTest extends MediaWikiIntegrationTestCase {
 				MainConfigNames::InterwikiCache => $interwikiData,
 				MainConfigNames::InterwikiFallbackSite => 'en',
 				MainConfigNames::InterwikiScopes => 3,
+				MainConfigNames::InterwikiMagic => true,
+				MainConfigNames::VirtualDomainsMapping => [],
 				'wikiId' => WikiMap::getCurrentWikiId(),
 			];
 
@@ -40,7 +45,8 @@ class ClassicInterwikiLookupTest extends MediaWikiIntegrationTestCase {
 			$lang,
 			WANObjectCache::newEmpty(),
 			$services->getHookContainer(),
-			$services->getDBLoadBalancer()
+			$services->getConnectionProvider(),
+			$services->getLanguageNameUtils()
 		);
 	}
 

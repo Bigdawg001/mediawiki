@@ -18,7 +18,14 @@
  * @file
  */
 
+use MediaWiki\Deferred\DeferredUpdates;
+use MediaWiki\Deferred\SiteStatsUpdate;
+use MediaWiki\FileRepo\File\FileSelectQueryBuilder;
+use MediaWiki\Language\Language;
+use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Status\Status;
+use Wikimedia\Rdbms\SelectQueryBuilder;
 use Wikimedia\ScopedCallback;
 
 /**
@@ -115,37 +122,35 @@ class LocalFileRestoreBatch {
 
 		$status = $this->file->repo->newGood();
 
-		$exists = (bool)$dbw->selectField( 'image', '1',
-			[ 'img_name' => $this->file->getName() ],
-			__METHOD__,
-			// The acquireFileLock() should already prevent changes, but this still may need
-			// to bypass any transaction snapshot. However, if we started the
-			// trx (which we probably did) then snapshot is post-lock and up-to-date.
-			$ownTrx ? [] : [ 'LOCK IN SHARE MODE' ]
-		);
+		$queryBuilder = $dbw->newSelectQueryBuilder()
+			->select( '1' )
+			->from( 'image' )
+			->where( [ 'img_name' => $this->file->getName() ] );
+		// The acquireFileLock() should already prevent changes, but this still may need
+		// to bypass any transaction snapshot. However, if we started the
+		// trx (which we probably did) then snapshot is post-lock and up-to-date.
+		if ( !$ownTrx ) {
+			$queryBuilder->lockInShareMode();
+		}
+		$exists = (bool)$queryBuilder->caller( __METHOD__ )->fetchField();
 
 		// Fetch all or selected archived revisions for the file,
 		// sorted from the most recent to the oldest.
-		$conditions = [ 'fa_name' => $this->file->getName() ];
+		$arQueryBuilder = FileSelectQueryBuilder::newForArchivedFile( $dbw );
+		$arQueryBuilder->where( [ 'fa_name' => $this->file->getName() ] )
+			->orderBy( 'fa_timestamp', SelectQueryBuilder::SORT_DESC );
 
 		if ( !$this->all ) {
-			$conditions['fa_id'] = $this->ids;
+			$arQueryBuilder->andWhere( [ 'fa_id' => $this->ids ] );
 		}
 
-		$arFileQuery = ArchivedFile::getQueryInfo();
-		$result = $dbw->select(
-			$arFileQuery['tables'],
-			$arFileQuery['fields'],
-			$conditions,
-			__METHOD__,
-			[ 'ORDER BY' => 'fa_timestamp DESC' ],
-			$arFileQuery['joins']
-		);
+		$result = $arQueryBuilder->caller( __METHOD__ )->fetchResultSet();
 
 		$idsPresent = [];
 		$storeBatch = [];
 		$insertBatch = [];
 		$insertCurrent = false;
+		$insertFileRevisions = [];
 		$deleteIds = [];
 		$first = true;
 		$archiveNames = [];
@@ -206,13 +211,30 @@ class LocalFileRestoreBatch {
 					'metadata' => $row->fa_metadata
 				];
 			}
-
+			$this->file->setProps( [
+				'media_type' => $mediaInfo['media_type'],
+				'major_mime' => $mediaInfo['major_mime'],
+				'minor_mime' => $mediaInfo['minor_mime'],
+			] );
 			$comment = $commentStore->getComment( 'fa_description', $row );
-			if ( $first && !$exists ) {
-				// This revision will be published as the new current version
-				$destRel = $this->file->getRel();
-				$commentFields = $commentStore->insert( $dbw, 'img_description', $comment );
-				$insertCurrent = [
+
+			$commentFieldsNew = $commentStore->insert( $dbw, 'fr_description', $comment );
+			 $fileRevisionRow = [
+				'fr_size' => $row->fa_size,
+				'fr_width' => $row->fa_width,
+				'fr_height' => $row->fa_height,
+				'fr_metadata' => $mediaInfo['metadata'],
+				'fr_bits' => $row->fa_bits,
+				'fr_actor' => $row->fa_actor,
+				'fr_timestamp' => $row->fa_timestamp,
+				'fr_sha1' => $sha1
+			 ] + $commentFieldsNew;
+
+			 if ( $first && !$exists ) {
+				 // This revision will be published as the new current version
+				 $destRel = $this->file->getRel();
+				 $commentFields = $commentStore->insert( $dbw, 'img_description', $comment );
+				 $insertCurrent = [
 					'img_name' => $row->fa_name,
 					'img_size' => $row->fa_size,
 					'img_width' => $row->fa_width,
@@ -225,31 +247,33 @@ class LocalFileRestoreBatch {
 					'img_actor' => $row->fa_actor,
 					'img_timestamp' => $row->fa_timestamp,
 					'img_sha1' => $sha1
-				] + $commentFields;
+				 ] + $commentFields;
 
-				// The live (current) version cannot be hidden!
-				if ( !$this->unsuppress && $row->fa_deleted ) {
-					$status->fatal( 'undeleterevdel' );
-					return $status;
-				}
-			} else {
-				$archiveName = $row->fa_archive_name;
+				 // The live (current) version cannot be hidden!
+				 if ( !$this->unsuppress && $row->fa_deleted ) {
+					 $status->fatal( 'undeleterevdel' );
+					 return $status;
+				 }
+				 $fileRevisionRow['fr_archive_name'] = '';
+				 $fileRevisionRow['fr_deleted'] = 0;
+			 } else {
+				 $archiveName = $row->fa_archive_name;
 
-				if ( $archiveName == '' ) {
-					// This was originally a current version; we
-					// have to devise a new archive name for it.
-					// Format is <timestamp of archiving>!<name>
-					$timestamp = (int)wfTimestamp( TS_UNIX, $row->fa_deleted_timestamp );
+				 if ( $archiveName === null ) {
+					 // This was originally a current version; we
+					 // have to devise a new archive name for it.
+					 // Format is <timestamp of archiving>!<name>
+					 $timestamp = (int)wfTimestamp( TS_UNIX, $row->fa_deleted_timestamp );
 
-					do {
-						$archiveName = wfTimestamp( TS_MW, $timestamp ) . '!' . $row->fa_name;
-						$timestamp++;
-					} while ( isset( $archiveNames[$archiveName] ) );
-				}
+					 do {
+						 $archiveName = wfTimestamp( TS_MW, $timestamp ) . '!' . $row->fa_name;
+						 $timestamp++;
+					 } while ( isset( $archiveNames[$archiveName] ) );
+				 }
 
-				$archiveNames[$archiveName] = true;
-				$destRel = $this->file->getArchiveRel( $archiveName );
-				$insertBatch[] = [
+				 $archiveNames[$archiveName] = true;
+				 $destRel = $this->file->getArchiveRel( $archiveName );
+				 $insertBatch[] = [
 					'oi_name' => $row->fa_name,
 					'oi_archive_name' => $archiveName,
 					'oi_size' => $row->fa_size,
@@ -264,20 +288,24 @@ class LocalFileRestoreBatch {
 					'oi_minor_mime' => $mediaInfo['minor_mime'],
 					'oi_deleted' => $this->unsuppress ? 0 : $row->fa_deleted,
 					'oi_sha1' => $sha1
-				] + $commentStore->insert( $dbw, 'oi_description', $comment );
-			}
+				 ] + $commentStore->insert( $dbw, 'oi_description', $comment );
 
-			$deleteIds[] = $row->fa_id;
+				 $fileRevisionRow['fr_archive_name'] = $archiveName;
+				 $fileRevisionRow['fr_deleted'] = $this->unsuppress ? 0 : $row->fa_deleted;
+			 }
+			 $insertFileRevisions[] = $fileRevisionRow;
 
-			if ( !$this->unsuppress && $row->fa_deleted & File::DELETED_FILE ) {
-				// private files can stay where they are
-				$status->successCount++;
-			} else {
-				$storeBatch[] = [ $deletedUrl, 'public', $destRel ];
-				$this->cleanupBatch[] = $row->fa_storage_key;
-			}
+			 $deleteIds[] = $row->fa_id;
 
-			$first = false;
+			 if ( !$this->unsuppress && $row->fa_deleted & File::DELETED_FILE ) {
+				 // private files can stay where they are
+				 $status->successCount++;
+			 } else {
+				 $storeBatch[] = [ $deletedUrl, 'public', $destRel ];
+				 $this->cleanupBatch[] = $row->fa_storage_key;
+			 }
+
+			 $first = false;
 		}
 
 		unset( $result );
@@ -318,18 +346,60 @@ class LocalFileRestoreBatch {
 		// no data loss, but leaving unregistered files scattered throughout the
 		// public zone.
 		// This is not ideal, which is why it's important to lock the image row.
+		$migrationStage = MediaWikiServices::getInstance()->getMainConfig()->get(
+			MainConfigNames::FileSchemaMigrationStage
+		);
 		if ( $insertCurrent ) {
-			$dbw->insert( 'image', $insertCurrent, __METHOD__ );
+			$dbw->newInsertQueryBuilder()
+				->insertInto( 'image' )
+				->row( $insertCurrent )
+				->caller( __METHOD__ )->execute();
+			if ( $migrationStage & SCHEMA_COMPAT_WRITE_NEW ) {
+				$dbw->newUpdateQueryBuilder()
+					->update( 'file' )
+					->set( [ 'file_deleted' => 0 ] )
+					->where( [ 'file_id' => $this->file->acquireFileIdFromName() ] )
+					->caller( __METHOD__ )->execute();
+			}
 		}
 
 		if ( $insertBatch ) {
-			$dbw->insert( 'oldimage', $insertBatch, __METHOD__ );
+			$dbw->newInsertQueryBuilder()
+				->insertInto( 'oldimage' )
+				->rows( $insertBatch )
+				->caller( __METHOD__ )->execute();
 		}
 
 		if ( $deleteIds ) {
-			$dbw->delete( 'filearchive',
-				[ 'fa_id' => $deleteIds ],
-				__METHOD__ );
+			$dbw->newDeleteQueryBuilder()
+				->deleteFrom( 'filearchive' )
+				->where( [ 'fa_id' => $deleteIds ] )
+				->caller( __METHOD__ )->execute();
+		}
+
+		if ( $insertFileRevisions && ( $migrationStage & SCHEMA_COMPAT_WRITE_NEW ) ) {
+			// reverse the order to make the newest have the highest id
+			$insertFileRevisions = array_reverse( $insertFileRevisions );
+
+			foreach ( $insertFileRevisions as &$row ) {
+				$row['fr_file'] = $this->file->getFileIdFromName();
+			}
+			$dbw->newInsertQueryBuilder()
+				->insertInto( 'filerevision' )
+				->rows( $insertFileRevisions )
+				->caller( __METHOD__ )->execute();
+			$latestId = $dbw->newSelectQueryBuilder()
+				->select( 'fr_id' )
+				->from( 'filerevision' )
+				->where( [ 'fr_file' => $this->file->getFileIdFromName() ] )
+				->orderBy( 'fr_timestamp', 'DESC' )
+				->fetchField();
+			$dbw->newUpdateQueryBuilder()
+				->update( 'file' )
+				->set( [ 'file_latest' => $latestId ] )
+				->where( [ 'file_id' => $this->file->getFileIdFromName() ] )
+				->caller( __METHOD__ )->execute();
+
 		}
 
 		// If store batch is empty (all files are missing), deletion is to be considered successful

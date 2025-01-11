@@ -1,7 +1,22 @@
 <?php
 
+namespace MediaWiki\HTMLForm;
+
+use HtmlArmor;
+use InvalidArgumentException;
+use MediaWiki\Context\RequestContext;
 use MediaWiki\Html\Html;
+use MediaWiki\HTMLForm\Field\HTMLCheckField;
+use MediaWiki\HTMLForm\Field\HTMLFormFieldCloner;
+use MediaWiki\Json\FormatJson;
 use MediaWiki\Linker\Linker;
+use MediaWiki\Logger\LoggerFactory;
+use MediaWiki\Message\Message;
+use MediaWiki\Request\WebRequest;
+use MediaWiki\Status\Status;
+use StatusValue;
+use Wikimedia\Message\MessageParam;
+use Wikimedia\Message\MessageSpecifier;
 
 /**
  * The parent class to generate form fields.  Any field type should
@@ -13,25 +28,40 @@ abstract class HTMLFormField {
 	/** @var array|array[] */
 	public $mParams;
 
+	/** @var callable(mixed,array,HTMLForm):(StatusValue|string|bool|Message)|null */
 	protected $mValidationCallback;
+	/** @var callable(mixed,array,HTMLForm):(StatusValue|string|bool|Message)|null */
 	protected $mFilterCallback;
+	/** @var string */
 	protected $mName;
+	/** @var string */
 	protected $mDir;
-	protected $mLabel; # String label, as HTML. Set on construction.
+	/** @var string String label, as HTML. Set on construction. */
+	protected $mLabel;
+	/** @var string */
 	protected $mID;
+	/** @var string */
 	protected $mClass = '';
+	/** @var string */
 	protected $mVFormClass = '';
+	/** @var string|false */
 	protected $mHelpClass = false;
+	/** @var mixed */
 	protected $mDefault;
+	/** @var array */
+	private $mNotices;
+
 	/**
 	 * @var array|null|false
 	 */
 	protected $mOptions = false;
+	/** @var bool */
 	protected $mOptionsLabelsNotFromMessage = false;
 	/**
 	 * @var array Array to hold params for 'hide-if' or 'disable-if' statements
 	 */
 	protected $mCondState = [];
+	/** @var array */
 	protected $mCondStateClass = [];
 
 	/**
@@ -63,10 +93,26 @@ abstract class HTMLFormField {
 	 * @stable to override
 	 *
 	 * @param string $value
-	 * @return OOUI\Widget|string|false
+	 * @return \OOUI\Widget|string|false
 	 */
 	public function getInputOOUI( $value ) {
 		return false;
+	}
+
+	/**
+	 * Same as getInputHTML, but for Codex. This is called by CodexHTMLForm.
+	 *
+	 * If not overridden, falls back to getInputHTML.
+	 *
+	 * @param string $value The value to set the input to
+	 * @param bool $hasErrors Whether there are validation errors. If set to true, this method
+	 *   should apply a CSS class for the error status (e.g. cdx-text-input--status-error)
+	 *   if the component used supports that.
+	 * @return string HTML
+	 */
+	public function getInputCodex( $value, $hasErrors ) {
+		// If not overridden, fall back to getInputHTML()
+		return $this->getInputHTML( $value );
 	}
 
 	/**
@@ -88,7 +134,9 @@ abstract class HTMLFormField {
 	 * Parameters are the same as wfMessage().
 	 *
 	 * @param string|string[]|MessageSpecifier $key
-	 * @param mixed ...$params
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param MessageParam|MessageSpecifier|string|int|float|list<MessageParam|MessageSpecifier|string|int|float> ...$params
+	 *   See Message::params()
 	 * @return Message
 	 */
 	public function msg( $key, ...$params ) {
@@ -128,12 +176,13 @@ abstract class HTMLFormField {
 	 *
 	 * @param string $name
 	 * @param bool $backCompat Whether to try striping the 'wp' prefix.
-	 * @return mixed
+	 * @return HTMLFormField
 	 */
 	protected function getNearestField( $name, $backCompat = false ) {
 		// When the field is belong to a HTMLFormFieldCloner
-		if ( isset( $this->mParams['cloner'] ) ) {
-			$field = $this->mParams['cloner']->findNearestField( $this, $name );
+		$cloner = $this->mParams['cloner'] ?? null;
+		if ( $cloner instanceof HTMLFormFieldCloner ) {
+			$field = $cloner->findNearestField( $this, $name );
 			if ( $field ) {
 				return $field;
 			}
@@ -162,8 +211,9 @@ abstract class HTMLFormField {
 	protected function getNearestFieldValue( $alldata, $name, $asDisplay = false, $backCompat = false ) {
 		$field = $this->getNearestField( $name, $backCompat );
 		// When the field belongs to a HTMLFormFieldCloner
-		if ( isset( $field->mParams['cloner'] ) ) {
-			$value = $field->mParams['cloner']->extractFieldData( $field, $alldata );
+		$cloner = $field->mParams['cloner'] ?? null;
+		if ( $cloner instanceof HTMLFormFieldCloner ) {
+			$value = $cloner->extractFieldData( $field, $alldata );
 		} else {
 			// Note $alldata is an empty array when first rendering a form with a formIdentifier.
 			// In that case, $alldata[$field->mParams['fieldname']] is unset and we use the
@@ -198,53 +248,51 @@ abstract class HTMLFormField {
 	 * be done later.
 	 *
 	 * @param array $params
-	 * @throws MWException
 	 */
 	protected function validateCondState( $params ) {
 		$origParams = $params;
 		$op = array_shift( $params );
 
-		try {
-			switch ( $op ) {
-				case 'NOT':
-					if ( count( $params ) !== 1 ) {
-						throw new MWException( "NOT takes exactly one parameter" );
-					}
-					// Fall-through intentionally
-
-				case 'AND':
-				case 'OR':
-				case 'NAND':
-				case 'NOR':
-					foreach ( $params as $i => $p ) {
-						if ( !is_array( $p ) ) {
-							$type = gettype( $p );
-							throw new MWException( "Expected array, found $type at index $i" );
-						}
-						$this->validateCondState( $p );
-					}
-					break;
-
-				case '===':
-				case '!==':
-					if ( count( $params ) !== 2 ) {
-						throw new MWException( "$op takes exactly two parameters" );
-					}
-					[ $name, $value ] = $params;
-					if ( !is_string( $name ) || !is_string( $value ) ) {
-						throw new MWException( "Parameters for $op must be strings" );
-					}
-					break;
-
-				default:
-					throw new MWException( "Unknown operation" );
-			}
-		} catch ( MWException $ex ) {
-			throw new MWException(
+		$makeException = function ( string $details ) use ( $origParams ): InvalidArgumentException {
+			return new InvalidArgumentException(
 				"Invalid hide-if or disable-if specification for $this->mName: " .
-				$ex->getMessage() . " in " . var_export( $origParams, true ),
-				0, $ex
+				$details . " in " . var_export( $origParams, true )
 			);
+		};
+
+		switch ( $op ) {
+			case 'NOT':
+				if ( count( $params ) !== 1 ) {
+					throw $makeException( "NOT takes exactly one parameter" );
+				}
+				// Fall-through intentionally
+
+			case 'AND':
+			case 'OR':
+			case 'NAND':
+			case 'NOR':
+				foreach ( $params as $i => $p ) {
+					if ( !is_array( $p ) ) {
+						$type = get_debug_type( $p );
+						throw $makeException( "Expected array, found $type at index $i" );
+					}
+					$this->validateCondState( $p );
+				}
+				break;
+
+			case '===':
+			case '!==':
+				if ( count( $params ) !== 2 ) {
+					throw $makeException( "$op takes exactly two parameters" );
+				}
+				[ $name, $value ] = $params;
+				if ( !is_string( $name ) || !is_string( $value ) ) {
+					throw $makeException( "Parameters for $op must be strings" );
+				}
+				break;
+
+			default:
+				throw $makeException( "Unknown operation" );
 		}
 	}
 
@@ -254,7 +302,6 @@ abstract class HTMLFormField {
 	 * @param array $alldata
 	 * @param array $params
 	 * @return bool
-	 * @throws MWException
 	 */
 	protected function checkStateRecurse( array $alldata, array $params ) {
 		$op = array_shift( $params );
@@ -344,11 +391,8 @@ abstract class HTMLFormField {
 	 * @return bool
 	 */
 	public function isHidden( $alldata ) {
-		if ( !( $this->mCondState && isset( $this->mCondState['hide'] ) ) ) {
-			return false;
-		}
-
-		return $this->checkStateRecurse( $alldata, $this->mCondState['hide'] );
+		return isset( $this->mCondState['hide'] ) &&
+			$this->checkStateRecurse( $alldata, $this->mCondState['hide'] );
 	}
 
 	/**
@@ -360,15 +404,10 @@ abstract class HTMLFormField {
 	 * @return bool
 	 */
 	public function isDisabled( $alldata ) {
-		if ( $this->mParams['disabled'] ?? false ) {
-			return true;
-		}
-		$hidden = $this->isHidden( $alldata );
-		if ( !$this->mCondState || !isset( $this->mCondState['disable'] ) ) {
-			return $hidden;
-		}
-
-		return $hidden || $this->checkStateRecurse( $alldata, $this->mCondState['disable'] );
+		return ( $this->mParams['disabled'] ?? false ) ||
+			$this->isHidden( $alldata ) ||
+			( isset( $this->mCondState['disable'] )
+				&& $this->checkStateRecurse( $alldata, $this->mCondState['disable'] ) );
 	}
 
 	/**
@@ -410,11 +449,19 @@ abstract class HTMLFormField {
 			return $this->msg( 'htmlform-required' );
 		}
 
-		if ( isset( $this->mValidationCallback ) ) {
-			return ( $this->mValidationCallback )( $value, $alldata, $this->mParent );
+		if ( $this->mValidationCallback === null ) {
+			return true;
 		}
 
-		return true;
+		$p = ( $this->mValidationCallback )( $value, $alldata, $this->mParent );
+
+		if ( $p instanceof StatusValue ) {
+			$language = $this->mParent ? $this->mParent->getLanguage() : RequestContext::getMain()->getLanguage();
+
+			return $p->isGood() ? true : Status::wrap( $p )->getHTML( false, false, $language );
+		}
+
+		return $p;
 	}
 
 	/**
@@ -426,7 +473,7 @@ abstract class HTMLFormField {
 	 * @return mixed
 	 */
 	public function filter( $value, $alldata ) {
-		if ( isset( $this->mFilterCallback ) ) {
+		if ( $this->mFilterCallback !== null ) {
 			$value = ( $this->mFilterCallback )( $value, $alldata, $this->mParent );
 		}
 
@@ -470,7 +517,7 @@ abstract class HTMLFormField {
 	 */
 	protected function isSubmitAttempt( WebRequest $request ) {
 		// HTMLForm would add a hidden field of edit token for forms that require to be posted.
-		return $request->wasPosted() && $request->getCheck( 'wpEditToken' )
+		return ( $request->wasPosted() && $request->getCheck( 'wpEditToken' ) )
 			// The identifier matching or not has been checked in HTMLForm::prepareForm()
 			|| $request->getCheck( 'wpFormIdentifier' );
 	}
@@ -498,7 +545,6 @@ abstract class HTMLFormField {
 	 * @param array $params Associative Array. See HTMLForm doc for syntax.
 	 *
 	 * @since 1.22 The 'label' attribute no longer accepts raw HTML, use 'label-raw' instead
-	 * @throws MWException
 	 */
 	public function __construct( $params ) {
 		$this->mParams = $params;
@@ -529,10 +575,7 @@ abstract class HTMLFormField {
 			$this->mLabel = $params['label-raw'];
 		}
 
-		$this->mName = "wp{$params['fieldname']}";
-		if ( isset( $params['name'] ) ) {
-			$this->mName = $params['name'];
-		}
+		$this->mName = $params['name'] ?? 'wp' . $params['fieldname'];
 
 		if ( isset( $params['dir'] ) ) {
 			$this->mDir = $params['dir'];
@@ -566,6 +609,9 @@ abstract class HTMLFormField {
 
 		if ( isset( $params['hidelabel'] ) ) {
 			$this->mShowEmptyLabels = false;
+		}
+		if ( isset( $params['notices'] ) ) {
+			$this->mNotices = $params['notices'];
 		}
 
 		if ( isset( $params['hide-if'] ) && $params['hide-if'] ) {
@@ -618,6 +664,9 @@ abstract class HTMLFormField {
 		if ( $this->mCondState ) {
 			$rowAttributes['data-cond-state'] = FormatJson::encode( $this->parseCondStateForClient() );
 			$rowClasses .= implode( ' ', $this->mCondStateClass );
+			if ( $this->isHidden( $this->mParent->mFieldData ) ) {
+				$rowClasses .= ' mw-htmlform-hide-if-hidden';
+			}
 		}
 
 		if ( $verticalLabel ) {
@@ -674,20 +723,22 @@ abstract class HTMLFormField {
 				$inputHtml . "\n$errors"
 			);
 		}
-		$divCssClasses = [ "mw-htmlform-field-$fieldType",
-			$this->mClass, $this->mVFormClass, $errorClass ];
 
-		$wrapperAttributes = [
-			'class' => $divCssClasses,
-		];
+		$wrapperAttributes = [ 'class' => [
+			"mw-htmlform-field-$fieldType",
+			$this->mClass,
+			$this->mVFormClass,
+			$errorClass,
+		] ];
 		if ( $this->mCondState ) {
 			$wrapperAttributes['data-cond-state'] = FormatJson::encode( $this->parseCondStateForClient() );
 			$wrapperAttributes['class'] = array_merge( $wrapperAttributes['class'], $this->mCondStateClass );
+			if ( $this->isHidden( $this->mParent->mFieldData ) ) {
+				$wrapperAttributes['class'][] = 'mw-htmlform-hide-if-hidden';
+			}
 		}
-		$html = Html::rawElement( 'div', $wrapperAttributes, $label . $field );
-		$html .= $helptext;
-
-		return $html;
+		return Html::rawElement( 'div', $wrapperAttributes, $label . $field ) .
+			$helptext;
 	}
 
 	/**
@@ -697,7 +748,7 @@ abstract class HTMLFormField {
 	 *
 	 * @param string $value The value to set the input to.
 	 *
-	 * @return OOUI\FieldLayout
+	 * @return \OOUI\FieldLayout
 	 */
 	public function getOOUI( $value ) {
 		$inputField = $this->getInputOOUI( $value );
@@ -707,7 +758,7 @@ abstract class HTMLFormField {
 			// generate the whole field, label and errors and all, then wrap it in a Widget.
 			// It might look weird, but it'll work OK.
 			return $this->getFieldLayoutOOUI(
-				new OOUI\Widget( [ 'content' => new OOUI\HtmlSnippet( $this->getDiv( $value ) ) ] ),
+				new \OOUI\Widget( [ 'content' => new \OOUI\HtmlSnippet( $this->getDiv( $value ) ) ] ),
 				[ 'align' => 'top' ]
 			);
 		}
@@ -717,7 +768,7 @@ abstract class HTMLFormField {
 			// We have an OOUI implementation, but it's not proper, and we got a load of HTML.
 			// Cheat a little and wrap it in a widget. It won't be infusable, though, since client-side
 			// JavaScript doesn't know how to rebuilt the contents.
-			$inputField = new OOUI\Widget( [ 'content' => new OOUI\HtmlSnippet( $inputField ) ] );
+			$inputField = new \OOUI\Widget( [ 'content' => new \OOUI\HtmlSnippet( $inputField ) ] );
 			$infusable = false;
 		}
 
@@ -725,16 +776,17 @@ abstract class HTMLFormField {
 		$help = $this->getHelpText();
 		$errors = $this->getErrorsRaw( $value );
 		foreach ( $errors as &$error ) {
-			$error = new OOUI\HtmlSnippet( $error );
+			$error = new \OOUI\HtmlSnippet( $error );
 		}
 
 		$config = [
 			'classes' => [ "mw-htmlform-field-$fieldType" ],
 			'align' => $this->getLabelAlignOOUI(),
-			'help' => ( $help !== null && $help !== '' ) ? new OOUI\HtmlSnippet( $help ) : null,
+			'help' => ( $help !== null && $help !== '' ) ? new \OOUI\HtmlSnippet( $help ) : null,
 			'errors' => $errors,
 			'infusable' => $infusable,
 			'helpInline' => $this->isHelpInline(),
+			'notices' => $this->mNotices ?: [],
 		];
 		if ( $this->mClass !== '' ) {
 			$config['classes'][] = $this->mClass;
@@ -748,12 +800,15 @@ abstract class HTMLFormField {
 		}
 		if ( $this->mCondState ) {
 			$config['classes'] = array_merge( $config['classes'], $this->mCondStateClass );
+			if ( $this->isHidden( $this->mParent->mFieldData ) ) {
+				$config['classes'][] = 'mw-htmlform-hide-if-hidden';
+			}
 		}
 
 		// the element could specify, that the label doesn't need to be added
 		$label = $this->getLabel();
 		if ( $label && $label !== "\u{00A0}" && $label !== '&#160;' ) {
-			$config['label'] = new OOUI\HtmlSnippet( $label );
+			$config['label'] = new \OOUI\HtmlSnippet( $label );
 		}
 
 		if ( $this->mCondState ) {
@@ -769,6 +824,89 @@ abstract class HTMLFormField {
 		}
 
 		return $this->getFieldLayoutOOUI( $inputField, $config );
+	}
+
+	/**
+	 * Get the Codex version of the div.
+	 * @since 1.42
+	 *
+	 * @param string $value The value to set the input to.
+	 * @return string HTML
+	 */
+	public function getCodex( $value ) {
+		$isDisabled = ( $this->mParams['disabled'] ?? false );
+
+		// Label
+		$labelDiv = '';
+		$labelValue = trim( $this->getLabel() );
+		// For weird historical reasons, a non-breaking space is treated as an empty label
+		// Check for both a literal nbsp ("\u{00A0}") and the HTML-encoded version
+		if ( $labelValue !== '' && $labelValue !== "\u{00A0}" && $labelValue !== '&#160;' ) {
+			$labelFor = $this->needsLabel() ? [ 'for' => $this->mID ] : [];
+			$labelClasses = [ 'cdx-label' ];
+			if ( $isDisabled ) {
+				$labelClasses[] = 'cdx-label--disabled';
+			}
+			// <div class="cdx-label">
+			$labelDiv = Html::rawElement( 'div', [ 'class' => $labelClasses ],
+				// <label class="cdx-label__label" for="ID">
+				Html::rawElement( 'label', [ 'class' => 'cdx-label__label' ] + $labelFor,
+					// <span class="cdx-label__label__text">
+					Html::rawElement( 'span', [ 'class' => 'cdx-label__label__text' ],
+						$labelValue
+					)
+				)
+			);
+		}
+
+		// Help text
+		// <div class="cdx-field__help-text">
+		$helptext = $this->getHelpTextHtmlDiv( $this->getHelpText(), [ 'cdx-field__help-text' ] );
+
+		// Validation message
+		// <div class="cdx-field__validation-message">
+		// $errors is a <div class="cdx-message">
+		// FIXME right now this generates a block message (cdx-message--block), we want an inline message instead
+		$validationMessage = '';
+		[ $errors, $errorClass ] = $this->getErrorsAndErrorClass( $value );
+		if ( $errors !== '' ) {
+			$validationMessage = Html::rawElement( 'div', [ 'class' => 'cdx-field__validation-message' ],
+				$errors
+			);
+		}
+
+		// Control
+		$inputHtml = $this->getInputCodex( $value, $errors !== '' );
+		// <div class="cdx-field__control cdx-field__control--has-help-text">
+		$controlClasses = [ 'cdx-field__control' ];
+		if ( $helptext ) {
+			$controlClasses[] = 'cdx-field__control--has-help-text';
+		}
+		$control = Html::rawElement( 'div', [ 'class' => $controlClasses ], $inputHtml );
+
+		// <div class="cdx-field">
+		$fieldClasses = [
+			"mw-htmlform-field-{$this->getClassName()}",
+			$this->mClass,
+			$errorClass,
+			'cdx-field'
+		];
+		if ( $isDisabled ) {
+			$fieldClasses[] = 'cdx-field--disabled';
+		}
+		$fieldAttributes = [];
+		// Set data attribute and CSS class for client side handling of hide-if / disable-if
+		if ( $this->mCondState ) {
+			$fieldAttributes['data-cond-state'] = FormatJson::encode( $this->parseCondStateForClient() );
+			$fieldClasses = array_merge( $fieldClasses, $this->mCondStateClass );
+			if ( $this->isHidden( $this->mParent->mFieldData ) ) {
+				$fieldClasses[] = 'mw-htmlform-hide-if-hidden';
+			}
+		}
+
+		return Html::rawElement( 'div', [ 'class' => $fieldClasses ] + $fieldAttributes,
+			$labelDiv . $control . $helptext . $validationMessage
+		);
 	}
 
 	/**
@@ -794,9 +932,9 @@ abstract class HTMLFormField {
 
 	/**
 	 * Get a FieldLayout (or subclass thereof) to wrap this field in when using OOUI output.
-	 * @param OOUI\Widget $inputField
+	 * @param \OOUI\Widget $inputField
 	 * @param array $config
-	 * @return OOUI\FieldLayout
+	 * @return \OOUI\FieldLayout
 	 */
 	protected function getFieldLayoutOOUI( $inputField, $config ) {
 		return new HTMLFormFieldLayout( $inputField, $config );
@@ -812,7 +950,7 @@ abstract class HTMLFormField {
 	 */
 	protected function shouldInfuseOOUI() {
 		// Always infuse fields with popup help text, since the interface for it is nicer with JS
-		return $this->getHelpText() !== null && !$this->isHelpInline();
+		return !$this->isHelpInline() && $this->getHelpMessages();
 	}
 
 	/**
@@ -838,17 +976,10 @@ abstract class HTMLFormField {
 	 */
 	public function getRaw( $value ) {
 		[ $errors, ] = $this->getErrorsAndErrorClass( $value );
-		$inputHtml = $this->getInputHTML( $value );
-		$helptext = $this->getHelpTextHtmlRaw( $this->getHelpText() );
-		$cellAttributes = [];
-		$label = $this->getLabelHtml( $cellAttributes );
-
-		$html = "\n$errors";
-		$html .= $label;
-		$html .= $inputHtml;
-		$html .= $helptext;
-
-		return $html;
+		return "\n" . $errors .
+			$this->getLabelHtml() .
+			$this->getInputHTML( $value ) .
+			$this->getHelpTextHtmlRaw( $this->getHelpText() );
 	}
 
 	/**
@@ -875,17 +1006,11 @@ abstract class HTMLFormField {
 	 */
 	public function getInline( $value ) {
 		[ $errors, ] = $this->getErrorsAndErrorClass( $value );
-		$inputHtml = $this->getInputHTML( $value );
-		$helptext = $this->getHelpTextHtmlDiv( $this->getHelpText() );
-		$cellAttributes = [];
-		$label = $this->getLabelHtml( $cellAttributes );
-
-		$html = "\n" . $errors .
-			$label . "\u{00A0}" .
-			$inputHtml .
-			$helptext;
-
-		return $html;
+		return "\n" . $errors .
+			$this->getLabelHtml() .
+			"\u{00A0}" .
+			$this->getInputHTML( $value ) .
+			$this->getHelpTextHtmlDiv( $this->getHelpText() );
 	}
 
 	/**
@@ -910,10 +1035,9 @@ abstract class HTMLFormField {
 		if ( $this->mHelpClass !== false ) {
 			$tdClasses[] = $this->mHelpClass;
 		}
-		$row = Html::rawElement( 'td', [ 'colspan' => 2, 'class' => $tdClasses ], $helptext );
-		$row = Html::rawElement( 'tr', $rowAttributes, $row );
-
-		return $row;
+		return Html::rawElement( 'tr', $rowAttributes,
+			Html::rawElement( 'td', [ 'colspan' => 2, 'class' => $tdClasses ], $helptext )
+		);
 	}
 
 	/**
@@ -921,16 +1045,17 @@ abstract class HTMLFormField {
 	 * @since 1.20
 	 *
 	 * @param string|null $helptext
+	 * @param string[] $cssClasses
 	 *
 	 * @return string
 	 */
-	public function getHelpTextHtmlDiv( $helptext ) {
+	public function getHelpTextHtmlDiv( $helptext, $cssClasses = [] ) {
 		if ( $helptext === null ) {
 			return '';
 		}
 
 		$wrapperAttributes = [
-			'class' => [ 'htmlform-tip' ],
+			'class' => array_merge( $cssClasses, [ 'htmlform-tip' ] ),
 		];
 		if ( $this->mHelpClass !== false ) {
 			$wrapperAttributes['class'][] = $this->mHelpClass;
@@ -939,9 +1064,7 @@ abstract class HTMLFormField {
 			$wrapperAttributes['data-cond-state'] = FormatJson::encode( $this->parseCondStateForClient() );
 			$wrapperAttributes['class'] = array_merge( $wrapperAttributes['class'], $this->mCondStateClass );
 		}
-		$div = Html::rawElement( 'div', $wrapperAttributes, $helptext );
-
-		return $div;
+		return Html::rawElement( 'div', $wrapperAttributes, $helptext );
 	}
 
 	/**
@@ -955,6 +1078,21 @@ abstract class HTMLFormField {
 		return $this->getHelpTextHtmlDiv( $helptext );
 	}
 
+	private function getHelpMessages(): array {
+		if ( isset( $this->mParams['help-message'] ) ) {
+			return [ $this->mParams['help-message'] ];
+		} elseif ( isset( $this->mParams['help-messages'] ) ) {
+			return $this->mParams['help-messages'];
+		} elseif ( isset( $this->mParams['help-raw'] ) ) {
+			return [ new HtmlArmor( $this->mParams['help-raw'] ) ];
+		} elseif ( isset( $this->mParams['help'] ) ) {
+			// @deprecated since 1.43, use 'help-raw' key instead
+			return [ new HtmlArmor( $this->mParams['help'] ) ];
+		}
+
+		return [];
+	}
+
 	/**
 	 * Determine the help text to display
 	 * @stable to override
@@ -962,30 +1100,20 @@ abstract class HTMLFormField {
 	 * @return string|null HTML
 	 */
 	public function getHelpText() {
-		$helptext = null;
+		$html = [];
 
-		if ( isset( $this->mParams['help-message'] ) ) {
-			$this->mParams['help-messages'] = [ $this->mParams['help-message'] ];
-		}
-
-		if ( isset( $this->mParams['help-messages'] ) ) {
-			foreach ( $this->mParams['help-messages'] as $msg ) {
+		foreach ( $this->getHelpMessages() as $msg ) {
+			if ( $msg instanceof HtmlArmor ) {
+				$html[] = HtmlArmor::getHtml( $msg );
+			} else {
 				$msg = $this->getMessage( $msg );
-
 				if ( $msg->exists() ) {
-					if ( $helptext === null ) {
-						$helptext = '';
-					} else {
-						$helptext .= $this->msg( 'word-separator' )->escaped(); // some space
-					}
-					$helptext .= $msg->parse(); // Append message
+					$html[] = $msg->parse();
 				}
 			}
-		} elseif ( isset( $this->mParams['help'] ) ) {
-			$helptext = $this->mParams['help'];
 		}
 
-		return $helptext;
+		return $html ? implode( $this->msg( 'word-separator' )->escaped(), $html ) : null;
 	}
 
 	/**
@@ -1016,14 +1144,10 @@ abstract class HTMLFormField {
 		$errors = $this->validate( $value, $this->mParent->mFieldData );
 
 		if ( is_bool( $errors ) || !$this->mParent->wasSubmitted() ) {
-			$errors = '';
-			$errorClass = '';
-		} else {
-			$errors = self::formatErrors( $errors );
-			$errorClass = 'mw-htmlform-invalid-input';
+			return [ '', '' ];
 		}
 
-		return [ $errors, $errorClass ];
+		return [ self::formatErrors( $errors ), 'mw-htmlform-invalid-input' ];
 	}
 
 	/**
@@ -1037,7 +1161,7 @@ abstract class HTMLFormField {
 		$errors = $this->validate( $value, $this->mParent->mFieldData );
 
 		if ( is_bool( $errors ) || !$this->mParent->wasSubmitted() ) {
-			$errors = [];
+			return [];
 		}
 
 		if ( !is_array( $errors ) ) {
@@ -1069,39 +1193,29 @@ abstract class HTMLFormField {
 	public function getLabelHtml( $cellAttributes = [] ) {
 		# Don't output a for= attribute for labels with no associated input.
 		# Kind of hacky here, possibly we don't want these to be <label>s at all.
-		$for = [];
-
-		if ( $this->needsLabel() ) {
-			$for['for'] = $this->mID;
-		}
+		$for = $this->needsLabel() ? [ 'for' => $this->mID ] : [];
 
 		$labelValue = trim( $this->getLabel() );
-		$hasLabel = false;
-		if ( $labelValue !== "\u{00A0}" && $labelValue !== '&#160;' && $labelValue !== '' ) {
-			$hasLabel = true;
-		}
+		$hasLabel = $labelValue !== '' && $labelValue !== "\u{00A0}" && $labelValue !== '&#160;';
 
 		$displayFormat = $this->mParent->getDisplayFormat();
-		$html = '';
 		$horizontalLabel = $this->mParams['horizontal-label'] ?? false;
 
 		if ( $displayFormat === 'table' ) {
-			$html =
-				Html::rawElement( 'td',
+			return Html::rawElement( 'td',
 					[ 'class' => 'mw-label' ] + $cellAttributes,
 					Html::rawElement( 'label', $for, $labelValue ) );
 		} elseif ( $hasLabel || $this->mShowEmptyLabels ) {
 			if ( $displayFormat === 'div' && !$horizontalLabel ) {
-				$html =
-					Html::rawElement( 'div',
+				return Html::rawElement( 'div',
 						[ 'class' => 'mw-label' ] + $cellAttributes,
 						Html::rawElement( 'label', $for, $labelValue ) );
 			} else {
-				$html = Html::rawElement( 'label', $for, $labelValue );
+				return Html::rawElement( 'label', $for, $labelValue );
 			}
 		}
 
-		return $html;
+		return '';
 	}
 
 	/**
@@ -1178,8 +1292,21 @@ abstract class HTMLFormField {
 		$ret = [];
 		foreach ( $options as $key => $value ) {
 			$msg = $this->msg( $key );
-			$key = $needsParse ? $msg->parse() : $msg->plain();
-			$ret[$key] = is_array( $value )
+			$msgAsText = $needsParse ? $msg->parse() : $msg->plain();
+			if ( array_key_exists( $msgAsText, $ret ) ) {
+				LoggerFactory::getInstance( 'translation-problem' )->error(
+					'The option that uses the message key {msg_key_one} has the same translation as ' .
+					'another option in {lang}. This means that {msg_key_one} will not be used as an option.',
+					[
+						'msg_key_one' => $key,
+						'lang' => $this->mParent ?
+							$this->mParent->getLanguageCode()->toBcp47Code() :
+							RequestContext::getMain()->getLanguageCode()->toBcp47Code(),
+					]
+				);
+				continue;
+			}
+			$ret[$msgAsText] = is_array( $value )
 				? $this->lookupOptionsKeys( $value, $needsParse )
 				: strval( $value );
 		}
@@ -1220,7 +1347,7 @@ abstract class HTMLFormField {
 				$this->mOptions = self::forceToStringRecursive( $this->mParams['options'] );
 			} elseif ( array_key_exists( 'options-message', $this->mParams ) ) {
 				$message = $this->getMessage( $this->mParams['options-message'] )->inContentLanguage()->plain();
-				$this->mOptions = Xml::listDropDownOptions( $message );
+				$this->mOptions = Html::listDropdownOptions( $message );
 			} else {
 				$this->mOptions = null;
 			}
@@ -1241,7 +1368,7 @@ abstract class HTMLFormField {
 			return null;
 		}
 
-		return Xml::listDropDownOptionsOoui( $oldoptions );
+		return Html::listDropdownOptionsOoui( $oldoptions );
 	}
 
 	/**
@@ -1284,20 +1411,14 @@ abstract class HTMLFormField {
 		}
 
 		if ( is_array( $errors ) ) {
-			$lines = [];
-			foreach ( $errors as $error ) {
-				if ( $error instanceof Message ) {
-					$lines[] = Html::rawElement( 'li', [], $error->parse() );
-				} else {
-					$lines[] = Html::rawElement( 'li', [], $error );
-				}
+			foreach ( $errors as &$error ) {
+				$error = Html::rawElement( 'li', [],
+					$error instanceof Message ? $error->parse() : $error
+				);
 			}
-
-			$errors = Html::rawElement( 'ul', [], implode( "\n", $lines ) );
-		} else {
-			if ( $errors instanceof Message ) {
-				$errors = $errors->parse();
-			}
+			$errors = Html::rawElement( 'ul', [], implode( "\n", $errors ) );
+		} elseif ( $errors instanceof Message ) {
+			$errors = $errors->parse();
 		}
 
 		return Html::errorBox( $errors );
@@ -1338,10 +1459,10 @@ abstract class HTMLFormField {
 	 * @since 1.29
 	 */
 	public function needsJSForHtml5FormValidation() {
-		if ( $this->mCondState ) {
-			// This is probably more restrictive than it needs to be, but better safe than sorry
-			return true;
-		}
-		return false;
+		// This is probably more restrictive than it needs to be, but better safe than sorry
+		return (bool)$this->mCondState;
 	}
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( HTMLFormField::class, 'HTMLFormField' );

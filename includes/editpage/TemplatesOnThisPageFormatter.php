@@ -20,8 +20,8 @@
 
 namespace MediaWiki\EditPage;
 
-use IContextSource;
 use MediaWiki\Cache\LinkBatchFactory;
+use MediaWiki\Context\IContextSource;
 use MediaWiki\Html\Html;
 use MediaWiki\Linker\LinkRenderer;
 use MediaWiki\Page\PageIdentity;
@@ -142,6 +142,10 @@ class TemplatesOnThisPageFormatter {
 	 * @return string
 	 */
 	private function formatTemplate( PageIdentity $target ) {
+		if ( !$target->canExist() ) {
+			return Html::rawElement( 'li', [], $this->linkRenderer->makeLink( $target ) );
+		}
+
 		$protected = $this->getRestrictionsText(
 			$this->restrictionStore->getRestrictions( $target, 'edit' )
 		);
@@ -214,4 +218,5 @@ class TemplatesOnThisPageFormatter {
 
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( TemplatesOnThisPageFormatter::class, 'TemplatesOnThisPageFormatter' );

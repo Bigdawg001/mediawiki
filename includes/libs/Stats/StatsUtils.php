@@ -25,9 +25,6 @@ use InvalidArgumentException;
 use Wikimedia\Stats\Exceptions\InvalidConfigurationException;
 
 /**
- *
- * StatsUtils Implementation
- *
  * Functionality common to all metric types.
  *
  * @author Cole White
@@ -35,10 +32,7 @@ use Wikimedia\Stats\Exceptions\InvalidConfigurationException;
  */
 class StatsUtils {
 
-	/** @var string */
 	public const RE_VALID_NAME_AND_LABEL_NAME = "/^[a-zA-Z_][a-zA-Z0-9_]*$/";
-
-	/** @var float */
 	public const DEFAULT_SAMPLE_RATE = 1.0;
 
 	/**
@@ -115,27 +109,6 @@ class StatsUtils {
 	}
 
 	/**
-	 * Merges two associative arrays of labels.  Prioritizes leftmost labels.
-	 *
-	 * @param array $leftLabels
-	 * @param array $rightLabels
-	 * @return array
-	 */
-	public static function mergeLabels( array $leftLabels, array $rightLabels ): array {
-		$output = [];
-		foreach ( $leftLabels as $key => $value ) {
-			$output[$key] = $value;
-		}
-		foreach ( $rightLabels as $key => $value ) {
-			if ( array_key_exists( $key, $output ) ) {
-				continue;
-			}
-			$output[$key] = $value;
-		}
-		return $output;
-	}
-
-	/**
 	 * Normalize an array of strings.
 	 *
 	 * @param string[] $entities
@@ -152,16 +125,14 @@ class StatsUtils {
 	/**
 	 * Normalize strings to a metrics-compatible format.
 	 *
-	 * Replace any other non-alphanumeric characters with underscores.
-	 * Eliminate repeated underscores.
+	 * Replace all other non-alphanumeric characters with an underscore.
 	 * Trim leading or trailing underscores.
 	 *
 	 * @param string $entity
 	 * @return string
 	 */
 	public static function normalizeString( string $entity ): string {
-		$entity = preg_replace( "/[^a-z0-9]/i", "_", $entity );
-		$entity = preg_replace( "/_+/", "_", $entity );
+		$entity = preg_replace( '/[^a-z\d]+/i', '_', $entity );
 		return trim( $entity, "_" );
 	}
 }

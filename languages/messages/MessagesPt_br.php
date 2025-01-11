@@ -9,7 +9,7 @@
  * @author Amgauna
  * @author Anaclaudiaml
  * @author Bani
- * @author Brion
+ * @author Brooke Vibber
  * @author BrunaaAa
  * @author Brunoy Anastasiya Seryozhenko
  * @author Cainamarques
@@ -97,10 +97,18 @@ $namespaceNames = [
 ];
 
 $namespaceAliases = [
-	'Imagem' => NS_FILE,
-	'Imagem_Discussão' => NS_FILE_TALK,
-	'Ficheiro' => NS_FILE,
-	'Ficheiro_Discussão' => NS_FILE_TALK,
+	'Usuário(a)'              => NS_USER, // T33986
+	'Usuário(a)_Discussão'    => NS_USER_TALK, // T33986
+	'Utilizador'              => NS_USER, // T33986
+	'Utilizador_Discussão'    => NS_USER_TALK, // T33986
+	'Utilizadora'             => NS_USER, // T33986
+	'Utilizadora_Discussão'   => NS_USER_TALK, // T33986
+	'Utilizador(a)'           => NS_USER, // T33986
+	'Utilizador(a)_Discussão' => NS_USER_TALK, // T33986
+	'Imagem'                  => NS_FILE,
+	'Imagem_Discussão'        => NS_FILE_TALK,
+	'Ficheiro'                => NS_FILE,
+	'Ficheiro_Discussão'      => NS_FILE_TALK,
 ];
 
 $namespaceGenderAliases = [
@@ -262,7 +270,7 @@ $magicWords = [
 	'img_top'                   => [ '1', 'acima', 'top' ],
 	'img_upright'               => [ '1', 'superiordireito', 'superiordireito=$1', 'superiordireito_$1', 'superiordireito $1', 'upright', 'upright=$1', 'upright $1' ],
 	'index'                     => [ '1', '__INDEXAR__', '__INDEX__' ],
-	'language'                  => [ '0', '#IDIOMA:', '#LANGUAGE:' ],
+	'language'                  => [ '0', '#IDIOMA', '#LANGUAGE' ],
 	'lc'                        => [ '0', 'MINUSCULA', 'MINÚSCULA', 'MINUSCULAS', 'MINÚSCULAS', 'LC:' ],
 	'lcfirst'                   => [ '0', 'PRIMEIRAMINUSCULA:', 'PRIMEIRAMINÚSCULA:', 'LCFIRST:' ],
 	'localday'                  => [ '1', 'DIALOCAL', 'LOCALDAY' ],

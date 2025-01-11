@@ -3,6 +3,8 @@
 namespace MediaWiki\Widget;
 
 use OOUI\MultilineTextInputWidget;
+use OOUI\Tag;
+use OOUI\Widget;
 
 /**
  * Base class for widgets to select multiple users, titles,
@@ -11,7 +13,7 @@ use OOUI\MultilineTextInputWidget;
  * @copyright 2017 MediaWiki Widgets Team and others; see AUTHORS.txt
  * @license MIT
  */
-class TagMultiselectWidget extends \OOUI\Widget {
+class TagMultiselectWidget extends Widget {
 	/** @var array */
 	protected $selectedArray;
 	/** @var string|null */
@@ -24,6 +26,8 @@ class TagMultiselectWidget extends \OOUI\Widget {
 	protected $tagLimit;
 	/** @var bool */
 	protected $allowArbitrary;
+	/** @var bool */
+	protected $allowReordering;
 	/** @var string[]|null */
 	protected $allowedValues;
 
@@ -35,6 +39,7 @@ class TagMultiselectWidget extends \OOUI\Widget {
 	 *   - array $config['input'] Config options for the input widget
 	 *   - int $config['tagLimit'] Maximum number of selected items
 	 *   - bool $config['allowArbitrary'] Allow data items not present in the menu.
+	 *   - bool $config['allowReordering'] Allow reordering of the items
 	 *   - array $config['allowedValues'] Allowed items
 	 */
 	public function __construct( array $config = [] ) {
@@ -47,20 +52,16 @@ class TagMultiselectWidget extends \OOUI\Widget {
 		$this->input = $config['input'] ?? [];
 		$this->tagLimit = $config['tagLimit'] ?? null;
 		$this->allowArbitrary = $config['allowArbitrary'] ?? false;
+		$this->allowReordering = $config['allowReordering'] ?? true;
 		$this->allowedValues = $config['allowedValues'] ?? null;
 
-		$textarea = new MultilineTextInputWidget( array_merge( [
-			'name' => $this->inputName,
-			'value' => implode( "\n", $this->selectedArray ),
-			'rows' => min( $this->tagLimit, 10 ) ?? 10,
-			'classes' => [
-				'mw-widgets-tagMultiselectWidget-multilineTextInputWidget'
-			],
-		], $this->input ) );
+		$noJsFallback = ( new Tag( 'div' ) )
+			->addClasses( [ 'mw-widgets-tagMultiselectWidget-nojs' ] )
+			->appendContent( $this->getNoJavaScriptFallback() );
 
 		$pending = new PendingTextInputWidget();
 
-		$this->appendContent( $textarea, $pending );
+		$this->appendContent( $noJsFallback, $pending );
 		$this->addClasses( [ 'mw-widgets-tagMultiselectWidget' ] );
 	}
 
@@ -83,12 +84,32 @@ class TagMultiselectWidget extends \OOUI\Widget {
 		if ( $this->allowArbitrary !== null ) {
 			$config['allowArbitrary'] = $this->allowArbitrary;
 		}
+		if ( $this->allowReordering !== null ) {
+			$config['allowReordering'] = $this->allowReordering;
+		}
 		if ( $this->allowedValues !== null ) {
 			$config['allowedValues'] = $this->allowedValues;
 		}
 
 		$config['$overlay'] = true;
 		return parent::getConfig( $config );
+	}
+
+	/**
+	 * Provide the implementation for clients with JavaScript disabled.
+	 *
+	 * @stable to override
+	 * @since 1.44
+	 * @return Widget[]
+	 */
+	protected function getNoJavaScriptFallback() {
+		$widget = new MultilineTextInputWidget( array_merge( [
+			'name' => $this->inputName,
+			'value' => implode( "\n", $this->selectedArray ),
+			'rows' => min( $this->tagLimit, 10 ) ?? 10,
+		], $this->input ) );
+
+		return [ $widget ];
 	}
 
 	protected function getJavaScriptClassName() {

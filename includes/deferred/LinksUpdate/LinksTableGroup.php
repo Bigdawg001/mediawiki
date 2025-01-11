@@ -2,14 +2,15 @@
 
 namespace MediaWiki\Deferred\LinksUpdate;
 
+use InvalidArgumentException;
 use MediaWiki\Collation\CollationFactory;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Linker\LinkTargetLookup;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageReference;
+use MediaWiki\Parser\ParserOutput;
 use MediaWiki\Revision\RevisionRecord;
-use ParserOutput;
 use Wikimedia\ObjectFactory\ObjectFactory;
 use Wikimedia\Rdbms\LBFactory;
 
@@ -39,9 +40,6 @@ class LinksTableGroup {
 		],
 		'externallinks' => [
 			'class' => ExternalLinksTable::class,
-			'services' => [
-				'MainConfig'
-			],
 		],
 		'imagelinks' => [
 			'class' => ImageLinksTable::class
@@ -53,7 +51,10 @@ class LinksTableGroup {
 			'class' => LangLinksTable::class
 		],
 		'pagelinks' => [
-			'class' => PageLinksTable::class
+			'class' => PageLinksTable::class,
+			'services' => [
+				'MainConfig'
+			],
 		],
 		'page_props' => [
 			'class' => PagePropsTable::class,
@@ -64,9 +65,6 @@ class LinksTableGroup {
 		],
 		'templatelinks' => [
 			'class' => TemplateLinksTable::class,
-			'services' => [
-				'MainConfig'
-			],
 		]
 	];
 
@@ -211,7 +209,7 @@ class LinksTableGroup {
 			$spec = self::CORE_LIST['categorylinks'];
 			return $this->addCollationArgs( $spec, $tableName, true, $info );
 		}
-		throw new \InvalidArgumentException(
+		throw new InvalidArgumentException(
 			__CLASS__ . ": unknown table name \"$tableName\"" );
 	}
 

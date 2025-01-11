@@ -23,9 +23,13 @@
  * @file
  * @ingroup Maintenance
  */
-use MediaWiki\MediaWikiServices;
 
+use MediaWiki\Json\FormatJson;
+use MediaWiki\Language\LanguageConverter;
+
+// @codeCoverageIgnoreStart
 require_once dirname( __DIR__ ) . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * @since 1.24
@@ -40,7 +44,7 @@ class ListVariants extends Maintenance {
 	}
 
 	public function execute() {
-		$services = MediaWikiServices::getInstance();
+		$services = $this->getServiceContainer();
 		$languageFactory = $services->getLanguageFactory();
 		$languageConverterFactory = $services->getLanguageConverterFactory();
 		$variantLangs = [];
@@ -75,5 +79,7 @@ class ListVariants extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = ListVariants::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

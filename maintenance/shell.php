@@ -36,8 +36,10 @@
 
 // NO_AUTOLOAD -- file-scope code
 
+use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\Logger\ConsoleSpi;
 use MediaWiki\Logger\LoggerFactory;
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\MediaWikiServices;
 use Psr\Log\LogLevel;
 
@@ -47,7 +49,9 @@ if ( in_array( '--no-session', $_SERVER['argv'], true ) ) {
 	define( 'MW_NO_SESSION', 1 );
 }
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Interactive shell with completion and global scope.
@@ -72,6 +76,10 @@ class MediaWikiShell extends Maintenance {
 		);
 	}
 
+	public function canExecuteWithoutLocalSettings(): bool {
+		return true;
+	}
+
 	public function execute() {
 		if ( !class_exists( \Psy\Shell::class ) ) {
 			$this->fatalError( 'PsySH not found. Please run composer with the --dev option.' );
@@ -93,7 +101,7 @@ class MediaWikiShell extends Maintenance {
 
 		$this->setupLogging();
 
-		Hooks::runner()->onMaintenanceShellStart();
+		( new HookRunner( $this->getServiceContainer()->getHookContainer() ) )->onMaintenanceShellStart();
 
 		$shell->run();
 	}
@@ -111,6 +119,7 @@ class MediaWikiShell extends Maintenance {
 			] ) );
 			// Some services hold Logger instances in object properties
 			MediaWikiServices::resetGlobalInstance();
+			MediaWikiServices::getInstance()->getObjectCacheFactory()->clear();
 		} elseif ( $this->hasOption( 'log-channels' ) ) {
 			$channelsArg = $this->getOption( 'log-channels' );
 			$channels = [];
@@ -125,10 +134,11 @@ class MediaWikiShell extends Maintenance {
 				'forwardTo' => LoggerFactory::getProvider(),
 			] ) );
 			MediaWikiServices::resetGlobalInstance();
+			MediaWikiServices::getInstance()->getObjectCacheFactory()->clear();
 		}
 		if ( $this->hasOption( 'dbo-debug' ) ) {
-			$this->getDB( DB_PRIMARY )->setFlag( DBO_DEBUG );
-			$this->getDB( DB_REPLICA )->setFlag( DBO_DEBUG );
+			$this->getPrimaryDB()->setFlag( DBO_DEBUG );
+			$this->getReplicaDB()->setFlag( DBO_DEBUG );
 		}
 	}
 
@@ -141,15 +151,18 @@ class MediaWikiShell extends Maintenance {
 			LoggerFactory::registerProvider( new ConsoleSpi );
 			// Some services hold Logger instances in object properties
 			MediaWikiServices::resetGlobalInstance();
+			MediaWikiServices::getInstance()->getObjectCacheFactory()->clear();
 		}
 		if ( $d > 1 ) {
 			# Set DBO_DEBUG (equivalent of $wgDebugDumpSql)
-			$this->getDB( DB_PRIMARY )->setFlag( DBO_DEBUG );
-			$this->getDB( DB_REPLICA )->setFlag( DBO_DEBUG );
+			$this->getPrimaryDB()->setFlag( DBO_DEBUG );
+			$this->getReplicaDB()->setFlag( DBO_DEBUG );
 		}
 	}
 
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = MediaWikiShell::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

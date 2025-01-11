@@ -21,11 +21,17 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
 use MediaWiki\Auth\AuthenticationRequest;
 use MediaWiki\Auth\AuthenticationResponse;
 use MediaWiki\Auth\AuthManager;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Message\Message;
+use MediaWiki\Session\SessionManager;
+use MediaWiki\User\BotPassword;
+use MediaWiki\User\UserIdentityUtils;
 use Wikimedia\ParamValidator\ParamValidator;
 
 /**
@@ -35,21 +41,25 @@ use Wikimedia\ParamValidator\ParamValidator;
  */
 class ApiLogin extends ApiBase {
 
-	/** @var AuthManager */
-	private $authManager;
+	private AuthManager $authManager;
+
+	private UserIdentityUtils $identityUtils;
 
 	/**
 	 * @param ApiMain $main
 	 * @param string $action
 	 * @param AuthManager $authManager
+	 * @param UserIdentityUtils $identityUtils IdentityUtils to retrieve account type
 	 */
 	public function __construct(
 		ApiMain $main,
-		$action,
-		AuthManager $authManager
+		string $action,
+		AuthManager $authManager,
+		UserIdentityUtils $identityUtils
 	) {
 		parent::__construct( $main, $action, 'lg' );
 		$this->authManager = $authManager;
+		$this->identityUtils = $identityUtils;
 	}
 
 	protected function getExtendedDescription() {
@@ -105,7 +115,7 @@ class ApiLogin extends ApiBase {
 		$result = [];
 
 		// Make sure session is persisted
-		$session = MediaWiki\Session\SessionManager::getGlobalSession();
+		$session = SessionManager::getGlobalSession();
 		$session->persist();
 
 		// Make sure it's possible to log in
@@ -123,6 +133,7 @@ class ApiLogin extends ApiBase {
 
 		$authRes = false;
 		$loginType = 'N/A';
+		$performer = $this->getUser();
 
 		// Check login token
 		$token = $session->getToken( '', 'login' );
@@ -136,27 +147,27 @@ class ApiLogin extends ApiBase {
 		}
 
 		// Try bot passwords
-		if (
-			$authRes === false && $this->getConfig()->get( MainConfigNames::EnableBotPasswords ) &&
-			( $botLoginData = BotPassword::canonicalizeLoginData( $params['name'], $params['password'] ) )
-		) {
-			$status = BotPassword::login(
-				$botLoginData[0], $botLoginData[1], $this->getRequest()
-			);
-			if ( $status->isOK() ) {
-				$session = $status->getValue();
-				$authRes = 'Success';
-				$loginType = 'BotPassword';
-			} elseif (
-				$status->hasMessage( 'login-throttled' ) ||
-				$status->hasMessage( 'botpasswords-needs-reset' ) ||
-				$status->hasMessage( 'botpasswords-locked' )
-			) {
-				$authRes = 'Failed';
-				$message = $status->getMessage();
-				LoggerFactory::getInstance( 'authentication' )->info(
-					'BotPassword login failed: ' . $status->getWikiText( false, false, 'en' )
+		if ( $authRes === false && $this->getConfig()->get( MainConfigNames::EnableBotPasswords ) ) {
+			$botLoginData = BotPassword::canonicalizeLoginData( $params['name'], $params['password'] );
+			if ( $botLoginData ) {
+				$status = BotPassword::login(
+					$botLoginData[0], $botLoginData[1], $this->getRequest()
 				);
+				if ( $status->isOK() ) {
+					$session = $status->getValue();
+					$authRes = 'Success';
+					$loginType = 'BotPassword';
+				} elseif (
+					$status->hasMessage( 'login-throttled' ) ||
+					$status->hasMessage( 'botpasswords-needs-reset' ) ||
+					$status->hasMessage( 'botpasswords-locked' )
+				) {
+					$authRes = 'Failed';
+					$message = $status->getMessage();
+					LoggerFactory::getInstance( 'authentication' )->info(
+						'BotPassword login failed: ' . $status->getWikiText( false, false, 'en' )
+					);
+				}
 			}
 			// For other errors, let's see if it's a valid non-bot login
 		}
@@ -252,6 +263,7 @@ class ApiLogin extends ApiBase {
 		LoggerFactory::getInstance( 'authevents' )->info( 'Login attempt', [
 			'event' => 'login',
 			'successful' => $authRes === 'Success',
+			'accountType' => $this->identityUtils->getShortUserTypeInternal( $performer ),
 			'loginType' => $loginType,
 			'status' => $authRes,
 		] );
@@ -329,3 +341,6 @@ class ApiLogin extends ApiBase {
 		return $ret;
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiLogin::class, 'ApiLogin' );

@@ -16,15 +16,18 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup Change tagging
  */
 
+use MediaWiki\Html\Html;
 use MediaWiki\Linker\Linker;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\RevisionList\RevisionItem;
 
 /**
  * Item class for a live revision table row with its associated change tags.
+ *
  * @since 1.25
+ * @ingroup ChangeTags
  */
 class ChangeTagsRevisionItem extends RevisionItem {
 	/**
@@ -62,6 +65,6 @@ class ChangeTagsRevisionItem extends RevisionItem {
 			$content .= " $tagSummary";
 			$attribs['class'] = implode( ' ', $classes );
 		}
-		return Xml::tags( 'li', $attribs, $content );
+		return Html::rawElement( 'li', $attribs, $content );
 	}
 }

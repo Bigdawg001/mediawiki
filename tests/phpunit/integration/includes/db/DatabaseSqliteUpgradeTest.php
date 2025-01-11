@@ -1,6 +1,9 @@
 <?php
 
+use MediaWiki\Installer\DatabaseUpdater;
+use MediaWiki\Maintenance\FakeMaintenance;
 use Psr\Log\NullLogger;
+use Wikimedia\ObjectCache\HashBagOStuff;
 use Wikimedia\Rdbms\Database;
 use Wikimedia\Rdbms\DatabaseSqlite;
 use Wikimedia\Rdbms\TransactionProfiler;
@@ -24,17 +27,16 @@ class DatabaseSqliteUpgradeTest extends \MediaWikiIntegrationTestCase {
 			$this->markTestSkipped( 'No SQLite support detected' );
 		}
 		$this->db = $this->newMockDb();
-		if ( version_compare( $this->db->getServerVersion(), '3.6.0', '<' ) ) {
-			$this->markTestSkipped( "SQLite at least 3.6 required, {$this->db->getServerVersion()} found" );
+		if ( version_compare( $this->getDb()->getServerVersion(), '3.6.0', '<' ) ) {
+			$this->markTestSkipped( "SQLite at least 3.6 required, {$this->getDb()->getServerVersion()} found" );
 		}
 	}
 
 	/**
 	 * @param string|null $version
-	 * @param string|null &$sqlDump
 	 * @return \PHPUnit\Framework\MockObject\MockObject|DatabaseSqlite
 	 */
-	private function newMockDb( $version = null, &$sqlDump = null ) {
+	private function newMockDb( $version = null ) {
 		$mock = $this->getMockBuilder( DatabaseSqlite::class )
 			->setConstructorArgs( [ [
 				'dbFilePath' => ':memory:',
@@ -62,12 +64,7 @@ class DatabaseSqliteUpgradeTest extends \MediaWikiIntegrationTestCase {
 
 		$mock->initConnection();
 
-		$sqlDump = '';
-		$mock->method( 'query' )->willReturnCallback( static function ( $sql ) use ( &$sqlDump ) {
-			$sqlDump .= "$sql;";
-
-			return true;
-		} );
+		$mock->method( 'query' )->willReturn( true );
 
 		if ( $version ) {
 			$mock->method( 'getServerVersion' )->willReturn( $version );
@@ -80,7 +77,7 @@ class DatabaseSqliteUpgradeTest extends \MediaWikiIntegrationTestCase {
 	 * @coversNothing
 	 */
 	public function testEntireSchema() {
-		$result = Sqlite::checkSqlSyntax( dirname( __FILE__, 6 ) . "/maintenance/tables.sql" );
+		$result = Sqlite::checkSqlSyntax( dirname( __FILE__, 6 ) . "/sql/sqlite/tables-generated.sql" );
 		if ( $result !== true ) {
 			$this->fail( $result );
 		}
@@ -162,11 +159,13 @@ class DatabaseSqliteUpgradeTest extends \MediaWikiIntegrationTestCase {
 
 	public static function provideSupportedVersions() {
 		return [
-			[ '1.35' ],
 			[ '1.36' ],
 			[ '1.37' ],
 			[ '1.38' ],
 			[ '1.39' ],
+			[ '1.40' ],
+			[ '1.41' ],
+			[ '1.42' ],
 		];
 	}
 
@@ -185,8 +184,7 @@ class DatabaseSqliteUpgradeTest extends \MediaWikiIntegrationTestCase {
 			$updater = DatabaseUpdater::newForDB( $db, false, $maint );
 			$updater->doUpdates( [ 'core' ] );
 		} else {
-			$db->sourceFile( dirname( __FILE__, 6 ) . "/maintenance/tables.sql" );
-			$db->sourceFile( dirname( __FILE__, 6 ) . "/maintenance/sqlite/tables-generated.sql" );
+			$db->sourceFile( dirname( __FILE__, 6 ) . "/sql/sqlite/tables-generated.sql" );
 		}
 
 		return $db;

@@ -18,6 +18,8 @@
  * @file
  */
 
+namespace MediaWiki\Pager;
+
 /**
  * IndexPager with an alphabetic list and a formatted navigation bar
  *
@@ -35,7 +37,7 @@ abstract class AlphabeticPager extends IndexPager {
 			return '';
 		}
 
-		if ( isset( $this->mNavigationBar ) ) {
+		if ( $this->mNavigationBar !== null ) {
 			return $this->mNavigationBar;
 		}
 
@@ -50,3 +52,6 @@ abstract class AlphabeticPager extends IndexPager {
 		return $this->mNavigationBar;
 	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( AlphabeticPager::class, 'AlphabeticPager' );

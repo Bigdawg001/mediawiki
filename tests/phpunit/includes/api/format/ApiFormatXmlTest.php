@@ -1,14 +1,18 @@
 <?php
 
+namespace MediaWiki\Tests\Api\Format;
+
+use MediaWiki\Api\ApiResult;
 use MediaWiki\Title\Title;
 
 /**
  * @group API
  * @group Database
- * @covers ApiFormatXml
+ * @covers \MediaWiki\Api\ApiFormatXml
  */
 class ApiFormatXmlTest extends ApiFormatTestBase {
 
+	/** @inheritDoc */
 	protected $printerName = 'xml';
 
 	protected function setUp(): void {

@@ -1,4 +1,5 @@
 <?php
+
 /**
  * DBMS-specific installation helper.
  *
@@ -21,28 +22,27 @@
  * @ingroup Installer
  */
 
-use MediaWiki\Html\Html;
-use Wikimedia\AtEase\AtEase;
-use Wikimedia\Rdbms\Database;
+namespace MediaWiki\Installer;
+
+use MediaWiki\Installer\Task\ITaskContext;
+use MediaWiki\Status\Status;
+use RuntimeException;
 use Wikimedia\Rdbms\DatabaseDomain;
-use Wikimedia\Rdbms\DBConnectionError;
-use Wikimedia\Rdbms\DBExpectedError;
 use Wikimedia\Rdbms\IDatabase;
-use Wikimedia\Rdbms\LBFactorySingle;
+use Wikimedia\Rdbms\IMaintainableDatabase;
 
 /**
  * Base class for DBMS-specific installation helper classes.
  *
- * @stable to extend
  * @ingroup Installer
  * @since 1.17
  */
-abstract class DatabaseInstaller {
+abstract class DatabaseInstaller implements ITaskContext {
 
 	/**
 	 * The Installer object.
 	 *
-	 * @var WebInstaller
+	 * @var Installer
 	 */
 	public $parent;
 
@@ -57,11 +57,15 @@ abstract class DatabaseInstaller {
 	protected static $notMinimumVersionMessage;
 
 	/**
-	 * The database connection.
-	 *
-	 * @var Database
+	 * @deprecated since 1.43 -- use definitelyGetConnection()
+	 * @var IMaintainableDatabase
 	 */
 	public $db = null;
+
+	/** @var IMaintainableDatabase|null */
+	private $cachedConn;
+	/** @var string|null */
+	private $cachedConnType;
 
 	/**
 	 * Internal variables for installation.
@@ -77,14 +81,18 @@ abstract class DatabaseInstaller {
 	 */
 	protected $globalNames = [];
 
+	/** @var array */
+	private $provisions = [];
+
 	/**
 	 * Whether the provided version meets the necessary requirements for this type
 	 *
-	 * @param string $serverVersion Output of Database::getServerVersion()
+	 * @param IDatabase $conn
 	 * @return Status
 	 * @since 1.30
 	 */
-	public static function meetsMinimumRequirement( $serverVersion ) {
+	public static function meetsMinimumRequirement( IDatabase $conn ) {
+		$serverVersion = $conn->getServerVersion();
 		if ( version_compare( $serverVersion, static::$minimumVersion ) < 0 ) {
 			return Status::newFatal(
 				static::$notMinimumVersionMessage, static::$minimumVersion, $serverVersion
@@ -106,54 +114,10 @@ abstract class DatabaseInstaller {
 
 	/**
 	 * Checks for installation prerequisites other than those checked by isCompiled()
-	 * @stable to override
 	 * @since 1.19
 	 * @return Status
 	 */
 	public function checkPrerequisites() {
-		return Status::newGood();
-	}
-
-	/**
-	 * Get HTML for a web form that configures this database. Configuration
-	 * at this time should be the minimum needed to connect and test
-	 * whether install or upgrade is required.
-	 *
-	 * If this is called, $this->parent can be assumed to be a WebInstaller.
-	 */
-	abstract public function getConnectForm();
-
-	/**
-	 * Set variables based on the request array, assuming it was submitted
-	 * via the form returned by getConnectForm(). Validate the connection
-	 * settings by attempting to connect with them.
-	 *
-	 * If this is called, $this->parent can be assumed to be a WebInstaller.
-	 *
-	 * @return Status
-	 */
-	abstract public function submitConnectForm();
-
-	/**
-	 * Get HTML for a web form that retrieves settings used for installation.
-	 * $this->parent can be assumed to be a WebInstaller.
-	 * If the DB type has no settings beyond those already configured with
-	 * getConnectForm(), this should return false.
-	 * @stable to override
-	 * @return string|false
-	 */
-	public function getSettingsForm() {
-		return false;
-	}
-
-	/**
-	 * Set variables based on the request array, assuming it was submitted via
-	 * the form return by getSettingsForm().
-	 * @stable to override
-	 *
-	 * @return Status
-	 */
-	public function submitSettingsForm() {
 		return Status::newGood();
 	}
 
@@ -163,17 +127,12 @@ abstract class DatabaseInstaller {
 	 * object. On success, the status object will contain a Database object in
 	 * its value member.
 	 *
-	 * @return Status
-	 */
-	abstract public function openConnection();
-
-	/**
-	 * Create the database and return a Status object indicating success or
-	 * failure.
+	 * The database should not be implicitly created.
 	 *
-	 * @return Status
+	 * @param string $type One of the self::CONN_* constants, except CONN_DONT_KNOW
+	 * @return ConnectionStatus
 	 */
-	abstract public function setupDatabase();
+	abstract protected function openConnection( string $type );
 
 	/**
 	 * Connect to the database using the administrative user/password currently
@@ -182,174 +141,136 @@ abstract class DatabaseInstaller {
 	 *
 	 * This will return a cached connection if one is available.
 	 *
-	 * @stable to override
-	 * @return Status
-	 * @suppress PhanUndeclaredMethod
+	 * @param string $type One of the self::CONN_* constants. Using CONN_DONT_KNOW
+	 *   is deprecated and will cause an exception to be thrown in a future release.
+	 * @return ConnectionStatus
 	 */
-	public function getConnection() {
-		if ( $this->db ) {
-			return Status::newGood( $this->db );
+	public function getConnection( $type = self::CONN_DONT_KNOW ): ConnectionStatus {
+		if ( $type === self::CONN_DONT_KNOW ) {
+			if ( $this->cachedConnType ) {
+				$type = $this->cachedConnType;
+			} else {
+				$type = self::CONN_CREATE_DATABASE;
+			}
 		}
-
-		$status = $this->openConnection();
+		if ( $this->cachedConn ) {
+			if ( $this->cachedConnType === $type ) {
+				return new ConnectionStatus( $this->cachedConn );
+			} else {
+				return $this->changeConnType( $this->cachedConn, $this->cachedConnType, $type );
+			}
+		}
+		$status = $this->openConnection( $type );
 		if ( $status->isOK() ) {
-			$this->db = $status->value;
-			// Enable autocommit
-			$this->db->clearFlag( DBO_TRX );
-			$this->db->commit( __METHOD__ );
+			$this->cachedConn = $status->getDB();
+			$this->cachedConnType = $type;
+			// Assign to $this->db for b/c
+			$this->db = $this->cachedConn;
+
+			if ( $type === self::CONN_CREATE_SCHEMA || $type === self::CONN_CREATE_TABLES ) {
+				$this->cachedConn->setSchemaVars( $this->getSchemaVars() );
+			}
 		}
 
 		return $status;
 	}
 
 	/**
-	 * Apply a SQL source file to the database as part of running an installation step.
+	 * Get a connection and unwrap it from its Status object, throwing an
+	 * exception on failure.
 	 *
-	 * @param string $sourceFileMethod
-	 * @param string $stepName
-	 * @param string|false $tableThatMustNotExist
-	 * @return Status
+	 * @param string $type
+	 * @return IMaintainableDatabase
 	 */
-	private function stepApplySourceFile(
-		$sourceFileMethod,
-		$stepName,
-		$tableThatMustNotExist = false
-	) {
-		$status = $this->getConnection();
+	public function definitelyGetConnection( string $type ): IMaintainableDatabase {
+		$status = $this->getConnection( $type );
 		if ( !$status->isOK() ) {
+			throw new RuntimeException( __METHOD__ . ': unexpected DB connection error' );
+		}
+		return $status->getDB();
+	}
+
+	/**
+	 * Change the type of a connection.
+	 *
+	 * CONN_CREATE_DATABASE means the domain is indeterminate and irrelevant,
+	 * so converting from this type can be done by selecting the domain, and
+	 * converting to it is a no-op.
+	 *
+	 * CONN_CREATE_SCHEMA means the domain is correct but tables created by
+	 * PostgreSQL will have the incorrect role. So to convert from this to
+	 * CONN_CREATE_TABLES, we set the role.
+	 *
+	 * CONN_CREATE_TABLES means a fully-configured connection, suitable for
+	 * most tasks, so converting from it is a no-op.
+	 *
+	 * @param IMaintainableDatabase $conn
+	 * @param string &$storedType One of the self::CONN_* constants. An in/out
+	 *   parameter, set to the new type on success. It is set to the "real" new
+	 *   type, reflecting the highest configuration level reached, to avoid
+	 *   unnecessary selectDomain() calls when we need to temporarily give an
+	 *   unconfigured connection.
+	 * @param string $newType One of the self::CONN_* constants
+	 * @return ConnectionStatus
+	 */
+	protected function changeConnType( IMaintainableDatabase $conn, &$storedType, $newType ) {
+		// Change type from database to schema, if requested
+		if ( $storedType === self::CONN_CREATE_DATABASE ) {
+			if ( $newType === self::CONN_CREATE_SCHEMA || $newType === self::CONN_CREATE_TABLES ) {
+				// TODO: catch exceptions from selectDomain and report as a Status
+				$conn->selectDomain( new DatabaseDomain(
+					$this->getVar( 'wgDBname' ),
+					$this->getVar( 'wgDBmwschema' ),
+					$this->getVar( 'wgDBprefix' ) ?? ''
+				) );
+				$conn->setSchemaVars( $this->getSchemaVars() );
+				$storedType = self::CONN_CREATE_SCHEMA;
+			}
+		}
+		// Change type from schema to tables, if requested
+		if ( $newType === self::CONN_CREATE_TABLES && $storedType === self::CONN_CREATE_SCHEMA ) {
+			$status = $this->changeConnTypeFromSchemaToTables( $conn );
+			if ( $status->isOK() ) {
+				$storedType = self::CONN_CREATE_TABLES;
+			}
 			return $status;
 		}
-		$this->selectDatabase( $this->db, $this->getVar( 'wgDBname' ) );
+		return new ConnectionStatus( $conn );
+	}
 
-		if ( $tableThatMustNotExist && $this->db->tableExists( $tableThatMustNotExist, __METHOD__ ) ) {
-			$status->warning( "config-$stepName-tables-exist" );
-			$this->enableLB();
+	/**
+	 * Change the type of a connection from CONN_CREATE_SCHEMA to CONN_CREATE_TABLES.
+	 * Postgres overrides this.
+	 *
+	 * @param IMaintainableDatabase $conn
+	 * @return ConnectionStatus
+	 */
+	protected function changeConnTypeFromSchemaToTables( IMaintainableDatabase $conn ) {
+		return new ConnectionStatus( $conn );
+	}
 
-			return $status;
-		}
+	public function getDbType(): string {
+		return $this->getName();
+	}
 
-		$this->db->setFlag( DBO_DDLMODE );
-		$this->db->begin( __METHOD__ );
+	public function getConfigVar( string $name ) {
+		return $this->getVar( "wg$name" );
+	}
 
-		$error = $this->db->sourceFile(
-			call_user_func( [ $this, $sourceFileMethod ], $this->db )
-		);
-		if ( $error !== true ) {
-			$this->db->reportQueryError( $error, 0, '', __METHOD__ );
-			$this->db->rollback( __METHOD__ );
-			$status->fatal( "config-$stepName-tables-failed", $error );
+	public function getOption( string $name ) {
+		return $this->getVar( "_$name" );
+	}
+
+	public function provide( string $name, $value ) {
+		$this->provisions[$name] = $value;
+	}
+
+	public function getProvision( string $name ) {
+		if ( isset( $this->provisions[$name] ) ) {
+			return $this->provisions[$name];
 		} else {
-			$this->db->commit( __METHOD__ );
+			throw new \RuntimeException( "Can't find provided data \"$name\"" );
 		}
-		// Resume normal operations
-		if ( $status->isOK() ) {
-			$this->enableLB();
-		}
-
-		return $status;
-	}
-
-	/**
-	 * Create database tables from scratch from the automatically generated file
-	 * @stable to override
-	 *
-	 * @return Status
-	 */
-	public function createTables() {
-		return $this->stepApplySourceFile( 'getGeneratedSchemaPath', 'install', 'archive' );
-	}
-
-	/**
-	 * Create database tables from scratch.
-	 * @stable to override
-	 *
-	 * @return Status
-	 */
-	public function createManualTables() {
-		return $this->stepApplySourceFile( 'getSchemaPath', 'install-manual' );
-	}
-
-	/**
-	 * Insert update keys into table to prevent running unneeded updates.
-	 * @stable to override
-	 *
-	 * @return Status
-	 */
-	public function insertUpdateKeys() {
-		return $this->stepApplySourceFile( 'getUpdateKeysPath', 'updates', false );
-	}
-
-	/**
-	 * Return a path to the DBMS-specific SQL file if it exists,
-	 * otherwise default SQL file
-	 *
-	 * @param IDatabase $db
-	 * @param string $filename
-	 * @return string
-	 */
-	private function getSqlFilePath( $db, $filename ) {
-		global $IP;
-
-		$dbmsSpecificFilePath = "$IP/maintenance/" . $db->getType() . "/$filename";
-		if ( file_exists( $dbmsSpecificFilePath ) ) {
-			return $dbmsSpecificFilePath;
-		} else {
-			return "$IP/maintenance/$filename";
-		}
-	}
-
-	/**
-	 * Return a path to the DBMS-specific schema file,
-	 * otherwise default to tables.sql
-	 * @stable to override
-	 *
-	 * @param IDatabase $db
-	 * @return string
-	 */
-	public function getSchemaPath( $db ) {
-		return $this->getSqlFilePath( $db, 'tables.sql' );
-	}
-
-	/**
-	 * Return a path to the DBMS-specific automatically generated schema file.
-	 * @stable to override
-	 *
-	 * @param IDatabase $db
-	 * @return string
-	 */
-	public function getGeneratedSchemaPath( $db ) {
-		return $this->getSqlFilePath( $db, 'tables-generated.sql' );
-	}
-
-	/**
-	 * Return a path to the DBMS-specific update key file,
-	 * otherwise default to update-keys.sql
-	 * @stable to override
-	 *
-	 * @param IDatabase $db
-	 * @return string
-	 */
-	public function getUpdateKeysPath( $db ) {
-		return $this->getSqlFilePath( $db, 'update-keys.sql' );
-	}
-
-	/**
-	 * Create the tables for each extension the user enabled
-	 * @stable to override
-	 * @return Status
-	 */
-	public function createExtensionTables() {
-		$status = $this->getConnection();
-		if ( !$status->isOK() ) {
-			return $status;
-		}
-
-		// Now run updates to create tables for old extensions
-		$updater = DatabaseUpdater::newForDB( $this->db );
-		$updater->setAutoExtensionHookContainer( $this->parent->getAutoExtensionHookContainer() );
-		$updater->doUpdates( [ 'extensions' ] );
-
-		return $status;
 	}
 
 	/**
@@ -361,8 +282,7 @@ abstract class DatabaseInstaller {
 
 	/**
 	 * Override this to provide DBMS-specific schema variables, to be
-	 * substituted into tables.sql and other schema files.
-	 * @stable to override
+	 * substituted into the schema files.
 	 * @return array
 	 */
 	public function getSchemaVars() {
@@ -370,95 +290,13 @@ abstract class DatabaseInstaller {
 	}
 
 	/**
-	 * Set appropriate schema variables in the current database connection.
-	 *
-	 * This should be called after any request data has been imported, but before
-	 * any write operations to the database.
-	 *
-	 * @stable to override
-	 */
-	public function setupSchemaVars() {
-		$status = $this->getConnection();
-		if ( $status->isOK() ) {
-			// @phan-suppress-next-line PhanUndeclaredMethod
-			$status->value->setSchemaVars( $this->getSchemaVars() );
-		} else {
-			$msg = __METHOD__ . ': unexpected error while establishing'
-				. ' a database connection with message: '
-				. $status->getMessage()->plain();
-			throw new MWException( $msg );
-		}
-	}
-
-	/**
-	 * Set up LBFactory so that wfGetDB() etc. works.
-	 * We set up a special LBFactory instance which returns the current
-	 * installer connection.
-	 */
-	public function enableLB() {
-		$status = $this->getConnection();
-		if ( !$status->isOK() ) {
-			throw new MWException( __METHOD__ . ': unexpected DB connection error' );
-		}
-		$connection = $status->value;
-
-		$this->parent->resetMediaWikiServices( null, [
-			'DBLoadBalancerFactory' => static function () use ( $connection ) {
-				return LBFactorySingle::newFromConnection( $connection );
-			}
-		] );
-	}
-
-	/**
-	 * Perform database upgrades
-	 *
-	 * @suppress SecurityCheck-XSS Escaping provided by $this->outputHandler
-	 * @return bool
-	 */
-	public function doUpgrade() {
-		$this->setupSchemaVars();
-		$this->enableLB();
-
-		$ret = true;
-		ob_start( [ $this, 'outputHandler' ] );
-		$up = DatabaseUpdater::newForDB( $this->db );
-		try {
-			$up->doUpdates();
-			$up->purgeCache();
-		} catch ( MWException $e ) {
-			// TODO: Remove special casing in favour of MWExceptionRenderer
-			echo "\nAn error occurred:\n";
-			echo $e->getText();
-			$ret = false;
-		} catch ( Exception $e ) {
-			echo "\nAn error occurred:\n";
-			echo $e->getMessage();
-			$ret = false;
-		}
-		ob_end_flush();
-
-		return $ret;
-	}
-
-	/**
-	 * Allow DB installers a chance to make last-minute changes before installation
-	 * occurs. This happens before setupDatabase() or createTables() is called, but
-	 * long after the constructor. Helpful for things like modifying setup steps :)
-	 * @stable to override
-	 */
-	public function preInstall() {
-	}
-
-	/**
 	 * Allow DB installers a chance to make checks before upgrade.
-	 * @stable to override
 	 */
 	public function preUpgrade() {
 	}
 
 	/**
 	 * Get an array of MW configuration globals that will be configured by this class.
-	 * @stable to override
 	 * @return array
 	 */
 	public function getGlobalNames() {
@@ -468,8 +306,7 @@ abstract class DatabaseInstaller {
 	/**
 	 * Construct and initialise parent.
 	 * This is typically only called from Installer::getDBInstaller()
-	 * @stable to call
-	 * @param WebInstaller $parent
+	 * @param Installer $parent
 	 */
 	public function __construct( $parent ) {
 		$this->parent = $parent;
@@ -488,7 +325,6 @@ abstract class DatabaseInstaller {
 
 	/**
 	 * Get the internationalised name for this DBMS.
-	 * @stable to override
 	 * @return string
 	 */
 	public function getReadableName() {
@@ -498,7 +334,6 @@ abstract class DatabaseInstaller {
 
 	/**
 	 * Get a name=>value map of MW configuration globals for the default values.
-	 * @stable to override
 	 * @return array
 	 * @return-taint none
 	 */
@@ -547,113 +382,9 @@ abstract class DatabaseInstaller {
 		$this->parent->setVar( $name, $value );
 	}
 
-	/**
-	 * Get a labelled text box to configure a local variable.
-	 *
-	 * @param string $var
-	 * @param string $label
-	 * @param array $attribs
-	 * @param string $helpData HTML
-	 * @return string HTML
-	 * @return-taint escaped
-	 */
-	public function getTextBox( $var, $label, $attribs = [], $helpData = "" ) {
-		$name = $this->getName() . '_' . $var;
-		$value = $this->getVar( $var );
-		if ( !isset( $attribs ) ) {
-			$attribs = [];
-		}
+	abstract public function getConnectForm( WebInstaller $webInstaller ): DatabaseConnectForm;
 
-		return $this->parent->getTextBox( [
-			'var' => $var,
-			'label' => $label,
-			'attribs' => $attribs,
-			'controlName' => $name,
-			'value' => $value,
-			'help' => $helpData
-		] );
-	}
-
-	/**
-	 * Get a labelled password box to configure a local variable.
-	 * Implements password hiding.
-	 *
-	 * @param string $var
-	 * @param string $label
-	 * @param array $attribs
-	 * @param string $helpData HTML
-	 * @return string HTML
-	 * @return-taint escaped
-	 */
-	public function getPasswordBox( $var, $label, $attribs = [], $helpData = "" ) {
-		$name = $this->getName() . '_' . $var;
-		$value = $this->getVar( $var );
-		if ( !isset( $attribs ) ) {
-			$attribs = [];
-		}
-
-		return $this->parent->getPasswordBox( [
-			'var' => $var,
-			'label' => $label,
-			'attribs' => $attribs,
-			'controlName' => $name,
-			'value' => $value,
-			'help' => $helpData
-		] );
-	}
-
-	/**
-	 * Get a labelled checkbox to configure a local boolean variable.
-	 *
-	 * @param string $var
-	 * @param string $label
-	 * @param array $attribs Optional.
-	 * @param string $helpData Optional.
-	 * @return string
-	 */
-	public function getCheckBox( $var, $label, $attribs = [], $helpData = "" ) {
-		$name = $this->getName() . '_' . $var;
-		$value = $this->getVar( $var );
-
-		return $this->parent->getCheckBox( [
-			'var' => $var,
-			'label' => $label,
-			'attribs' => $attribs,
-			'controlName' => $name,
-			'value' => $value,
-			'help' => $helpData
-		] );
-	}
-
-	/**
-	 * Get a set of labelled radio buttons.
-	 *
-	 * @param array $params Parameters are:
-	 *      var:            The variable to be configured (required)
-	 *      label:          The message name for the label (required)
-	 *      itemLabelPrefix: The message name prefix for the item labels (required)
-	 *      values:         List of allowed values (required)
-	 *      itemAttribs     Array of attribute arrays, outer key is the value name (optional)
-	 *
-	 * @return string
-	 */
-	public function getRadioSet( $params ) {
-		$params['controlName'] = $this->getName() . '_' . $params['var'];
-		$params['value'] = $this->getVar( $params['var'] );
-
-		return $this->parent->getRadioSet( $params );
-	}
-
-	/**
-	 * Convenience function to set variables based on form data.
-	 * Assumes that variables containing "password" in the name are (potentially
-	 * fake) passwords.
-	 * @param array $varNames
-	 * @return array
-	 */
-	public function setVarsFromRequest( $varNames ) {
-		return $this->parent->setVarsFromRequest( $varNames, $this->getName() . '_' );
-	}
+	abstract public function getSettingsForm( WebInstaller $webInstaller ): DatabaseSettingsForm;
 
 	/**
 	 * Determine whether an existing installation of MediaWiki is present in
@@ -663,178 +394,16 @@ abstract class DatabaseInstaller {
 	 * Traditionally, this is done by testing for the existence of either
 	 * the revision table or the cur table.
 	 *
-	 * @stable to override
 	 * @return bool
 	 */
 	public function needsUpgrade() {
-		$status = $this->getConnection();
+		$status = $this->getConnection( self::CONN_CREATE_SCHEMA );
 		if ( !$status->isOK() ) {
 			return false;
 		}
-
-		try {
-			$this->selectDatabase( $this->db, $this->getVar( 'wgDBname' ) );
-		} catch ( DBConnectionError $e ) {
-			// Don't catch DBConnectionError
-			throw $e;
-		} catch ( DBExpectedError $e ) {
-			return false;
-		}
-
-		return $this->db->tableExists( 'cur', __METHOD__ ) ||
-			$this->db->tableExists( 'revision', __METHOD__ );
+		$db = $status->getDB();
+		return $db->tableExists( 'cur', __METHOD__ ) ||
+			$db->tableExists( 'revision', __METHOD__ );
 	}
 
-	/**
-	 * Get a standard install-user fieldset.
-	 *
-	 * @return string
-	 */
-	public function getInstallUserBox() {
-		return Html::openElement( 'fieldset' ) .
-			Html::element( 'legend', [], wfMessage( 'config-db-install-account' )->text() ) .
-			// @phan-suppress-next-line SecurityCheck-DoubleEscaped taint cannot track the helpbox from the rest
-			$this->getTextBox(
-				'_InstallUser',
-				'config-db-username',
-				[ 'dir' => 'ltr' ],
-				$this->parent->getHelpBox( 'config-db-install-username' )
-			) .
-			// @phan-suppress-next-line SecurityCheck-DoubleEscaped taint cannot track the helpbox from the rest
-			$this->getPasswordBox(
-				'_InstallPassword',
-				'config-db-password',
-				[ 'dir' => 'ltr' ],
-				$this->parent->getHelpBox( 'config-db-install-password' )
-			) .
-			Html::closeElement( 'fieldset' );
-	}
-
-	/**
-	 * Submit a standard install user fieldset.
-	 * @return Status
-	 */
-	public function submitInstallUserBox() {
-		$this->setVarsFromRequest( [ '_InstallUser', '_InstallPassword' ] );
-
-		return Status::newGood();
-	}
-
-	/**
-	 * Get a standard web-user fieldset
-	 * @param string|false $noCreateMsg Message to display instead of the creation checkbox.
-	 *   Set this to false to show a creation checkbox (default).
-	 *
-	 * @return string
-	 */
-	public function getWebUserBox( $noCreateMsg = false ) {
-		$wrapperStyle = $this->getVar( '_SameAccount' ) ? 'display: none' : '';
-		$s = Html::openElement( 'fieldset' ) .
-			Html::element( 'legend', [], wfMessage( 'config-db-web-account' )->text() ) .
-			$this->getCheckBox(
-				'_SameAccount', 'config-db-web-account-same',
-				[ 'class' => 'hideShowRadio', 'rel' => 'dbOtherAccount' ]
-			) .
-			Html::openElement( 'div', [ 'id' => 'dbOtherAccount', 'style' => $wrapperStyle ] ) .
-			$this->getTextBox( 'wgDBuser', 'config-db-username' ) .
-			$this->getPasswordBox( 'wgDBpassword', 'config-db-password' ) .
-			$this->parent->getHelpBox( 'config-db-web-help' );
-		if ( $noCreateMsg ) {
-			$s .= Html::warningBox( wfMessage( $noCreateMsg )->plain(), 'config-warning-box' );
-		} else {
-			$s .= $this->getCheckBox( '_CreateDBAccount', 'config-db-web-create' );
-		}
-		$s .= Html::closeElement( 'div' ) . Html::closeElement( 'fieldset' );
-
-		return $s;
-	}
-
-	/**
-	 * Submit the form from getWebUserBox().
-	 *
-	 * @return Status
-	 */
-	public function submitWebUserBox() {
-		$this->setVarsFromRequest(
-			[ 'wgDBuser', 'wgDBpassword', '_SameAccount', '_CreateDBAccount' ]
-		);
-
-		if ( $this->getVar( '_SameAccount' ) ) {
-			$this->setVar( 'wgDBuser', $this->getVar( '_InstallUser' ) );
-			$this->setVar( 'wgDBpassword', $this->getVar( '_InstallPassword' ) );
-		}
-
-		if ( $this->getVar( '_CreateDBAccount' ) && strval( $this->getVar( 'wgDBpassword' ) ) == '' ) {
-			return Status::newFatal( 'config-db-password-empty', $this->getVar( 'wgDBuser' ) );
-		}
-
-		return Status::newGood();
-	}
-
-	/**
-	 * Common function for databases that don't understand the MySQLish syntax of interwiki.list.
-	 * @stable to override
-	 *
-	 * @return Status
-	 */
-	public function populateInterwikiTable() {
-		$status = $this->getConnection();
-		if ( !$status->isOK() ) {
-			return $status;
-		}
-		$this->selectDatabase( $this->db, $this->getVar( 'wgDBname' ) );
-
-		if ( $this->db->selectRow( 'interwiki', '1', [], __METHOD__ ) ) {
-			$status->warning( 'config-install-interwiki-exists' );
-
-			return $status;
-		}
-		global $IP;
-		AtEase::suppressWarnings();
-		$rows = file( "$IP/maintenance/interwiki.list",
-			FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES );
-		AtEase::restoreWarnings();
-		$interwikis = [];
-		if ( !$rows ) {
-			return Status::newFatal( 'config-install-interwiki-list' );
-		}
-		foreach ( $rows as $row ) {
-			$row = preg_replace( '/^\s*([^#]*?)\s*(#.*)?$/', '\\1', $row ); // strip comments - whee
-			if ( $row == "" ) {
-				continue;
-			}
-			$row .= "|";
-			$interwikis[] = array_combine(
-				[ 'iw_prefix', 'iw_url', 'iw_local', 'iw_api', 'iw_wikiid' ],
-				explode( '|', $row )
-			);
-		}
-		$this->db->insert( 'interwiki', $interwikis, __METHOD__ );
-
-		return Status::newGood();
-	}
-
-	public function outputHandler( $string ) {
-		return htmlspecialchars( $string );
-	}
-
-	/**
-	 * @param Database $conn
-	 * @param string $database
-	 * @return bool
-	 * @since 1.39
-	 */
-	protected function selectDatabase( Database $conn, string $database ) {
-		$schema = $conn->dbSchema();
-		$prefix = $conn->tablePrefix();
-
-		$conn->selectDomain( new DatabaseDomain(
-			$database,
-			// DatabaseDomain uses null for unspecified schemas
-			( $schema !== '' ) ? $schema : null,
-			$prefix
-		) );
-
-		return true;
-	}
 }

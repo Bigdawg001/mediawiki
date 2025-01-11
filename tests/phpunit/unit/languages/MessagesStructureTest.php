@@ -1,11 +1,15 @@
 <?php
 
+use MediaWiki\Language\Language;
+
 /**
  * Validate the Messages*.php files
  * @coversNothing -- no way to cover non-class files
  */
 class MessagesStructureTest extends MediaWikiUnitTestCase {
+	/** @var string */
 	private $langCode;
+	/** @var array */
 	private static $enData;
 
 	public static function provideMessagesFiles() {
@@ -16,7 +20,7 @@ class MessagesStructureTest extends MediaWikiUnitTestCase {
 			$n++;
 		}
 		if ( $n === 0 ) {
-			throw new \Exception( 'Not enough files' );
+			throw new \UnderflowException( 'Not enough files' );
 		}
 	}
 
@@ -35,7 +39,7 @@ class MessagesStructureTest extends MediaWikiUnitTestCase {
 		$vars = $this->readFile( $path );
 		$unknownVars = array_diff(
 			array_keys( $vars ),
-			LocalisationCache::$allKeys
+			LocalisationCache::ALL_KEYS
 		);
 		$this->assertSame( [], $unknownVars, 'unknown variables' );
 

@@ -1,5 +1,4 @@
 <?php
-
 /**
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,7 +16,6 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @author DannyS712
  */
 
 namespace MediaWiki\User;
@@ -26,34 +24,28 @@ namespace MediaWiki\User;
  * Shared interface for rigor levels when dealing with User methods
  *
  * @since 1.36
+ * @ingroup User
+ * @author DannyS712
  */
 interface UserRigorOptions {
 
 	/**
-	 * @var string
-	 *
 	 * Check that a user name is valid for batch processes, login and account
 	 * creation. This does not allow auto-created temporary user patterns.
 	 */
 	public const RIGOR_CREATABLE = 'creatable';
 
 	/**
-	 * @var string
-	 *
 	 * Check that a user name is valid for batch processes and login
 	 */
 	public const RIGOR_USABLE = 'usable';
 
 	/**
-	 * @var string
-	 *
 	 * Check that a user name is valid for batch processes
 	 */
 	public const RIGOR_VALID = 'valid';
 
 	/**
-	 * @var string
-	 *
 	 * No validation at all
 	 */
 	public const RIGOR_NONE = 'none';

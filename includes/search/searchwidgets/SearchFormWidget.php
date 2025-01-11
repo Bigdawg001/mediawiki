@@ -2,41 +2,39 @@
 
 namespace MediaWiki\Search\SearchWidgets;
 
-use ILanguageConverter;
+use MediaWiki\Config\ServiceOptions;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\Html\Html;
+use MediaWiki\Language\ILanguageConverter;
+use MediaWiki\MainConfigNames;
+use MediaWiki\Specials\SpecialSearch;
+use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\Widget\SearchInputWidget;
-use NamespaceInfo;
+use MediaWiki\Xml\Xml;
+use OOUI\ActionFieldLayout;
+use OOUI\ButtonInputWidget;
+use OOUI\CheckboxInputWidget;
+use OOUI\FieldLayout;
 use SearchEngineConfig;
-use SpecialSearch;
-use Xml;
 
 class SearchFormWidget {
-	/** @var SpecialSearch */
-	protected $specialSearch;
-	/** @var SearchEngineConfig */
-	protected $searchConfig;
-	/** @var array */
-	protected $profiles;
-	/** @var HookContainer */
-	private $hookContainer;
-	/** @var HookRunner */
-	private $hookRunner;
-	/** @var ILanguageConverter */
-	private $languageConverter;
-	/** @var NamespaceInfo */
-	private $namespaceInfo;
+	/** @internal For use by SpecialSearch only */
+	public const CONSTRUCTOR_OPTIONS = [
+		MainConfigNames::CapitalLinks,
+	];
 
-	/**
-	 * @param SpecialSearch $specialSearch
-	 * @param SearchEngineConfig $searchConfig
-	 * @param HookContainer $hookContainer
-	 * @param ILanguageConverter $languageConverter
-	 * @param NamespaceInfo $namespaceInfo
-	 * @param array $profiles
-	 */
+	private ServiceOptions $options;
+	protected SpecialSearch $specialSearch;
+	protected SearchEngineConfig $searchConfig;
+	private HookContainer $hookContainer;
+	private HookRunner $hookRunner;
+	private ILanguageConverter $languageConverter;
+	private NamespaceInfo $namespaceInfo;
+	protected array $profiles;
+
 	public function __construct(
+		ServiceOptions $options,
 		SpecialSearch $specialSearch,
 		SearchEngineConfig $searchConfig,
 		HookContainer $hookContainer,
@@ -44,6 +42,8 @@ class SearchFormWidget {
 		NamespaceInfo $namespaceInfo,
 		array $profiles
 	) {
+		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
+		$this->options = $options;
 		$this->specialSearch = $specialSearch;
 		$this->searchConfig = $searchConfig;
 		$this->hookContainer = $hookContainer;
@@ -58,6 +58,7 @@ class SearchFormWidget {
 	 * @param string $term The current search term
 	 * @param int $numResults The number of results shown
 	 * @param int $totalResults The total estimated results found
+	 * @param bool $approximateTotalResults Whether $totalResults is approximate or not
 	 * @param int $offset Current offset in search results
 	 * @param bool $isPowerSearch Is the 'advanced' section open?
 	 * @param array $options Widget options
@@ -68,6 +69,7 @@ class SearchFormWidget {
 		$term,
 		$numResults,
 		$totalResults,
+		$approximateTotalResults,
 		$offset,
 		$isPowerSearch,
 		array $options = []
@@ -86,7 +88,8 @@ class SearchFormWidget {
 				Html::rawElement(
 					'div',
 					[ 'id' => 'mw-search-top-table' ],
-					$this->shortDialogHtml( $profile, $term, $numResults, $totalResults, $offset, $options )
+					$this->shortDialogHtml( $profile, $term, $numResults, $totalResults,
+						$approximateTotalResults, $offset, $options )
 				) .
 				Html::rawElement( 'div', [ 'class' => 'mw-search-visualclear' ] ) .
 				Html::rawElement(
@@ -106,6 +109,7 @@ class SearchFormWidget {
 	 * @param string $term The current search term
 	 * @param int $numResults The number of results shown
 	 * @param int $totalResults The total estimated results found
+	 * @param bool $approximateTotalResults Whether $totalResults is approximate or not
 	 * @param int $offset Current offset in search results
 	 * @param array $options Widget options
 	 * @return string HTML
@@ -115,9 +119,12 @@ class SearchFormWidget {
 		$term,
 		$numResults,
 		$totalResults,
+		$approximateTotalResults,
 		$offset,
 		array $options = []
 	) {
+		$autoCapHint = $this->options->get( MainConfigNames::CapitalLinks );
+
 		$searchWidget = new SearchInputWidget( $options + [
 			'id' => 'searchText',
 			'name' => 'search',
@@ -126,9 +133,10 @@ class SearchFormWidget {
 			'value' => $term,
 			'dataLocation' => 'content',
 			'infusable' => true,
+			'autocapitalize' => $autoCapHint ? 'sentences' : 'none',
 		] );
 
-		$html = new \OOUI\ActionFieldLayout( $searchWidget, new \OOUI\ButtonInputWidget( [
+		$html = new ActionFieldLayout( $searchWidget, new ButtonInputWidget( [
 			'type' => 'submit',
 			'label' => $this->specialSearch->msg( 'searchbutton' )->text(),
 			'flags' => [ 'progressive', 'primary' ],
@@ -146,9 +154,11 @@ class SearchFormWidget {
 				[
 					'class' => 'results-info',
 					'data-mw-num-results-offset' => $offset,
-					'data-mw-num-results-total' => $totalResults
+					'data-mw-num-results-total' => $totalResults,
+					'data-mw-num-results-approximate-total' => $approximateTotalResults ? "true" : "false"
 				],
-				$this->specialSearch->msg( 'search-showingresults' )
+				$this->specialSearch
+					->msg( $approximateTotalResults ? 'search-showingresults-approximate' : 'search-showingresults' )
 					->numParams( $offset + 1, $offset + $numResults, $totalResults )
 					->numParams( $numResults )
 					->parse()
@@ -308,15 +318,15 @@ class SearchFormWidget {
 	}
 
 	private function createPowerSearchRememberCheckBoxHtml(): string {
-		return new \OOUI\FieldLayout(
-			new \OOUI\CheckboxInputWidget( [
+		return new FieldLayout(
+			new CheckboxInputWidget( [
 				'name' => 'nsRemember',
 				'selected' => false,
 				'inputId' => 'mw-search-powersearch-remember',
 				// The token goes here rather than in a hidden field so it
 				// is only sent when necessary (not every form submission)
-				'value' => $this->specialSearch->getUser()
-					->getEditToken( 'searchnamespace', $this->specialSearch->getRequest() )
+				'value' => $this->specialSearch->getContext()->getCsrfTokenSet()
+					->getToken( 'searchnamespace' )
 			] ),
 			[
 			'label' => $this->specialSearch->msg( 'powersearch-remember' )->text(),
@@ -354,8 +364,8 @@ class SearchFormWidget {
 	private function createNamespaceCheckbox( int $namespace, array $activeNamespaces ): string {
 		$namespaceDisplayName = $this->getNamespaceDisplayName( $namespace );
 
-		return new \OOUI\FieldLayout(
-			new \OOUI\CheckboxInputWidget( [
+		return new FieldLayout(
+			new CheckboxInputWidget( [
 				'name' => "ns{$namespace}",
 				'selected' => in_array( $namespace, $activeNamespaces ),
 				'inputId' => "mw-search-ns{$namespace}",
@@ -389,13 +399,8 @@ class SearchFormWidget {
 			$rows[$subject] .= $this->createNamespaceCheckbox( $namespace, $activeNamespaces );
 		}
 
-		$namespaceTables = [];
-		foreach ( array_chunk( $rows, 4 ) as $chunk ) {
-			$namespaceTables[] = implode( '', $chunk );
-		}
-
-		return '<div class="checkbox-container">' .
-			implode( '</div><div class="checkbox-container">', $namespaceTables ) . '</div>';
+		return '<div class="checkbox-wrapper"><div>' .
+			implode( '</div><div>', $rows ) . '</div></div>';
 	}
 
 	private function createHiddenOptsHtml( array $opts ): string {

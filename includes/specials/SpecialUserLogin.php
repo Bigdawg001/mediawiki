@@ -1,7 +1,5 @@
 <?php
 /**
- * Implements Special:UserLogin
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,36 +16,49 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
  */
 
+namespace MediaWiki\Specials;
+
+use LoginHelper;
 use MediaWiki\Auth\AuthManager;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MainConfigNames;
+use MediaWiki\SpecialPage\LoginSignupSpecialPage;
+use MediaWiki\SpecialPage\SpecialPage;
+use MediaWiki\User\UserIdentity;
+use MediaWiki\User\UserIdentityUtils;
+use StatusValue;
 
 /**
  * Implements Special:UserLogin
  *
  * @ingroup SpecialPage
+ * @ingroup Auth
  */
 class SpecialUserLogin extends LoginSignupSpecialPage {
+	/** @inheritDoc */
 	protected static $allowedActions = [
 		AuthManager::ACTION_LOGIN,
 		AuthManager::ACTION_LOGIN_CONTINUE
 	];
 
+	/** @inheritDoc */
 	protected static $messages = [
 		'authform-newtoken' => 'nocookiesforlogin',
 		'authform-notoken' => 'sessionfailure',
 		'authform-wrongtoken' => 'sessionfailure',
 	];
 
+	private UserIdentityUtils $identityUtils;
+
 	/**
 	 * @param AuthManager $authManager
 	 */
-	public function __construct( AuthManager $authManager ) {
+	public function __construct( AuthManager $authManager, UserIdentityUtils $identityUtils ) {
 		parent::__construct( 'Userlogin' );
 		$this->setAuthManager( $authManager );
+		$this->identityUtils = $identityUtils;
 	}
 
 	public function doesWrites() {
@@ -67,14 +78,14 @@ class SpecialUserLogin extends LoginSignupSpecialPage {
 	}
 
 	public function getDescription() {
-		return $this->msg( 'login' )->text();
+		return $this->msg( 'login' );
 	}
 
 	public function setHeaders() {
 		// override the page title if we are doing a forced reauthentication
 		parent::setHeaders();
 		if ( $this->securityLevel && $this->getUser()->isRegistered() ) {
-			$this->getOutput()->setPageTitle( $this->msg( 'login-security' ) );
+			$this->getOutput()->setPageTitleMsg( $this->msg( 'login-security' ) );
 		}
 	}
 
@@ -86,7 +97,7 @@ class SpecialUserLogin extends LoginSignupSpecialPage {
 		if ( $subPage === 'signup' || $this->getRequest()->getText( 'type' ) === 'signup' ) {
 			// B/C for old account creation URLs
 			$title = SpecialPage::getTitleFor( 'CreateAccount' );
-			$query = array_diff_key( $this->getRequest()->getValues(),
+			$query = array_diff_key( $this->getRequest()->getQueryValues(),
 				array_fill_keys( [ 'type', 'title' ], true ) );
 			$url = $title->getFullURL( $query, false, PROTO_CURRENT );
 			$this->getOutput()->redirect( $url );
@@ -112,6 +123,7 @@ class SpecialUserLogin extends LoginSignupSpecialPage {
 		$user = $this->targetUser ?: $this->getUser();
 		$session = $this->getRequest()->getSession();
 
+		$injected_html = '';
 		if ( $direct ) {
 			$user->touch();
 
@@ -129,12 +141,11 @@ class SpecialUserLogin extends LoginSignupSpecialPage {
 				// TODO something more specific? This used to use nocookieslogin
 				return;
 			}
-		}
 
-		# Run any hooks; display injected HTML if any, else redirect
-		$injected_html = '';
-		$this->getHookRunner()->onUserLoginComplete(
-			$user, $injected_html, $direct );
+			# Run any hooks; display injected HTML if any, else redirect
+			$this->getHookRunner()->onUserLoginComplete(
+				$user, $injected_html, $direct );
+		}
 
 		if ( $injected_html !== '' || $extraMessages ) {
 			$this->showSuccessPage( 'success', $this->msg( 'loginsuccesstitle' ),
@@ -142,7 +153,7 @@ class SpecialUserLogin extends LoginSignupSpecialPage {
 		} else {
 			$helper = new LoginHelper( $this->getContext() );
 			$helper->showReturnToPage( 'successredirect', $this->mReturnTo, $this->mReturnToQuery,
-				$this->mStickHTTPS );
+				$this->mStickHTTPS, $this->mReturnToAnchor );
 		}
 	}
 
@@ -162,11 +173,18 @@ class SpecialUserLogin extends LoginSignupSpecialPage {
 		return 'login';
 	}
 
-	protected function logAuthResult( $success, $status = null ) {
+	protected function logAuthResult( $success, UserIdentity $performer, $status = null ) {
 		LoggerFactory::getInstance( 'authevents' )->info( 'Login attempt', [
 			'event' => 'login',
 			'successful' => $success,
+			'accountType' => $this->identityUtils->getShortUserTypeInternal( $performer ),
 			'status' => strval( $status ),
 		] );
 	}
 }
+
+/**
+ * Retain the old class name for backwards compatibility.
+ * @deprecated since 1.41
+ */
+class_alias( SpecialUserLogin::class, 'SpecialUserLogin' );

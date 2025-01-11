@@ -18,8 +18,9 @@
  * @file
  */
 
-use MediaWiki\Title\Title;
-use MediaWiki\Title\TitleFactory;
+namespace MediaWiki\Title;
+
+use InvalidArgumentException;
 
 /**
  * A class to convert page titles on a foreign wiki (ForeignTitle objects) into
@@ -27,11 +28,8 @@ use MediaWiki\Title\TitleFactory;
  * of a given root page.
  */
 class SubpageImportTitleFactory implements ImportTitleFactory {
-	/** @var TitleFactory */
-	private $titleFactory;
-
-	/** @var Title */
-	private $rootPage;
+	private TitleFactory $titleFactory;
+	private Title $rootPage;
 
 	/**
 	 * @param NamespaceInfo $namespaceInfo
@@ -65,3 +63,6 @@ class SubpageImportTitleFactory implements ImportTitleFactory {
 		);
 	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( SubpageImportTitleFactory::class, 'SubpageImportTitleFactory' );

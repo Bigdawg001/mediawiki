@@ -21,7 +21,11 @@
  * @ingroup SpecialPage
  */
 
+namespace MediaWiki\SpecialPage;
+
+use Closure;
 use MediaWiki\Html\Html;
+use MediaWiki\Message\Message;
 
 /**
  * This class is a drop-in replacement for other special pages that need to be manually
@@ -36,7 +40,7 @@ use MediaWiki\Html\Html;
  */
 class DisabledSpecialPage extends UnlistedSpecialPage {
 
-	/** @var Message */
+	/** @var Message|string */
 	protected $errorMessage;
 
 	/**
@@ -64,10 +68,13 @@ class DisabledSpecialPage extends UnlistedSpecialPage {
 		$this->setHeaders();
 		$this->outputHeader();
 
-		$error = Html::rawElement( 'div', [
-			'class' => 'error',
-		], $this->msg( $this->errorMessage )->parseAsBlock() );
-		$this->getOutput()->addHTML( $error );
+		$this->getOutput()->addModuleStyles( 'mediawiki.codex.messagebox.styles' );
+		$this->getOutput()->addHTML( Html::errorBox(
+			$this->msg( $this->errorMessage )->parse()
+		) );
 	}
 
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( DisabledSpecialPage::class, 'DisabledSpecialPage' );

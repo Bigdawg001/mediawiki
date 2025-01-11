@@ -1,27 +1,29 @@
 <?php
 
+use MediaWiki\Pager\ReverseChronologicalPager;
+use MediaWiki\Utils\MWTimestamp;
 use Wikimedia\TestingAccessWrapper;
 
 /**
  * Test class for ReverseChronologicalPagerTest methods.
  *
  * @group Pager
+ * @group Database
  *
  * @author Geoffrey Mon <geofbot@gmail.com>
  */
 class ReverseChronologicalPagerTest extends MediaWikiIntegrationTestCase {
 
 	/**
-	 * @covers ReverseChronologicalPager::getDateCond
+	 * @covers \MediaWiki\Pager\ReverseChronologicalPager::getDateCond
 	 * @dataProvider provideGetDateCond
 	 */
 	public function testGetDateCond( $params, $expected ) {
 		$pager = $this->getMockForAbstractClass( ReverseChronologicalPager::class );
 		$pagerWrapper = TestingAccessWrapper::newFromObject( $pager );
-		$db = wfGetDB( DB_PRIMARY );
 
 		$pager->getDateCond( ...$params );
-		$this->assertEquals( $pagerWrapper->endOffset, $db->timestamp( $expected ) );
+		$this->assertEquals( $pagerWrapper->endOffset, $this->getDb()->timestamp( $expected ) );
 	}
 
 	/**
@@ -55,19 +57,19 @@ class ReverseChronologicalPagerTest extends MediaWikiIntegrationTestCase {
 		yield '3-digit year, T287621' => [
 			[ 720, 1, 5 ], '07200106000000'
 		];
-		yield 'Y2K38 bug' => [
-			[ 2042, 1, 5 ], '20320101000000'
+		yield 'Y2K38' => [
+			[ 2042, 1, 5 ], '20420106000000'
 		];
 	}
 
 	/**
-	 * @covers ReverseChronologicalPager::getDateCond
+	 * @covers \MediaWiki\Pager\ReverseChronologicalPager::getDateCond
 	 */
 	public function testGetDateCondSpecial() {
 		$pager = $this->getMockForAbstractClass( ReverseChronologicalPager::class );
 		$pagerWrapper = TestingAccessWrapper::newFromObject( $pager );
 		$timestamp = MWTimestamp::getInstance();
-		$db = wfGetDB( DB_PRIMARY );
+		$db = $this->getDb();
 
 		$currYear = $timestamp->format( 'Y' );
 		$currMonth = $timestamp->format( 'n' );

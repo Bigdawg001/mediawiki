@@ -1,16 +1,23 @@
 <?php
 
-namespace Wikimedia\DebugInfo;
+namespace Wikimedia\Tests\DebugInfo;
+
+use MediaWikiCoversValidator;
+use PHPUnit\Framework\TestCase;
+use stdClass;
+use Wikimedia\DebugInfo\DebugInfoTrait;
 
 /**
  * @covers \Wikimedia\DebugInfo\DebugInfoTrait
  * @covers \Wikimedia\DebugInfo\DumpUtils
  */
-class DebugInfoTraitTest extends \PHPUnit\Framework\TestCase {
+class DebugInfoTraitTest extends TestCase {
+	use MediaWikiCoversValidator;
+
 	public function setUp(): void {
 		if ( extension_loaded( 'xdebug' ) ) {
 			if ( version_compare( phpversion( 'xdebug' ), '3.0.0', '>=' ) ) {
-				if ( strpos( ini_get( 'xdebug.mode' ), 'develop' ) !== false ) {
+				if ( str_contains( ini_get( 'xdebug.mode' ), 'develop' ) ) {
 					$this->markTestSkipped( 'Can\'t run this test with xdebug.mode=develop. ' .
 					'Use xdebug.mode=coverage to do test coverage without overloading var_dump.' );
 				}
@@ -26,14 +33,14 @@ class DebugInfoTraitTest extends \PHPUnit\Framework\TestCase {
 		var_dump( $test1 );
 		$result = ob_get_clean();
 		$format = <<<TEXT
-object(Wikimedia\DebugInfo\Test1)#%d (5) {
-  ["privateDump":"Wikimedia\DebugInfo\Test1":private]=>
+object(Wikimedia\Tests\DebugInfo\Test1)#%d (5) {
+  ["privateDump":"Wikimedia\Tests\DebugInfo\Test1":private]=>
   object(stdClass)#%d (0) {
   }
   ["protectedDump":protected]=>
   object(stdClass)#%d (0) {
   }
-  ["privateNoDump":"Wikimedia\DebugInfo\Test1":private]=>
+  ["privateNoDump":"Wikimedia\Tests\DebugInfo\Test1":private]=>
   object(Wikimedia\DebugInfo\Placeholder)#%d (1) {
     ["desc"]=>
     string(%d) "stdClass#%d"
@@ -43,7 +50,7 @@ object(Wikimedia\DebugInfo\Test1)#%d (5) {
     ["desc"]=>
     string(%d) "stdClass#%d"
   }
-  ["scalarDumpAllowed":"Wikimedia\DebugInfo\Test1":private]=>
+  ["scalarDumpAllowed":"Wikimedia\Tests\DebugInfo\Test1":private]=>
   int(1)
 }
 TEXT;
@@ -57,14 +64,14 @@ TEXT;
 		$result = trim( ob_get_clean() );
 
 		$oldFormat = <<<TEXT
-object(Wikimedia\DebugInfo\Test2)#%d (9) {
-  ["privateDump":"Wikimedia\DebugInfo\Test2":private]=>
+object(Wikimedia\Tests\DebugInfo\Test2)#%d (9) {
+  ["privateDump":"Wikimedia\Tests\DebugInfo\Test2":private]=>
   object(stdClass)#%d (0) {
   }
   ["protected2Dump":protected]=>
   object(stdClass)#%d (0) {
   }
-  ["privateNoDump":"Wikimedia\DebugInfo\Test2":private]=>
+  ["privateNoDump":"Wikimedia\Tests\DebugInfo\Test2":private]=>
   object(Wikimedia\DebugInfo\Placeholder)#%d (1) {
     ["desc"]=>
     string(%d) "stdClass#%d"
@@ -82,12 +89,12 @@ object(Wikimedia\DebugInfo\Test2)#%d (9) {
     ["desc"]=>
     string(%d) "Wikimedia\DebugInfo\Placeholder#%d"
   }
-  ["scalarDumpAllowed":"Wikimedia\DebugInfo\Test1":private]=>
+  ["scalarDumpAllowed":"Wikimedia\Tests\DebugInfo\Test1":private]=>
   int(1)
-  ["privateDump":"Wikimedia\DebugInfo\Test1":private]=>
+  ["privateDump":"Wikimedia\Tests\DebugInfo\Test1":private]=>
   object(stdClass)#%d (0) {
   }
-  ["privateNoDump":"Wikimedia\DebugInfo\Test1":private]=>
+  ["privateNoDump":"Wikimedia\Tests\DebugInfo\Test1":private]=>
   object(Wikimedia\DebugInfo\Placeholder)#%d (1) {
     ["desc"]=>
     string(%d) "stdClass#%d"
@@ -97,14 +104,14 @@ TEXT;
 
 		// Newer versions of PHP have a different order of fields
 		$newFormat = <<<TEXT
-object(Wikimedia\DebugInfo\Test2)#%d (9) {
-  ["privateDump":"Wikimedia\DebugInfo\Test1":private]=>
+object(Wikimedia\Tests\DebugInfo\Test2)#%d (9) {
+  ["privateDump":"Wikimedia\Tests\DebugInfo\Test1":private]=>
   object(stdClass)#%d (0) {
   }
   ["protectedDump":protected]=>
   object(stdClass)#%d (0) {
   }
-  ["privateNoDump":"Wikimedia\DebugInfo\Test1":private]=>
+  ["privateNoDump":"Wikimedia\Tests\DebugInfo\Test1":private]=>
   object(Wikimedia\DebugInfo\Placeholder)#%d (1) {
     ["desc"]=>
     string(%d) "stdClass#%d"
@@ -114,15 +121,15 @@ object(Wikimedia\DebugInfo\Test2)#%d (9) {
     ["desc"]=>
     string(%d) "Wikimedia\DebugInfo\Placeholder#%d"
   }
-  ["scalarDumpAllowed":"Wikimedia\DebugInfo\Test1":private]=>
+  ["scalarDumpAllowed":"Wikimedia\Tests\DebugInfo\Test1":private]=>
   int(1)
-  ["privateDump":"Wikimedia\DebugInfo\Test2":private]=>
+  ["privateDump":"Wikimedia\Tests\DebugInfo\Test2":private]=>
   object(stdClass)#%d (0) {
   }
   ["protected2Dump":protected]=>
   object(stdClass)#%d (0) {
   }
-  ["privateNoDump":"Wikimedia\DebugInfo\Test2":private]=>
+  ["privateNoDump":"Wikimedia\Tests\DebugInfo\Test2":private]=>
   object(Wikimedia\DebugInfo\Placeholder)#%d (1) {
     ["desc"]=>
     string(%d) "stdClass#%d"
@@ -145,6 +152,7 @@ TEXT;
 	}
 }
 
+// phpcs:disable MediaWiki.Commenting.PropertyDocumentation
 class Test1 {
 	use DebugInfoTrait;
 
@@ -160,10 +168,10 @@ class Test1 {
 	private $scalarDumpAllowed = 1;
 
 	public function __construct() {
-		$this->privateDump = new \stdClass;
-		$this->protectedDump = new \stdClass;
-		$this->privateNoDump = new \stdClass;
-		$this->protectedNoDump = new \stdClass;
+		$this->privateDump = new stdClass;
+		$this->protectedDump = new stdClass;
+		$this->privateNoDump = new stdClass;
+		$this->protectedNoDump = new stdClass;
 	}
 }
 
@@ -181,9 +189,10 @@ class Test2 extends Test1 {
 
 	public function __construct() {
 		parent::__construct();
-		$this->privateDump = new \stdClass;
-		$this->protected2Dump = new \stdClass;
-		$this->privateNoDump = new \stdClass;
-		$this->protected2NoDump = new \stdClass;
+		$this->privateDump = new stdClass;
+		$this->protected2Dump = new stdClass;
+		$this->privateNoDump = new stdClass;
+		$this->protected2NoDump = new stdClass;
 	}
 }
+// phpcs:enable MediaWiki.Commenting.PropertyDocumentation

@@ -1,34 +1,18 @@
 <?php
 
 use MediaWiki\Title\Title;
-use MediaWiki\Title\TitleArray;
 use Wikimedia\Rdbms\FakeResultWrapper;
 
 /**
- * @covers PageProps
- *
+ * @covers \MediaWiki\Page\PageProps
  * @group Database
- *	^--- tell jenkins this test needs the database
- *
  * @group medium
- *	^--- tell phpunit that these test cases may take longer than 2 seconds.
  */
 class PagePropsTest extends MediaWikiLangTestCase {
 
-	/**
-	 * @var Title
-	 */
-	private $title1;
-
-	/**
-	 * @var Title
-	 */
-	private $title2;
-
-	/**
-	 * @var array
-	 */
-	private $expectedProperties;
+	private ?array $expectedProperties = null;
+	private Title $title1;
+	private Title $title2;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -89,7 +73,8 @@ class PagePropsTest extends MediaWikiLangTestCase {
 	 * set in setUp(). Using TitleArray.
 	 */
 	public function testGetSinglePropertyMultiplePagesTitleArray() {
-		$pageProps = $this->getServiceContainer()->getPageProps();
+		$services = $this->getServiceContainer();
+		$pageProps = $services->getPageProps();
 		$page1ID = $this->title1->getArticleID();
 		$page2ID = $this->title2->getArticleID();
 		$rows = [
@@ -97,7 +82,7 @@ class PagePropsTest extends MediaWikiLangTestCase {
 			$this->createRowFromTitle( $this->title2 )
 		];
 		$resultWrapper = new FakeResultWrapper( $rows );
-		$titles = TitleArray::newFromResult( $resultWrapper );
+		$titles = $services->getTitleFactory()->newTitleArrayFromResult( $resultWrapper );
 		$result = $pageProps->getProperties( $titles, "property1" );
 		$this->assertArrayHasKey( $page1ID, $result, "Found page 1 property" );
 		$this->assertArrayHasKey( $page2ID, $result, "Found page 2 property" );
@@ -232,27 +217,17 @@ class PagePropsTest extends MediaWikiLangTestCase {
 	}
 
 	protected function setProperties( $pageID, $properties ) {
-		$rows = [];
+		$queryBuilder = $this->getDb()->newReplaceQueryBuilder()
+			->replaceInto( 'page_props' )
+			->uniqueIndexFields( [ 'pp_page', 'pp_propname' ] );
 		foreach ( $properties as $propertyName => $propertyValue ) {
-			$rows[] = [
+			$queryBuilder->row( [
 				'pp_page' => $pageID,
 				'pp_propname' => $propertyName,
 				'pp_value' => $propertyValue
-			];
+			] );
 		}
-
-		$dbw = wfGetDB( DB_PRIMARY );
-		$dbw->replace(
-			'page_props',
-			[
-				[
-					'pp_page',
-					'pp_propname'
-				]
-			],
-			$rows,
-			__METHOD__
-		);
+		$queryBuilder->caller( __METHOD__ )->execute();
 	}
 
 	protected function setProperty( $pageID, $propertyName, $propertyValue ) {
