@@ -10,21 +10,21 @@
 		return OO.ui.infuse( $el );
 	}
 
-	$( function () {
-		var blockTargetWidget, anonOnlyWidget, enableAutoblockWidget, hideUserWidget, watchUserWidget,
+	$( () => {
+		let blockTargetWidget, anonOnlyWidget, enableAutoblockWidget, hideUserWidget, watchUserWidget = null,
 			expiryWidget, editingRestrictionWidget, partialActionsRestrictionsWidget, preventTalkPageEditWidget,
 			pageRestrictionsWidget, namespaceRestrictionsWidget, createAccountWidget,
 			userChangedCreateAccount, updatingBlockOptions;
 
 		function preserveSelectedStateOnDisable( widget ) {
-			var widgetWasSelected;
+			let widgetWasSelected;
 
 			if ( !widget ) {
 				return;
 			}
 
 			// 'disable' event fires if disabled state changes
-			widget.on( 'disable', function ( disabled ) {
+			widget.on( 'disable', ( disabled ) => {
 				if ( disabled ) {
 					// Disabling an enabled widget
 					// Save selected and set selected to false
@@ -42,14 +42,12 @@
 		}
 
 		function updateBlockOptions() {
-			var blocktarget = blockTargetWidget.getValue().toString().trim(),
+			const blocktarget = blockTargetWidget.getValue().trim(),
 				isEmpty = blocktarget === '',
 				isIp = mw.util.isIPAddress( blocktarget, true ),
 				isNonEmptyIp = isIp && !isEmpty,
 				expiryValue = expiryWidget.getValue(),
-				// infinityValues are the values the BlockUser class accepts as infinity (sf. wfIsInfinity)
-				infinityValues = [ 'infinite', 'indefinite', 'infinity', 'never' ],
-				isIndefinite = infinityValues.indexOf( expiryValue ) !== -1,
+				isIndefinite = mw.util.isInfinity( expiryValue ),
 				editingRestrictionValue = editingRestrictionWidget.getValue(),
 				isSitewide = editingRestrictionValue === 'sitewide';
 
@@ -90,7 +88,7 @@
 		}
 
 		function updateWatchOption( blocktarget ) {
-			var isEmpty = blocktarget === '',
+			const isEmpty = blocktarget === '',
 				isIp = mw.util.isIPAddress( blocktarget, true ),
 				isIpRange = isIp && blocktarget.match( /\/\d+$/ ),
 				isAutoBlock = blocktarget.match( /^#\d+$/ );
@@ -102,7 +100,7 @@
 
 		watchUserWidget = infuseIfExists( $( '#mw-input-wpWatch' ) );
 		if ( mw.config.get( 'wgCanonicalSpecialPageName' ) === 'Unblock' ) {
-			var $wpTarget = $( '#mw-input-wpTarget' );
+			const $wpTarget = $( '#mw-input-wpTarget' );
 			if ( $wpTarget.attr( 'type' ) === 'hidden' ) {
 				// target is not changeable, determine watch state once
 				updateWatchOption( $wpTarget.val() );
@@ -110,10 +108,10 @@
 			}
 			blockTargetWidget = infuseIfExists( $wpTarget );
 			if ( blockTargetWidget ) {
-				blockTargetWidget.on( 'change', function () {
-					updateWatchOption( blockTargetWidget.getValue().toString().trim() );
+				blockTargetWidget.on( 'change', () => {
+					updateWatchOption( blockTargetWidget.getValue().trim() );
 				} );
-				updateWatchOption( blockTargetWidget.getValue().toString().trim() );
+				updateWatchOption( blockTargetWidget.getValue().trim() );
 			}
 			return;
 		}
@@ -123,15 +121,6 @@
 		blockTargetWidget = infuseIfExists( $( '#mw-bi-target' ) );
 
 		if ( blockTargetWidget ) {
-			// If widget is prefilled with an IP address, make it editable at first
-			if ( mw.util.isIPAddress( mw.config.get( 'wgRelevantUserName' ) ) ) {
-				blockTargetWidget.removeItems( blockTargetWidget.getItems() );
-				blockTargetWidget.input
-					.setValue( mw.config.get( 'wgRelevantUserName' ) )
-					.focus();
-				blockTargetWidget.menu.toggle( false );
-			}
-
 			userChangedCreateAccount = mw.config.get( 'wgCreateAccountDirty' );
 			updatingBlockOptions = false;
 
@@ -142,7 +131,7 @@
 			anonOnlyWidget = OO.ui.infuse( $( '#mw-input-wpHardBlock' ) );
 			blockTargetWidget.on( 'change', updateBlockOptions );
 			expiryWidget.on( 'change', updateBlockOptions );
-			createAccountWidget.on( 'change', function () {
+			createAccountWidget.on( 'change', () => {
 				if ( !updatingBlockOptions ) {
 					userChangedCreateAccount = true;
 				}

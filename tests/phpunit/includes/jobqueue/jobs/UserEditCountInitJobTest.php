@@ -14,21 +14,20 @@ class UserEditCountInitJobTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers UserEditCountInitJob
+	 * @covers \UserEditCountInitJob
 	 * @dataProvider provideTestCases
 	 */
 	public function testUserEditCountInitJob( $startingEditCount, $setCount, $finalCount ) {
 		$user = $this->getMutableTestUser()->getUser();
 
 		if ( $startingEditCount !== false ) {
-			$this->getServiceContainer()->getDBLoadBalancer()
-				->getConnectionRef( DB_PRIMARY )
-				->update(
-					'user',
-					[ 'user_editcount' => $startingEditCount ], // SET
-					[ 'user_id' => $user->getId() ], // WHERE
-					__METHOD__
-				);
+			$this->getServiceContainer()->getConnectionProvider()->getPrimaryDatabase()
+				->newUpdateQueryBuilder()
+				->update( 'user' )
+				->set( [ 'user_editcount' => $startingEditCount ] )
+				->where( [ 'user_id' => $user->getId() ] )
+				->caller( __METHOD__ )
+				->execute();
 		}
 
 		$job = new UserEditCountInitJob( [

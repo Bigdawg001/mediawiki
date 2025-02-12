@@ -8,9 +8,16 @@ use Psr\Log\LogLevel;
 use Wikimedia\Assert\Assert;
 
 /**
- * A logger which writes to the terminal. The output is supposed to be
- * human-readable, and should be changed as necessary to better achieve that
- * goal.
+ * Write logs to command-line output (STDERR).
+ *
+ * The output is supposed to be human-readable, and should be changed as necessary
+ * to better achieve that goal.
+ *
+ * This is developed for use in maintenance/eval.php.
+ *
+ * @internal For use in MediaWiki core only
+ * @since 1.30
+ * @ingroup Debug
  */
 class ConsoleLogger extends AbstractLogger {
 	private const LEVELS = [
@@ -35,8 +42,8 @@ class ConsoleLogger extends AbstractLogger {
 	 */
 	public function __construct(
 		string $channel,
-		string $minLevel = null,
-		LoggerInterface $forwardTo = null
+		?string $minLevel = null,
+		?LoggerInterface $forwardTo = null
 	) {
 		Assert::parameter( $minLevel === null || isset( self::LEVELS[$minLevel] ), '$minLevel',
 			'must be a valid, lowercase PSR-3 log level' );
@@ -49,7 +56,7 @@ class ConsoleLogger extends AbstractLogger {
 	/**
 	 * @inheritDoc
 	 */
-	public function log( $level, $message, array $context = [] ) {
+	public function log( $level, $message, array $context = [] ): void {
 		if ( !$this->minLevel || self::LEVELS[$level] >= self::LEVELS[$this->minLevel] ) {
 			fwrite( STDERR, "[$level] " .
 				LegacyLogger::format( $this->channel, $message, $context ) );

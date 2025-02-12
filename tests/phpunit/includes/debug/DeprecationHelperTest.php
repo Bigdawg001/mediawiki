@@ -4,7 +4,7 @@ use MediaWiki\MainConfigNames;
 use Wikimedia\TestingAccessWrapper;
 
 /**
- * @covers DeprecationHelper
+ * @covers \MediaWiki\Debug\DeprecationHelper
  */
 class DeprecationHelperTest extends MediaWikiIntegrationTestCase {
 
@@ -31,7 +31,8 @@ class DeprecationHelperTest extends MediaWikiIntegrationTestCase {
 			}, $expectedLevel, $expectedMessage );
 		} else {
 			$this->assertDeprecationWarningIssued( function () use ( $propName ) {
-				$this->assertSame( 1, $this->testClass->$propName );
+				$expectedValue = $propName === 'fallbackDeprecatedMethodName' ? 'FOO' : 1;
+				$this->assertSame( $expectedValue, $this->testClass->$propName );
 			}, $expectedMessage );
 		}
 	}
@@ -40,19 +41,19 @@ class DeprecationHelperTest extends MediaWikiIntegrationTestCase {
 		return [
 			[ 'protectedDeprecated', null,
 				'Use of TestDeprecatedClass::$protectedDeprecated was deprecated in MediaWiki 1.23. ' .
-					'[Called from DeprecationHelperTest::{closure}' ],
+					'[Called from DeprecationHelperTest::{closure' ],
 			[ 'privateDeprecated', null,
 				'Use of TestDeprecatedClass::$privateDeprecated was deprecated in MediaWiki 1.24. ' .
-					'[Called from DeprecationHelperTest::{closure}' ],
+					'[Called from DeprecationHelperTest::{closure' ],
 			[ 'fallbackDeprecated', null,
 				'Use of TestDeprecatedClass::$fallbackDeprecated was deprecated in MediaWiki 1.25. ' .
-					'[Called from DeprecationHelperTest::{closure}' ],
+					'[Called from DeprecationHelperTest::{closure' ],
 			[ 'fallbackDeprecatedMethodName', null,
 				'Use of TestDeprecatedClass::$fallbackDeprecatedMethodName was deprecated in MediaWiki 1.26. ' .
-					'[Called from DeprecationHelperTest::{closure}' ],
+					'[Called from DeprecationHelperTest::{closure' ],
 			[ 'fallbackGetterOnly', null,
 				'Use of TestDeprecatedClass::$fallbackGetterOnly was deprecated in MediaWiki 1.25. ' .
-					'[Called from DeprecationHelperTest::{closure}' ],
+					'[Called from DeprecationHelperTest::{closure' ],
 			[ 'protectedNonDeprecated', E_USER_ERROR,
 				'Cannot access non-public property TestDeprecatedClass::$protectedNonDeprecated' ],
 			[ 'privateNonDeprecated', E_USER_ERROR,
@@ -73,7 +74,7 @@ class DeprecationHelperTest extends MediaWikiIntegrationTestCase {
 				$testObject->dynamic_property = 'bla';
 			},
 			'Use of TestDeprecatedClass::$dynamic_property was deprecated in MediaWiki 1.23. ' .
-				'[Called from DeprecationHelperTest::{closure}'
+				'[Called from DeprecationHelperTest::{closure'
 		);
 	}
 
@@ -94,7 +95,7 @@ class DeprecationHelperTest extends MediaWikiIntegrationTestCase {
 				$this->assertSame( 'bla', $testObject->dynamic_property ?? 'bla' );
 			},
 			'Use of TestDeprecatedClass::$dynamic_property was deprecated in MediaWiki 1.23. ' .
-				'[Called from DeprecationHelperTest::{closure}'
+				'[Called from DeprecationHelperTest::{closure'
 		);
 	}
 
@@ -134,16 +135,16 @@ class DeprecationHelperTest extends MediaWikiIntegrationTestCase {
 		return [
 			[ 'protectedDeprecated', null,
 				'Use of TestDeprecatedClass::$protectedDeprecated was deprecated in MediaWiki 1.23. ' .
-					'[Called from DeprecationHelperTest::{closure}' ],
+					'[Called from DeprecationHelperTest::{closure' ],
 			[ 'privateDeprecated', null,
 				'Use of TestDeprecatedClass::$privateDeprecated was deprecated in MediaWiki 1.24. ' .
-					'[Called from DeprecationHelperTest::{closure}' ],
+					'[Called from DeprecationHelperTest::{closure' ],
 			[ 'fallbackDeprecated', null,
 				'Use of TestDeprecatedClass::$fallbackDeprecated was deprecated in MediaWiki 1.25. ' .
-					'[Called from DeprecationHelperTest::{closure}' ],
+					'[Called from DeprecationHelperTest::{closure' ],
 			[ 'fallbackDeprecatedMethodName', null,
 				'Use of TestDeprecatedClass::$fallbackDeprecatedMethodName was deprecated in MediaWiki 1.26. ' .
-					'[Called from DeprecationHelperTest::{closure}' ],
+					'[Called from DeprecationHelperTest::{closure' ],
 			[ 'fallbackGetterOnly', E_USER_ERROR,
 				'Cannot access non-public property TestDeprecatedClass::$fallbackGetterOnly' ],
 			[ 'protectedNonDeprecated', E_USER_ERROR,
@@ -152,7 +153,7 @@ class DeprecationHelperTest extends MediaWikiIntegrationTestCase {
 				'Cannot access non-public property TestDeprecatedClass::$privateNonDeprecated', 1 ],
 			[ 'nonExistent', null,
 				'Use of TestDeprecatedClass::$nonExistent was deprecated in MediaWiki 1.23. ' .
-					'[Called from DeprecationHelperTest::{closure}' ],
+					'[Called from DeprecationHelperTest::{closure' ],
 		];
 	}
 
@@ -225,8 +226,7 @@ class DeprecationHelperTest extends MediaWikiIntegrationTestCase {
 	}
 
 	protected function assertDeprecationWarningIssued( callable $callback, string $expectedMessage ) {
-		$this->expectDeprecation();
-		$this->expectDeprecationMessage( $expectedMessage );
+		$this->expectDeprecationAndContinue( '/' . preg_quote( $expectedMessage, '/' ) . '/' );
 		$callback();
 	}
 

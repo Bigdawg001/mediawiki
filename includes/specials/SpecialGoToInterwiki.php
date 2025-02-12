@@ -1,7 +1,5 @@
 <?php
 /**
- * Implements Special:GoToInterwiki
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,9 +16,11 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
  */
 
+namespace MediaWiki\Specials;
+
+use MediaWiki\SpecialPage\UnlistedSpecialPage;
 use MediaWiki\Title\Title;
 
 /**
@@ -103,3 +103,6 @@ class SpecialGoToInterwiki extends UnlistedSpecialPage {
 		return 'redirects';
 	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( SpecialGoToInterwiki::class, 'SpecialGoToInterwiki' );

@@ -21,6 +21,8 @@
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Title\Title;
+use Wikimedia\Mime\MimeAnalyzer;
+use Wikimedia\ObjectCache\WANObjectCache;
 
 /**
  * Prioritized list of file repositories.
@@ -195,10 +197,7 @@ class RepoGroup {
 
 		foreach ( $this->foreignRepos as $repo ) {
 			// Remove found files from $items
-			foreach ( $images as $name => $image ) {
-				unset( $items[$name] );
-			}
-
+			$items = array_diff_key( $items, $images );
 			$images = array_merge( $images, $repo->findFiles( $items, $flags ) );
 		}
 
@@ -420,17 +419,16 @@ class RepoGroup {
 	/**
 	 * Split a virtual URL into repo, zone and rel parts
 	 * @param string $url
-	 * @throws MWException
 	 * @return string[] Containing repo, zone and rel
 	 */
 	private function splitVirtualUrl( $url ) {
 		if ( !str_starts_with( $url, 'mwrepo://' ) ) {
-			throw new MWException( __METHOD__ . ': unknown protocol' );
+			throw new InvalidArgumentException( __METHOD__ . ': unknown protocol' );
 		}
 
 		$bits = explode( '/', substr( $url, 9 ), 3 );
 		if ( count( $bits ) != 3 ) {
-			throw new MWException( __METHOD__ . ": invalid mwrepo URL: $url" );
+			throw new InvalidArgumentException( __METHOD__ . ": invalid mwrepo URL: $url" );
 		}
 
 		return $bits;

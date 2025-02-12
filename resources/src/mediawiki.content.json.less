@@ -1,10 +1,8 @@
 /*!
- * CSS for styling HTML-formatted JSON Schema objects
- *
- * @file
- * @author Munaf Assaf <massaf@wikimedia.org>
+ * Style HTML-formatted JSON Schema objects
  */
 
+@import 'mediawiki.skin.variables.less';
 @import 'mediawiki.mixins.less';
 
 .mw-json {
@@ -14,20 +12,18 @@
 
 	th,
 	td {
-		border: 1px solid #72777d;
-		/* TODO: Re-evaluate whether we should keep this over-ride or switch to ems */
-		/* stylelint-disable-next-line declaration-property-unit-disallowed-list */
-		font-size: 16px;
-		padding: 0.5em 1em;
+		border: @border-base;
+		font-size: 1em;
+		padding: @spacing-50 @spacing-100;
 	}
 
 	tr {
-		background-color: #eaecf0;
-		margin-bottom: 0.5em;
+		background-color: @background-color-neutral;
+		margin-bottom: @spacing-50;
 	}
 
 	th {
-		background-color: #fff;
+		background-color: @background-color-base;
 		font-weight: normal;
 		vertical-align: top;
 
@@ -41,15 +37,30 @@
 .mw-json-value,
 .mw-json-single-value {
 	background-color: #dcfae3;
-	font-family: monospace, monospace;
+	font-family: @font-family-monospace--fallback;
 	white-space: pre-wrap;
+
+	/* stylelint-disable selector-class-pattern */
+	html.skin-theme-clientpref-night & {
+		@media screen {
+			background-color: @background-color-transparent;
+		}
+	}
+
+	/* stylelint-disable-next-line plugin/no-unsupported-browser-features */
+	@media screen and ( prefers-color-scheme: dark ) {
+		html.skin-theme-clientpref-os & {
+			background-color: @background-color-transparent;
+		}
+	}
+	/* stylelint-enable selector-class-pattern */
 }
 
 .mw-json-single-value {
-	background-color: #eaecf0;
+	background-color: @background-color-neutral;
 }
 
 .mw-json-empty {
-	background-color: #fff;
+	background-color: @background-color-base;
 	font-style: italic;
 }

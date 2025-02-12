@@ -1,8 +1,6 @@
 <?php
 /**
- * Implements Special:Export
- *
- * Copyright © 2003-2008 Brion Vibber <brion@pobox.com>
+ * Copyright © 2003-2008 Brooke Vibber <bvibber@wikimedia.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,50 +18,55 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
  */
 
+namespace MediaWiki\Specials;
+
 use MediaWiki\Export\WikiExporterFactory;
+use MediaWiki\HTMLForm\Field\HTMLTextAreaField;
+use MediaWiki\HTMLForm\HTMLForm;
 use MediaWiki\Linker\LinksMigration;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Page\PageIdentity;
+use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Title\Title;
-use Wikimedia\Rdbms\ILoadBalancer;
+use MediaWiki\Title\TitleFormatter;
+use WikiExporter;
+use Wikimedia\Rdbms\IConnectionProvider;
+use Wikimedia\Rdbms\SelectQueryBuilder;
 
 /**
  * A special page that allows users to export pages in a XML file
  *
  * @ingroup SpecialPage
+ * @ingroup Dump
  */
 class SpecialExport extends SpecialPage {
-	protected $curonly, $doExport, $pageLinkDepth, $templates;
+	protected bool $curonly;
+	protected bool $doExport;
+	protected int $pageLinkDepth;
+	protected bool $templates;
 
-	/** @var ILoadBalancer */
-	private $loadBalancer;
-
-	/** @var WikiExporterFactory */
-	private $wikiExporterFactory;
-
-	/** @var TitleFormatter */
-	private $titleFormatter;
-
-	/** @var LinksMigration */
-	private $linksMigration;
+	private IConnectionProvider $dbProvider;
+	private WikiExporterFactory $wikiExporterFactory;
+	private TitleFormatter $titleFormatter;
+	private LinksMigration $linksMigration;
 
 	/**
-	 * @param ILoadBalancer $loadBalancer
+	 * @param IConnectionProvider $dbProvider
 	 * @param WikiExporterFactory $wikiExporterFactory
 	 * @param TitleFormatter $titleFormatter
 	 * @param LinksMigration $linksMigration
 	 */
 	public function __construct(
-		ILoadBalancer $loadBalancer,
+		IConnectionProvider $dbProvider,
 		WikiExporterFactory $wikiExporterFactory,
 		TitleFormatter $titleFormatter,
 		LinksMigration $linksMigration
 	) {
 		parent::__construct( 'Export' );
-		$this->loadBalancer = $loadBalancer;
+		$this->dbProvider = $dbProvider;
 		$this->wikiExporterFactory = $wikiExporterFactory;
 		$this->titleFormatter = $titleFormatter;
 		$this->linksMigration = $linksMigration;
@@ -74,7 +77,6 @@ class SpecialExport extends SpecialPage {
 		$this->outputHeader();
 		$config = $this->getConfig();
 
-		// Set some variables
 		$this->curonly = true;
 		$this->doExport = false;
 		$request = $this->getRequest();
@@ -106,8 +108,7 @@ class SpecialExport extends SpecialPage {
 					}
 				}
 			}
-		} elseif ( $request->getCheck( 'addns' ) &&
-		$config->get( MainConfigNames::ExportFromNamespaces ) ) {
+		} elseif ( $request->getCheck( 'addns' ) && $config->get( MainConfigNames::ExportFromNamespaces ) ) {
 			$page = $request->getText( 'pages' );
 			$nsindex = $request->getText( 'nsindex', '' );
 
@@ -120,8 +121,7 @@ class SpecialExport extends SpecialPage {
 					$page .= "\n" . implode( "\n", $nspages );
 				}
 			}
-		} elseif ( $request->getCheck( 'exportall' ) &&
-		$config->get( MainConfigNames::ExportAllowAll ) ) {
+		} elseif ( $request->getCheck( 'exportall' ) && $config->get( MainConfigNames::ExportAllowAll ) ) {
 			$this->doExport = true;
 			$exportall = true;
 
@@ -136,10 +136,10 @@ class SpecialExport extends SpecialPage {
 			// If not, we could deprecate them and do some cleanup, here and in WikiExporter.
 			LoggerFactory::getInstance( 'export' )->debug(
 				'Special:Export POST, dir: [{dir}], offset: [{offset}], limit: [{limit}]', [
-				'dir' => $request->getRawVal( 'dir' ),
-				'offset' => $request->getRawVal( 'offset' ),
-				'limit' => $request->getRawVal( 'limit' ),
-			] );
+					'dir' => $request->getRawVal( 'dir' ),
+					'offset' => $request->getRawVal( 'offset' ),
+					'limit' => $request->getRawVal( 'limit' ),
+				] );
 
 			$page = $request->getText( 'pages' );
 			$this->curonly = $request->getCheck( 'curonly' );
@@ -172,7 +172,7 @@ class SpecialExport extends SpecialPage {
 					$history['offset'] = $offset;
 				}
 
-				if ( strtolower( $dir ) == 'desc' ) {
+				if ( strtolower( $dir ?? '' ) == 'desc' ) {
 					$history['dir'] = 'desc';
 				}
 			}
@@ -317,8 +317,7 @@ class SpecialExport extends SpecialPage {
 			],
 		];
 
-		if ( $config->get( MainConfigNames::ExportMaxLinkDepth ) ||
-		$this->userCanOverrideExportDepth() ) {
+		if ( $config->get( MainConfigNames::ExportMaxLinkDepth ) || $this->userCanOverrideExportDepth() ) {
 			$formDescriptor += [
 				'pagelink-depth' => [
 					'type' => 'text',
@@ -416,7 +415,7 @@ class SpecialExport extends SpecialPage {
 		}
 
 		/* Ok, let's get to it... */
-		$db = $this->loadBalancer->getConnectionRef( ILoadBalancer::DB_REPLICA );
+		$db = $this->dbProvider->getReplicaDatabase();
 
 		$exporter = $this->wikiExporterFactory->getWikiExporter( $db, $history );
 		$exporter->list_authors = $list_authors;
@@ -447,22 +446,28 @@ class SpecialExport extends SpecialPage {
 	}
 
 	/**
-	 * @param Title $title
+	 * @param PageIdentity $page
 	 * @return string[]
 	 */
-	protected function getPagesFromCategory( $title ) {
+	protected function getPagesFromCategory( PageIdentity $page ) {
 		$maxPages = $this->getConfig()->get( MainConfigNames::ExportPagelistLimit );
+		$categoryLinksMigrationStage = $this->getConfig()->get( MainConfigNames::CategoryLinksSchemaMigrationStage );
 
-		$name = $title->getDBkey();
+		$name = $page->getDBkey();
 
-		$dbr = $this->loadBalancer->getConnectionRef( ILoadBalancer::DB_REPLICA );
-		$res = $dbr->select(
-			[ 'page', 'categorylinks' ],
-			[ 'page_namespace', 'page_title' ],
-			[ 'cl_from=page_id', 'cl_to' => $name ],
-			__METHOD__,
-			[ 'LIMIT' => $maxPages ]
-		);
+		$dbr = $this->dbProvider->getReplicaDatabase();
+		$queryBuilder = $dbr->newSelectQueryBuilder()
+			->select( [ 'page_namespace', 'page_title' ] )
+			->from( 'page' )
+			->join( 'categorylinks', null, 'cl_from=page_id' )
+			->limit( $maxPages );
+		if ( $categoryLinksMigrationStage & SCHEMA_COMPAT_READ_OLD ) {
+			$queryBuilder->where( [ 'cl_to' => $name ] );
+		} else {
+			$queryBuilder->join( 'linktarget', null, 'cl_target_id = lt_id' )
+				->where( [ 'lt_title' => $name, 'lt_namespace' => NS_CATEGORY ] );
+		}
+		$res = $queryBuilder->caller( __METHOD__ )->fetchResultSet();
 
 		$pages = [];
 
@@ -480,14 +485,13 @@ class SpecialExport extends SpecialPage {
 	protected function getPagesFromNamespace( $nsindex ) {
 		$maxPages = $this->getConfig()->get( MainConfigNames::ExportPagelistLimit );
 
-		$dbr = $this->loadBalancer->getConnectionRef( ILoadBalancer::DB_REPLICA );
-		$res = $dbr->select(
-			'page',
-			[ 'page_namespace', 'page_title' ],
-			[ 'page_namespace' => $nsindex ],
-			__METHOD__,
-			[ 'LIMIT' => $maxPages ]
-		);
+		$dbr = $this->dbProvider->getReplicaDatabase();
+		$res = $dbr->newSelectQueryBuilder()
+			->select( [ 'page_namespace', 'page_title' ] )
+			->from( 'page' )
+			->where( [ 'page_namespace' => $nsindex ] )
+			->limit( $maxPages )
+			->caller( __METHOD__ )->fetchResultSet();
 
 		$pages = [];
 
@@ -507,14 +511,15 @@ class SpecialExport extends SpecialPage {
 	protected function getTemplates( $inputPages, $pageSet ) {
 		[ $nsField, $titleField ] = $this->linksMigration->getTitleFields( 'templatelinks' );
 		$queryInfo = $this->linksMigration->getQueryInfo( 'templatelinks' );
-		return $this->getLinks( $inputPages, $pageSet,
-			$queryInfo['tables'],
-			[ 'namespace' => $nsField, 'title' => $titleField ],
-			array_merge(
-				[ 'templatelinks' => [ 'JOIN', [ 'page_id=tl_from' ] ] ],
-				$queryInfo['joins']
-			)
-		);
+		$dbr = $this->dbProvider->getReplicaDatabase();
+		$queryBuilder = $dbr->newSelectQueryBuilder()
+			->caller( __METHOD__ )
+			->select( [ 'namespace' => $nsField, 'title' => $titleField ] )
+			->from( 'page' )
+			->join( 'templatelinks', null, 'page_id=tl_from' )
+			->tables( array_diff( $queryInfo['tables'], [ 'templatelinks' ] ) )
+			->joinConds( $queryInfo['joins'] );
+		return $this->getLinks( $inputPages, $pageSet, $queryBuilder );
 	}
 
 	/**
@@ -534,11 +539,11 @@ class SpecialExport extends SpecialPage {
 
 	/**
 	 * Validate link depth setting, if available.
-	 * @param int $depth
+	 * @param int|null $depth
 	 * @return int
 	 */
 	protected function validateLinkDepth( $depth ) {
-		if ( $depth < 0 ) {
+		if ( $depth === null || $depth < 0 ) {
 			return 0;
 		}
 
@@ -567,11 +572,17 @@ class SpecialExport extends SpecialPage {
 	 */
 	protected function getPageLinks( $inputPages, $pageSet, $depth ) {
 		for ( ; $depth > 0; --$depth ) {
-			$pageSet = $this->getLinks(
-				$inputPages, $pageSet, [ 'pagelinks' ],
-				[ 'namespace' => 'pl_namespace', 'title' => 'pl_title' ],
-				[ 'pagelinks' => [ 'JOIN', [ 'page_id=pl_from' ] ] ]
-			);
+			[ $nsField, $titleField ] = $this->linksMigration->getTitleFields( 'pagelinks' );
+			$queryInfo = $this->linksMigration->getQueryInfo( 'pagelinks' );
+			$dbr = $this->dbProvider->getReplicaDatabase();
+			$queryBuilder = $dbr->newSelectQueryBuilder()
+				->caller( __METHOD__ )
+				->select( [ 'namespace' => $nsField, 'title' => $titleField ] )
+				->from( 'page' )
+				->join( 'pagelinks', null, 'page_id=pl_from' )
+				->tables( array_diff( $queryInfo['tables'], [ 'pagelinks' ] ) )
+				->joinConds( $queryInfo['joins'] );
+			$pageSet = $this->getLinks( $inputPages, $pageSet, $queryBuilder );
 			$inputPages = array_keys( $pageSet );
 		}
 
@@ -582,32 +593,22 @@ class SpecialExport extends SpecialPage {
 	 * Expand a list of pages to include items used in those pages.
 	 * @param array $inputPages Array of page titles
 	 * @param array $pageSet
-	 * @param string[] $table
-	 * @param array $fields Array of field names
-	 * @param array $join
+	 * @param SelectQueryBuilder $queryBuilder
 	 * @return array
 	 */
-	protected function getLinks( $inputPages, $pageSet, $table, $fields, $join ) {
-		$dbr = $this->loadBalancer->getConnectionRef( ILoadBalancer::DB_REPLICA );
-		$table[] = 'page';
-
+	protected function getLinks( $inputPages, $pageSet, SelectQueryBuilder $queryBuilder ) {
 		foreach ( $inputPages as $page ) {
 			$title = Title::newFromText( $page );
 			if ( $title ) {
 				$pageSet[$title->getPrefixedText()] = true;
 				/// @todo FIXME: May or may not be more efficient to batch these
 				///        by namespace when given multiple input pages.
-				$result = $dbr->select(
-					$table,
-					$fields,
-					[
+				$result = ( clone $queryBuilder )
+					->where( [
 						'page_namespace' => $title->getNamespace(),
 						'page_title' => $title->getDBkey()
-					],
-					__METHOD__,
-					[],
-					$join
-				);
+					] )
+					->fetchResultSet();
 
 				foreach ( $result as $row ) {
 					$template = Title::makeTitle( $row->namespace, $row->title );
@@ -623,3 +624,6 @@ class SpecialExport extends SpecialPage {
 		return 'pagetools';
 	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( SpecialExport::class, 'SpecialExport' );

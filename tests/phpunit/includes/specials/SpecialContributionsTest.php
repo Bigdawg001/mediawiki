@@ -1,20 +1,37 @@
 <?php
 
 use MediaWiki\MainConfigNames;
+use MediaWiki\Permissions\Authority;
 use MediaWiki\Permissions\UltimateAuthority;
 use MediaWiki\Request\FauxRequest;
+use MediaWiki\Specials\SpecialContributions;
+use MediaWiki\Tests\User\TempUser\TempUserTestTrait;
+use MediaWiki\User\User;
+use MediaWiki\User\UserFactory;
+use Wikimedia\Parsoid\Utils\DOMCompat;
+use Wikimedia\Parsoid\Utils\DOMUtils;
 
 /**
  * @author Ammarpad
  * @group Database
- * @covers SpecialContributions
+ * @covers \MediaWiki\Specials\SpecialContributions
+ * @covers \MediaWiki\SpecialPage\ContributionsSpecialPage
  */
 class SpecialContributionsTest extends SpecialPageTestBase {
-	private $pageName = __CLASS__ . 'BlaBlaTest';
-	private $admin;
+	use TempUserTestTrait;
 
-	protected function setUp(): void {
-		parent::setUp();
+	private const PAGE_NAME = __CLASS__ . 'BlaBlaTest';
+	/** @var Authority */
+	private static $admin;
+	/** @var User */
+	private static $hiddenUser;
+	/** @var User */
+	private static $topUser;
+	/** @var User */
+	private static $zeroUser;
+	private static int $useModWikiIPRevId;
+
+	public function addDBDataOnce() {
 		$this->overrideConfigValue(
 			MainConfigNames::RangeContributionsCIDRLimit,
 			[
@@ -25,24 +42,153 @@ class SpecialContributionsTest extends SpecialPageTestBase {
 		$this->setTemporaryHook(
 			'SpecialContributionsBeforeMainOutput',
 			static function () {
-				return;
 			}
 		);
-		$this->admin = new UltimateAuthority( $this->getTestSysop()->getUser() );
+		self::$admin = new UltimateAuthority( $this->getTestSysop()->getUser() );
 		$this->assertTrue(
 			$this->editPage(
-				$this->pageName, 'Test Content', 'test', NS_MAIN, $this->admin
+				self::PAGE_NAME, 'Test Content', 'test', NS_MAIN, self::$admin
 			)->isOK(),
-			'Admin contributed'
+			'Edit failed for admin'
 		);
+
+		self::$hiddenUser = $this->getTestUser()->getUser();
+		$this->assertTrue(
+			$this->editPage(
+				'Test', 'Test Content', 'test', NS_MAIN, self::$hiddenUser
+			)->isOK(),
+			'Edit failed for user'
+		);
+
+		// self::$topUser made the last edit to 'TopTest'. It should
+		// not be edited by a different user after this.
+		self::$topUser = $this->getTestUser( 'TopUser' )->getUser();
+		$this->assertTrue(
+			$this->editPage(
+				'TopTest', 'Test Content', 'test', NS_MAIN, self::$topUser
+			)->isOK(),
+			'Edit failed for user'
+		);
+
+		// The name of this user is '0' which is a valid name.
+		self::$zeroUser = ( new TestUser( '0' ) )->getUser();
+		$this->assertTrue(
+			$this->editPage(
+				'TestPage', 'Test Content', 'test', NS_MAIN, self::$zeroUser
+			)->isOK(),
+			'Edit failed for user'
+		);
+
+		$this->disableAutoCreateTempUser();
+		$useModWikiIP = $this->getServiceContainer()->getUserFactory()
+			->newFromName( '1.2.3.xxx', UserFactory::RIGOR_NONE );
+		$useModWikiIPEditStatus = $this->editPage( 'Test1234', 'Test Content', 'test', NS_MAIN, $useModWikiIP );
+		$this->assertStatusGood( $useModWikiIPEditStatus, 'Edit failed for IP in usemod format' );
+		static::$useModWikiIPRevId = $useModWikiIPEditStatus->getNewRevision()->getId();
+
+		$blockStatus = $this->getServiceContainer()->getBlockUserFactory()
+			->newBlockUser(
+				self::$hiddenUser->getName(),
+				self::$admin,
+				'infinity',
+				'',
+				[ 'isHideUser' => true ],
+			)
+			->placeBlock();
+		$this->assertStatusGood( $blockStatus, 'Block was not placed' );
+	}
+
+	public function testExecuteForZeroUser() {
+		[ $html ] = $this->executeSpecialPage(
+			self::$zeroUser->getName()
+		);
+
+		$this->assertStringContainsString( 'mw-pager-body', $html );
+	}
+
+	public function testExecuteEmptyTarget() {
+		[ $html ] = $this->executeSpecialPage();
+		// This 'topOnly' filter should always be added to Special:Contributions
+		$this->assertStringContainsString( 'topOnly', $html );
+		$this->assertStringNotContainsString( 'mw-pager-body', $html );
+	}
+
+	public function testExecuteHiddenTarget() {
+		[ $html ] = $this->executeSpecialPage(
+			self::$hiddenUser->getName()
+		);
+		$this->assertStringNotContainsString( 'mw-contributions-list', $html );
+	}
+
+	public function testExecuteHiddenTargetWithPermissions() {
+		[ $html ] = $this->executeSpecialPage(
+			self::$hiddenUser->getName(),
+			null,
+			'qqx',
+			// This is necessary because permission checks aren't actually
+			// done on the UlitmateAuthority that is self::$admin. Instead,
+			// they are done on a UserAuthority. See the TODO comment in
+			// User::getThisAsAuthority for more details.
+			$this->getTestUser( [
+				'sysop',
+				'bureaucrat',
+				'suppress'
+			] )->getUser()
+		);
+		$this->assertStringContainsString( 'mw-pager-body', $html );
+	}
+
+	public function testExecuteInvalidNamespace() {
+		[ $html ] = $this->executeSpecialPage(
+			'::1',
+			new FauxRequest( [
+				'namespace' => -1,
+			] )
+		);
+		$this->assertStringNotContainsString( 'mw-pager-body', $html );
+	}
+
+	/** @dataProvider provideExecuteNoResultsForIPTarget */
+	public function testExecuteNoResultsForIPTarget( $temporaryAccountsEnabled, $expectedPageTitleMessageKey ) {
+		if ( $temporaryAccountsEnabled ) {
+			$this->enableAutoCreateTempUser();
+		} else {
+			$this->disableAutoCreateTempUser();
+		}
+		[ $html ] = $this->executeSpecialPage( '4.3.2.1', null, null, null, true );
+		$specialPageDocument = DOMUtils::parseHTML( $html );
+		$contentHtml = DOMCompat::querySelector( $specialPageDocument, '#content' )->nodeValue;
+		$this->assertStringNotContainsString( 'mw-pager-body', $contentHtml );
+		$this->assertStringContainsString( "($expectedPageTitleMessageKey: 4.3.2.1", $contentHtml );
+	}
+
+	public static function provideExecuteNoResultsForIPTarget() {
+		return [
+			'Temporary accounts not enabled' => [ false, 'contributions-title' ],
+			'Temporary accounts enabled' => [
+				true, 'contributions-title-for-ip-when-temporary-accounts-enabled',
+			],
+		];
+	}
+
+	public function testExecuteForUseModWikiIP() {
+		// Regression test for T370413
+		[ $html ] = $this->executeSpecialPage( '1.2.3.xxx' );
+		$contributionsList = DOMCompat::querySelectorAll( DOMUtils::parseHTML( $html ), '.mw-contributions-list' );
+		$this->assertCount(
+			1, $contributionsList, 'Should have the contributions list as 1.2.3.xxx has made one edit'
+		);
+		$matchingLines = DOMCompat::querySelectorAll(
+			$contributionsList[0], '[data-mw-revid="' . static::$useModWikiIPRevId . '"]'
+		);
+		$this->assertCount( 1, $matchingLines, "The edit made by the usemod IP is missing" );
 	}
 
 	/**
-	 * @covers SpecialContributions::execute
 	 * @dataProvider provideTestExecuteRange
 	 */
 	public function testExecuteRange( $username, $shouldShowLinks ) {
-		[ $html ] = $this->executeSpecialPage( $username, null, 'qqx', $this->admin, true );
+		[ $html ] = $this->executeSpecialPage( $username, null, 'qqx', self::$admin, true );
 
 		if ( $shouldShowLinks ) {
 			$this->assertStringContainsString( 'blocklink', $html );
@@ -53,11 +199,10 @@ class SpecialContributionsTest extends SpecialPageTestBase {
 	}
 
 	/**
-	 * @covers SpecialContributions::execute
 	 * @dataProvider provideTestExecuteNonRange
 	 */
 	public function testExecuteNonRange( $username, $shouldShowLinks ) {
-		[ $html ] = $this->executeSpecialPage( $username, null, 'qqx', $this->admin, true );
+		[ $html ] = $this->executeSpecialPage( $username, null, 'qqx', self::$admin, true );
 
 		if ( $shouldShowLinks ) {
 			$this->assertStringContainsString( 'blocklink', $html );
@@ -105,21 +250,85 @@ class SpecialContributionsTest extends SpecialPageTestBase {
 	}
 
 	/**
-	 * @covers SpecialContributions::execute
 	 * @dataProvider provideYearMonthParams
 	 */
 	public function testYearMonthParams( string $year, string $month, bool $expect ) {
 		[ $html ] = $this->executeSpecialPage(
-			$this->admin->getUser()->getName(),
+			self::$admin->getUser()->getName(),
 			new FauxRequest( [
 				'year' => $year,
 				'month' => $month,
-		] ) );
+			] ) );
 		if ( $expect ) {
-			$this->assertStringContainsString( $this->pageName, $html );
+			$this->assertStringContainsString( self::PAGE_NAME, $html );
 		} else {
-			$this->assertStringNotContainsString( $this->pageName, $html );
+			$this->assertStringNotContainsString( self::PAGE_NAME, $html );
 		}
+	}
+
+	public function testBotParam() {
+		[ $html ] = $this->executeSpecialPage(
+			'::1',
+			new FauxRequest( [
+				'bot' => 1,
+			] ),
+			null,
+			self::$admin
+		);
+		$this->assertStringContainsString( 'bot', $html );
+	}
+
+	public function testFeedFormat() {
+		$specialPage = $this->newSpecialPage();
+		[ $html ] = ( new SpecialPageExecutor() )->executeSpecialPage(
+			$specialPage,
+			'::1',
+			new FauxRequest( [
+				'feed' => 'atom',
+				'namespace' => 2,
+				'topOnly' => true,
+				'newOnly' => true,
+				'hideMinor' => true,
+				'deletedOnly' => true,
+				'tagfilter' => 'mw-reverted',
+				'year' => '2000',
+				'month' => '01',
+			] )
+		);
+		$url = $specialPage->getOutput()->getRedirect();
+		$this->assertStringContainsString( 'namespace', $url );
+		$this->assertStringContainsString( 'toponly', $url );
+		$this->assertStringContainsString( 'newonly', $url );
+		$this->assertStringContainsString( 'hideminor', $url );
+		$this->assertStringContainsString( 'deletedonly', $url );
+		$this->assertStringContainsString( 'tagfilter', $url );
+		$this->assertStringContainsString( 'year', $url );
+		$this->assertStringContainsString( 'month', $url );
+	}
+
+	public function testCSSClasses() {
+		// Regression test for T378132
+		[ $html ] = $this->executeSpecialPage( self::$topUser->getName() );
+
+		$this->assertStringContainsString( "mw-contributions-current", $html );
+	}
+
+	/**
+	 * @dataProvider providePrefixSearchSubpages
+	 */
+	public function testPrefixSearchSubpages( $search, $expected ) {
+		$specialPage = $this->newSpecialPage();
+		$this->assertCount(
+			$expected,
+			$specialPage->prefixSearchSubpages( $search, 10, 0 )
+		);
+	}
+
+	public static function providePrefixSearchSubpages() {
+		return [
+			'Invalid prefix' => [ '/', 0 ],
+			'Valid prefix' => [ 'U', 1 ],
+		];
 	}
 
 	protected function newSpecialPage(): SpecialContributions {
@@ -128,13 +337,17 @@ class SpecialContributionsTest extends SpecialPageTestBase {
 		return new SpecialContributions(
 			$services->getLinkBatchFactory(),
 			$services->getPermissionManager(),
-			$services->getDBLoadBalancer(),
-			$services->getActorMigration(),
+			$services->getConnectionProvider(),
 			$services->getRevisionStore(),
 			$services->getNamespaceInfo(),
 			$services->getUserNameUtils(),
 			$services->getUserNamePrefixSearch(),
-			$services->getUserOptionsLookup()
+			$services->getUserOptionsLookup(),
+			$services->getCommentFormatter(),
+			$services->getUserFactory(),
+			$services->getUserIdentityLookup(),
+			$services->getDatabaseBlockStore(),
+			$services->getTempUserConfig()
 		);
 	}
 

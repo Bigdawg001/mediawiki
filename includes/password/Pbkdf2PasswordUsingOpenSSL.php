@@ -22,6 +22,8 @@
 
 declare( strict_types = 1 );
 
+namespace MediaWiki\Password;
+
 /**
  * A PBKDF2-hashed password, using OpenSSL
  *
@@ -29,7 +31,7 @@ declare( strict_types = 1 );
  */
 class Pbkdf2PasswordUsingOpenSSL extends AbstractPbkdf2Password {
 	/**
-	 * @var array<string, string>
+	 * @var array<string,string>|null
 	 */
 	private static $digestAlgos;
 
@@ -54,12 +56,8 @@ class Pbkdf2PasswordUsingOpenSSL extends AbstractPbkdf2Password {
 		'sha512' => 'sha512',
 	];
 
-	protected function isSupported(): bool {
-		return self::canUseOpenSSL();
-	}
-
 	protected function getDigestAlgo( string $algo ): ?string {
-		if ( !isset( self::$digestAlgos ) ) {
+		if ( self::$digestAlgos === null ) {
 			self::$digestAlgos = array_intersect( self::DIGEST_ALGOS, openssl_get_md_methods() );
 		}
 		return self::$digestAlgos[$algo] ?? null;
@@ -81,3 +79,6 @@ class Pbkdf2PasswordUsingOpenSSL extends AbstractPbkdf2Password {
 		return $hash;
 	}
 }
+
+/** @deprecated since 1.43 use MediaWiki\\Password\\Pbkdf2PasswordUsingOpenSSL */
+class_alias( Pbkdf2PasswordUsingOpenSSL::class, 'Pbkdf2PasswordUsingOpenSSL' );

@@ -3,11 +3,13 @@
 use Wikimedia\TestingAccessWrapper;
 
 /**
- * @covers AutoLoader
+ * @covers \AutoLoader
  */
 class AutoLoaderTest extends MediaWikiIntegrationTestCase {
 
+	/** @var string[] */
 	private $oldPsr4;
+	/** @var string[] */
 	private $oldClassFiles;
 
 	protected function setUp(): void {

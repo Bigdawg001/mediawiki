@@ -1,11 +1,5 @@
 <?php
 /**
- * @defgroup Watchlist Users watchlist handling
- */
-
-/**
- * Implements Special:EditWatchlist
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -22,26 +16,45 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
- * @ingroup Watchlist
  */
 
+namespace MediaWiki\Specials;
+
+use EditWatchlistCheckboxSeriesField;
+use EditWatchlistNormalHTMLForm;
+use LogicException;
+use MediaWiki\Cache\GenderCache;
 use MediaWiki\Cache\LinkBatchFactory;
+use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\Html\Html;
+use MediaWiki\HTMLForm\HTMLForm;
+use MediaWiki\HTMLForm\OOUIHTMLForm;
 use MediaWiki\Linker\LinkRenderer;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\WikiPageFactory;
+use MediaWiki\Parser\Parser;
+use MediaWiki\Parser\ParserOutput;
 use MediaWiki\Parser\ParserOutputFlags;
+use MediaWiki\Request\WebRequest;
+use MediaWiki\SpecialPage\SpecialPage;
+use MediaWiki\SpecialPage\UnlistedSpecialPage;
+use MediaWiki\Status\Status;
+use MediaWiki\Title\MalformedTitleException;
+use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\Title\Title;
+use MediaWiki\Title\TitleParser;
+use MediaWiki\Title\TitleValue;
+use MediaWiki\Watchlist\WatchedItemStore;
+use MediaWiki\Watchlist\WatchedItemStoreInterface;
 use MediaWiki\Watchlist\WatchlistManager;
+use UserNotLoggedIn;
 use Wikimedia\Parsoid\Core\SectionMetadata;
 use Wikimedia\Parsoid\Core\TOCData;
 
 /**
- * Provides the UI through which users can perform editing
- * operations on their watchlist
+ * Users can edit their watchlist via this page.
  *
  * @ingroup SpecialPage
  * @ingroup Watchlist
@@ -57,33 +70,22 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 	public const EDIT_NORMAL = 3;
 	public const VIEW = 4;
 
+	/** @var string|null */
 	protected $successMessage;
 
 	/** @var TOCData */
 	protected $tocData;
 
+	/** @var array[] */
 	private $badItems = [];
 
-	/** @var TitleParser */
-	private $titleParser;
-
-	/** @var WatchedItemStoreInterface */
-	private $watchedItemStore;
-
-	/** @var GenderCache */
-	private $genderCache;
-
-	/** @var LinkBatchFactory */
-	private $linkBatchFactory;
-
-	/** @var NamespaceInfo */
-	private $nsInfo;
-
-	/** @var WikiPageFactory */
-	private $wikiPageFactory;
-
-	/** @var WatchlistManager */
-	private $watchlistManager;
+	private TitleParser $titleParser;
+	private WatchedItemStoreInterface $watchedItemStore;
+	private GenderCache $genderCache;
+	private LinkBatchFactory $linkBatchFactory;
+	private NamespaceInfo $nsInfo;
+	private WikiPageFactory $wikiPageFactory;
+	private WatchlistManager $watchlistManager;
 
 	/** @var int|false where the value is one of the EDIT_ prefixed constants (e.g. EDIT_NORMAL) */
 	private $currentMode;
@@ -98,13 +100,13 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 	 * @param WatchlistManager|null $watchlistManager
 	 */
 	public function __construct(
-		WatchedItemStoreInterface $watchedItemStore = null,
-		TitleParser $titleParser = null,
-		GenderCache $genderCache = null,
-		LinkBatchFactory $linkBatchFactory = null,
-		NamespaceInfo $nsInfo = null,
-		WikiPageFactory $wikiPageFactory = null,
-		WatchlistManager $watchlistManager = null
+		?WatchedItemStoreInterface $watchedItemStore = null,
+		?TitleParser $titleParser = null,
+		?GenderCache $genderCache = null,
+		?LinkBatchFactory $linkBatchFactory = null,
+		?NamespaceInfo $nsInfo = null,
+		?WikiPageFactory $wikiPageFactory = null,
+		?WatchlistManager $watchlistManager = null
 	) {
 		parent::__construct( 'EditWatchlist', 'editmywatchlist' );
 		// This class is extended and therefor fallback to global state - T266065
@@ -130,8 +132,12 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 	public function execute( $mode ) {
 		$this->setHeaders();
 
-		# Anons don't get a watchlist
-		$this->requireNamedUser( 'watchlistanontext' );
+		$user = $this->getUser();
+		if ( !$user->isRegistered()
+			|| ( $user->isTemp() && !$user->isAllowed( 'editmywatchlist' ) )
+		) {
+			throw new UserNotLoggedIn( 'watchlistanontext' );
+		}
 
 		$out = $this->getOutput();
 
@@ -143,6 +149,7 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 			'mediawiki.interface.helpers.styles',
 			'mediawiki.special'
 		] );
+		$out->addModules( [ 'mediawiki.special.watchlist' ] );
 
 		$mode = self::getMode( $this->getRequest(), $mode, self::EDIT_NORMAL );
 		$this->currentMode = $mode;
@@ -154,7 +161,7 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 				$out->redirect( $title->getLocalURL() );
 				break;
 			case self::EDIT_RAW:
-				$out->setPageTitle( $this->msg( 'watchlistedit-raw-title' ) );
+				$out->setPageTitleMsg( $this->msg( 'watchlistedit-raw-title' ) );
 				$form = $this->getRawForm();
 				if ( $form->show() ) {
 					$out->addHTML( $this->successMessage );
@@ -162,7 +169,7 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 				}
 				break;
 			case self::EDIT_CLEAR:
-				$out->setPageTitle( $this->msg( 'watchlistedit-clear-title' ) );
+				$out->setPageTitleMsg( $this->msg( 'watchlistedit-clear-title' ) );
 				$form = $this->getClearForm();
 				if ( $form->show() ) {
 					$out->addHTML( $this->successMessage );
@@ -225,7 +232,7 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 	 */
 	protected function executeViewEditWatchlist() {
 		$out = $this->getOutput();
-		$out->setPageTitle( $this->msg( 'watchlistedit-normal-title' ) );
+		$out->setPageTitleMsg( $this->msg( 'watchlistedit-normal-title' ) );
 
 		$form = $this->getNormalForm();
 		$form->prepareForm();
@@ -240,7 +247,7 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 		$pout = new ParserOutput;
 		$pout->setTOCData( $this->tocData );
 		$pout->setOutputFlag( ParserOutputFlags::SHOW_TOC );
-		$pout->setText( Parser::TOC_PLACEHOLDER );
+		$pout->setRawText( Parser::TOC_PLACEHOLDER );
 		$out->addParserOutput( $pout );
 
 		$form->displayForm( $result );
@@ -275,7 +282,7 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 
 		foreach ( $list as $text ) {
 			$text = trim( $text );
-			if ( strlen( $text ) > 0 ) {
+			if ( $text !== '' ) {
 				$title = Title::newFromText( $text );
 				if ( $title instanceof Title && $this->watchlistManager->isWatchable( $title ) ) {
 					$titles[] = $title;
@@ -301,30 +308,28 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 		if ( count( $wanted ) > 0 ) {
 			$toWatch = array_diff( $wanted, $current );
 			$toUnwatch = array_diff( $current, $wanted );
-			$this->watchTitles( $toWatch );
-			$this->unwatchTitles( $toUnwatch );
-			$this->getUser()->invalidateCache();
-
-			if ( count( $toWatch ) > 0 || count( $toUnwatch ) > 0 ) {
-				$this->successMessage = $this->msg( 'watchlistedit-raw-done' )->parse();
-			} else {
+			if ( !$toWatch && !$toUnwatch ) {
 				return false;
 			}
 
-			if ( count( $toWatch ) > 0 ) {
+			$this->watchTitles( $toWatch );
+			$this->unwatchTitles( $toUnwatch );
+			$this->getUser()->invalidateCache();
+			$this->successMessage = $this->msg( 'watchlistedit-raw-done' )->parse();
+
+			if ( $toWatch ) {
 				$this->successMessage .= ' ' . $this->msg( 'watchlistedit-raw-added' )
 					->numParams( count( $toWatch ) )->parse();
 				$this->showTitles( $toWatch, $this->successMessage );
 			}
 
-			if ( count( $toUnwatch ) > 0 ) {
+			if ( $toUnwatch ) {
 				$this->successMessage .= ' ' . $this->msg( 'watchlistedit-raw-removed' )
 					->numParams( count( $toUnwatch ) )->parse();
 				$this->showTitles( $toUnwatch, $this->successMessage );
 			}
 		} else {
-
-			if ( count( $current ) === 0 ) {
+			if ( !$current ) {
 				return false;
 			}
 
@@ -576,14 +581,15 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 	 * Add a list of targets to a user's watchlist
 	 *
 	 * @param string[]|LinkTarget[] $targets
-	 * @return bool
-	 * @throws FatalError
-	 * @throws MWException
 	 */
-	private function watchTitles( array $targets ) {
-		return $this->watchedItemStore->addWatchBatchForUser(
+	private function watchTitles( array $targets ): void {
+		if ( $targets &&
+			$this->watchedItemStore->addWatchBatchForUser(
 				$this->getUser(), $this->getExpandedTargets( $targets )
-			) && $this->runWatchUnwatchCompleteHook( 'Watch', $targets );
+			)
+		) {
+			$this->runWatchUnwatchCompleteHook( 'Watch', $targets );
+		}
 	}
 
 	/**
@@ -593,26 +599,23 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 	 * is preferred, since Titles are very memory-heavy
 	 *
 	 * @param string[]|LinkTarget[] $targets
-	 *
-	 * @return bool
-	 * @throws FatalError
-	 * @throws MWException
 	 */
-	private function unwatchTitles( array $targets ) {
-		return $this->watchedItemStore->removeWatchBatchForUser(
+	private function unwatchTitles( array $targets ): void {
+		if ( $targets &&
+			$this->watchedItemStore->removeWatchBatchForUser(
 				$this->getUser(), $this->getExpandedTargets( $targets )
-			) && $this->runWatchUnwatchCompleteHook( 'Unwatch', $targets );
+			)
+		) {
+			$this->runWatchUnwatchCompleteHook( 'Unwatch', $targets );
+		}
 	}
 
 	/**
 	 * @param string $action
 	 *   Can be "Watch" or "Unwatch"
 	 * @param string[]|LinkTarget[] $targets
-	 * @return bool
-	 * @throws FatalError
-	 * @throws MWException
 	 */
-	private function runWatchUnwatchCompleteHook( $action, $targets ) {
+	private function runWatchUnwatchCompleteHook( string $action, array $targets ): void {
 		foreach ( $targets as $target ) {
 			$title = $target instanceof LinkTarget ?
 				Title::newFromLinkTarget( $target ) :
@@ -625,7 +628,6 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 				$this->getHookRunner()->onUnwatchArticleComplete( $user, $page );
 			}
 		}
-		return true;
 	}
 
 	/**
@@ -657,8 +659,11 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 		$removed = [];
 
 		foreach ( $data as $titles ) {
-			$this->unwatchTitles( $titles );
-			$removed = array_merge( $removed, $titles );
+			// ignore the 'check all' checkbox, which is a boolean value
+			if ( is_array( $titles ) ) {
+				$this->unwatchTitles( $titles );
+				$removed = array_merge( $removed, $titles );
+			}
 		}
 
 		if ( count( $removed ) > 0 ) {
@@ -700,7 +705,16 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 
 			// checkTitle can filter some options out, avoid empty sections
 			if ( count( $options ) > 0 ) {
+				// add a checkbox to select all entries in namespace
+				$fields['CheckAllNs' . $namespace] = [
+					'cssclass' => 'mw-watchlistedit-checkall',
+					'type' => 'check',
+					'section' => "ns$namespace",
+					'label' => $this->msg( 'watchlistedit-normal-check-all' )->text()
+				];
+
 				$fields['TitlesNs' . $namespace] = [
+					'cssclass' => 'mw-watchlistedit-check',
 					'class' => EditWatchlistCheckboxSeriesField::class,
 					'options' => $options,
 					'section' => "ns$namespace",
@@ -713,7 +727,11 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 		if ( count( $fields ) > 1 && $count > 30 ) {
 			$tocLength = 0;
 			$contLang = $this->getContentLanguage();
-			foreach ( $fields as $data ) {
+			foreach ( $fields as $key => $data ) {
+				// ignore the 'check all'  field
+				if ( str_starts_with( $key, 'CheckAllNs' ) ) {
+					continue;
+				}
 				# strip out the 'ns' prefix from the section name:
 				$ns = (int)substr( $data['section'], 2 );
 				$nsText = ( $ns === NS_MAIN )
@@ -868,7 +886,7 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 	 * @return int|false
 	 */
 	public static function getMode( $request, $par, $defaultValue = false ) {
-		$mode = strtolower( $request->getRawVal( 'action', $par ?? '' ) );
+		$mode = strtolower( $request->getRawVal( 'action' ) ?? $par ?? '' );
 
 		switch ( $mode ) {
 			case 'view':
@@ -896,7 +914,7 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 	 * @param int|false $selectedMode result of self::getMode
 	 * @return string
 	 */
-	public static function buildTools( $unused, LinkRenderer $linkRenderer = null, $selectedMode = false ) {
+	public static function buildTools( $unused, ?LinkRenderer $linkRenderer = null, $selectedMode = false ) {
 		if ( !$linkRenderer ) {
 			$linkRenderer = MediaWikiServices::getInstance()->getLinkRenderer();
 		}
@@ -934,3 +952,6 @@ class SpecialEditWatchlist extends UnlistedSpecialPage {
 		);
 	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( SpecialEditWatchlist::class, 'SpecialEditWatchlist' );

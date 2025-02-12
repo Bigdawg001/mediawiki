@@ -21,16 +21,26 @@
  * @ingroup Parser
  */
 
+namespace MediaWiki\Parser;
+
+use InvalidArgumentException;
 use MediaWiki\Category\Category;
 use MediaWiki\Config\ServiceOptions;
+use MediaWiki\Language\Language;
+use MediaWiki\Language\LanguageCode;
+use MediaWiki\Languages\LanguageNameUtils;
+use MediaWiki\Linker\Linker;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
-use MediaWiki\Parser\MagicWordFactory;
-use MediaWiki\Parser\ParserOutputFlags;
+use MediaWiki\Message\Message;
 use MediaWiki\Revision\RevisionAccessException;
 use MediaWiki\Revision\RevisionRecord;
-use MediaWiki\StubObject\StubUserLang;
+use MediaWiki\SiteStats\SiteStats;
+use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Title\Title;
+use MediaWiki\Title\TitleValue;
+use MediaWiki\User\User;
+use Wikimedia\Bcp47Code\Bcp47CodeValue;
 use Wikimedia\RemexHtml\Tokenizer\Attributes;
 use Wikimedia\RemexHtml\Tokenizer\PlainAttributes;
 
@@ -56,7 +66,6 @@ class CoreParserFunctions {
 	 * @param ServiceOptions $options
 	 *
 	 * @return void
-	 * @throws MWException
 	 * @internal
 	 */
 	public static function register( Parser $parser, ServiceOptions $options ) {
@@ -72,8 +81,8 @@ class CoreParserFunctions {
 		$noHashFunctions = [
 			'ns', 'nse', 'urlencode', 'lcfirst', 'ucfirst', 'lc', 'uc',
 			'localurl', 'localurle', 'fullurl', 'fullurle', 'canonicalurl',
-			'canonicalurle', 'formatnum', 'grammar', 'gender', 'plural', 'bidi',
-			'numberingroup', 'language',
+			'canonicalurle', 'formatnum', 'grammar', 'gender', 'plural', 'formal',
+			'bidi', 'numberingroup', 'language',
 			'padleft', 'padright', 'anchorencode', 'defaultsort', 'filepath',
 			'pagesincategory', 'pagesize', 'protectionlevel', 'protectionexpiry',
 			# The following are the "parser function" forms of magic
@@ -112,6 +121,13 @@ class CoreParserFunctions {
 			'numberofpages',
 			'numberofadmins',
 			'numberofedits',
+
+			# These magic words already contain the hash, and the no-args form
+			# is the same as passing an empty first argument
+			'bcp47',
+			'dir',
+			'interwikilink',
+			'interlanguagelink',
 		];
 		foreach ( $noHashFunctions as $func ) {
 			$parser->setFunctionHook( $func, [ __CLASS__, $func ], Parser::SFH_NO_HASH );
@@ -142,7 +158,7 @@ class CoreParserFunctions {
 	/**
 	 * @param Parser $parser
 	 * @param string $part1 Message key
-	 * @param mixed ...$params To pass to wfMessage()
+	 * @param string ...$params To pass to wfMessage()
 	 * @return array
 	 */
 	public static function intFunction( $parser, $part1 = '', ...$params ) {
@@ -441,6 +457,11 @@ class CoreParserFunctions {
 		return $parser->getTargetLanguage()->convertPlural( $text, $forms );
 	}
 
+	public static function formal( Parser $parser, string ...$forms ): string {
+		$index = $parser->getTargetLanguage()->getFormalityIndex();
+		return $forms[$index] ?? $forms[0];
+	}
+
 	/**
 	 * @param Parser $parser
 	 * @param string $text
@@ -573,12 +594,12 @@ class CoreParserFunctions {
 	 *
 	 * @param int|float $num
 	 * @param ?string $raw
-	 * @param Language|StubUserLang $language
+	 * @param Language $language
 	 * @param MagicWordFactory|null $magicWordFactory To evaluate $raw
 	 * @return string
 	 */
 	public static function formatRaw(
-		$num, $raw, $language, MagicWordFactory $magicWordFactory = null
+		$num, $raw, $language, ?MagicWordFactory $magicWordFactory = null
 	) {
 		if ( $raw !== null && $raw !== '' ) {
 			if ( !$magicWordFactory ) {
@@ -671,21 +692,6 @@ class CoreParserFunctions {
 			return '';
 		}
 		return str_replace( '_', ' ', $t->getNsText() );
-	}
-
-	/**
-	 * Given a title, return the namespace name that would be given by the
-	 * corresponding magic word.
-	 * @note This function corresponded to the `namespace` parser function
-	 * and magic variable, but `namespace` was a reserved word before PHP 7.
-	 * @param Parser $parser
-	 * @param string|null $title
-	 * @return mixed|string
-	 * @deprecated Use CoreParserFunctions::namespace() instead.
-	 */
-	public static function mwnamespace( $parser, $title = null ) {
-		wfDeprecated( __METHOD__, '1.39' );
-		return self::namespace( $parser, $title );
 	}
 
 	public static function namespacee( $parser, $title = null ) {
@@ -935,7 +941,7 @@ class CoreParserFunctions {
 	public static function pagesize( $parser, $page = '', $raw = null ) {
 		$title = Title::newFromText( $page );
 
-		if ( !is_object( $title ) ) {
+		if ( !is_object( $title ) || $title->isExternal() ) {
 			return self::formatRaw( 0, $raw, $parser->getTargetLanguage() );
 		}
 
@@ -1000,16 +1006,74 @@ class CoreParserFunctions {
 	 * Gives language names.
 	 * @param Parser $parser
 	 * @param string $code Language code (of which to get name)
-	 * @param string $inLanguage Language code (in which to get name)
+	 * @param string $inLanguage Language code (in which to get name);
+	 *   if missing or empty, the language's autonym will be returned.
 	 * @return string
 	 */
 	public static function language( $parser, $code = '', $inLanguage = '' ) {
-		$code = strtolower( $code );
-		$inLanguage = strtolower( $inLanguage );
+		if ( $code === '' ) {
+			$code = $parser->getTargetLanguage()->getCode();
+		}
+		if ( $inLanguage === '' ) {
+			$inLanguage = LanguageNameUtils::AUTONYMS;
+		}
 		$lang = MediaWikiServices::getInstance()
 			->getLanguageNameUtils()
 			->getLanguageName( $code, $inLanguage );
 		return $lang !== '' ? $lang : LanguageCode::bcp47( $code );
+	}
+
+	/**
+	 * Gives direction of script of a language given a language code.
+	 * @param Parser $parser
+	 * @param string $code a language code. If missing, the parser target
+	 *  language will be used.
+	 * @param string $arg If this optional argument matches the
+	 *  `language_option_bcp47` magic word, the language code will be treated
+	 *  as a BCP-47 code.
+	 * @return string 'rtl' if the language code is recognized as
+	 *  right-to-left, otherwise returns 'ltr'
+	 */
+	public static function dir( Parser $parser, string $code = '', string $arg = '' ): string {
+		static $magicWords = null;
+		$languageFactory = MediaWikiServices::getInstance()->getLanguageFactory();
+
+		if ( $code === '' ) {
+			$lang = $parser->getTargetLanguage();
+		} else {
+			if ( $arg !== '' ) {
+				if ( $magicWords === null ) {
+					$magicWords = $parser->getMagicWordFactory()->newArray( [ 'language_option_bcp47' ] );
+				}
+				if ( $magicWords->matchStartToEnd( $arg ) === 'language_option_bcp47' ) {
+					// Prefer the BCP-47 interpretation of this code.
+					$code = new Bcp47CodeValue( $code );
+				}
+			}
+			try {
+				$lang = $languageFactory->getLanguage( $code );
+			} catch ( InvalidArgumentException $ex ) {
+				$parser->addTrackingCategory( 'bad-language-code-category' );
+				return 'ltr';
+			}
+		}
+		return $lang->getDir();
+	}
+
+	/**
+	 * Gives the BCP-47 code for a language given the mediawiki internal
+	 * language code.
+	 * @param Parser $parser
+	 * @param string $code a language code. If missing, the parser target
+	 *  language will be used.
+	 * @return string the corresponding BCP-47 code
+	 */
+	public static function bcp47( Parser $parser, string $code = '' ): string {
+		if ( $code === '' ) {
+			return $parser->getTargetLanguage()->toBcp47Code();
+		} else {
+			return LanguageCode::bcp47( $code );
+		}
 	}
 
 	/**
@@ -1107,7 +1171,7 @@ class CoreParserFunctions {
 		$arg = $magicWords->matchStartToEnd( $uarg );
 
 		$text = trim( $text );
-		if ( strlen( $text ) == 0 ) {
+		if ( $text === '' ) {
 			return '';
 		}
 		$old = $parser->getOutput()->getPageProperty( 'defaultsort' );
@@ -1146,10 +1210,10 @@ class CoreParserFunctions {
 		if ( $argA == 'nowiki' ) {
 			// {{filepath: | option [| size] }}
 			$isNowiki = true;
-			$parsedWidthParam = Parser::parseWidthParam( $argB );
+			$parsedWidthParam = $parser->parseWidthParam( $argB );
 		} else {
 			// {{filepath: [| size [|option]] }}
-			$parsedWidthParam = Parser::parseWidthParam( $argA );
+			$parsedWidthParam = $parser->parseWidthParam( $argA );
 			$isNowiki = ( $argB == 'nowiki' );
 		}
 
@@ -1162,7 +1226,8 @@ class CoreParserFunctions {
 				// ... and we can
 				if ( $mto && !$mto->isError() ) {
 					// ... change the URL to point to a thumbnail.
-					$url = wfExpandUrl( $mto->getUrl(), PROTO_RELATIVE );
+					$urlUtils = MediaWikiServices::getInstance()->getUrlUtils();
+					$url = $urlUtils->expand( $mto->getUrl(), PROTO_RELATIVE ) ?? false;
 				}
 			}
 			if ( $isNowiki ) {
@@ -1365,7 +1430,7 @@ class CoreParserFunctions {
 	 */
 	public static function revisionid( $parser, $title = null ) {
 		$t = self::makeTitle( $parser, $title );
-		if ( $t === null ) {
+		if ( $t === null || $t->isExternal() ) {
 			return '';
 		}
 
@@ -1470,7 +1535,7 @@ class CoreParserFunctions {
 	 */
 	public static function revisionday( $parser, $title = null ) {
 		$t = self::makeTitle( $parser, $title );
-		if ( $t === null ) {
+		if ( $t === null || $t->isExternal() ) {
 			return '';
 		}
 		return strval( (int)self::getRevisionTimestampSubstring(
@@ -1487,7 +1552,7 @@ class CoreParserFunctions {
 	 */
 	public static function revisionday2( $parser, $title = null ) {
 		$t = self::makeTitle( $parser, $title );
-		if ( $t === null ) {
+		if ( $t === null || $t->isExternal() ) {
 			return '';
 		}
 		return self::getRevisionTimestampSubstring(
@@ -1504,7 +1569,7 @@ class CoreParserFunctions {
 	 */
 	public static function revisionmonth( $parser, $title = null ) {
 		$t = self::makeTitle( $parser, $title );
-		if ( $t === null ) {
+		if ( $t === null || $t->isExternal() ) {
 			return '';
 		}
 		return self::getRevisionTimestampSubstring(
@@ -1521,7 +1586,7 @@ class CoreParserFunctions {
 	 */
 	public static function revisionmonth1( $parser, $title = null ) {
 		$t = self::makeTitle( $parser, $title );
-		if ( $t === null ) {
+		if ( $t === null || $t->isExternal() ) {
 			return '';
 		}
 		return strval( (int)self::getRevisionTimestampSubstring(
@@ -1538,7 +1603,7 @@ class CoreParserFunctions {
 	 */
 	public static function revisionyear( $parser, $title = null ) {
 		$t = self::makeTitle( $parser, $title );
-		if ( $t === null ) {
+		if ( $t === null || $t->isExternal() ) {
 			return '';
 		}
 		return self::getRevisionTimestampSubstring(
@@ -1555,7 +1620,7 @@ class CoreParserFunctions {
 	 */
 	public static function revisiontimestamp( $parser, $title = null ) {
 		$t = self::makeTitle( $parser, $title );
-		if ( $t === null ) {
+		if ( $t === null || $t->isExternal() ) {
 			return '';
 		}
 		return self::getRevisionTimestampSubstring(
@@ -1572,7 +1637,7 @@ class CoreParserFunctions {
 	 */
 	public static function revisionuser( $parser, $title = null ) {
 		$t = self::makeTitle( $parser, $title );
-		if ( $t === null ) {
+		if ( $t === null || $t->isExternal() ) {
 			return '';
 		}
 		// VARY_USER informs the edit saving system that getting the canonical
@@ -1620,4 +1685,59 @@ class CoreParserFunctions {
 		}
 		return '';
 	}
+
+	public static function interwikilink( $parser, $prefix = '', $title = '', $linkText = null ) {
+		$services = MediaWikiServices::getInstance();
+		if (
+			$prefix !== '' &&
+			$services->getInterwikiLookup()->isValidInterwiki( $prefix )
+		) {
+			if ( $linkText !== null ) {
+				$linkText = Parser::stripOuterParagraph(
+					# FIXME T382287: when using Parsoid this may leave
+					# strip markers behind for embedded extension tags.
+					$parser->recursiveTagParseFully( $linkText )
+				);
+			}
+			[ $title, $frag ] = array_pad( explode( '#', $title, 2 ), 2, '' );
+			$target = new TitleValue( NS_MAIN, $title, $frag, $prefix );
+			$parser->getOutput()->addInterwikiLink( $target );
+			return [
+				'text' => Linker::link( $target, $linkText ),
+				'isHTML' => true,
+			];
+		}
+		// Invalid interwiki link, render as plain text
+		return [ 'found' => false ];
+	}
+
+	public static function interlanguagelink( $parser, $prefix = '', $title = '', $linkText = null ) {
+		$services = MediaWikiServices::getInstance();
+		$extraInterlanguageLinkPrefixes = $services->getMainConfig()->get(
+			MainConfigNames::ExtraInterlanguageLinkPrefixes
+		);
+		if (
+			$prefix !== '' &&
+			$services->getInterwikiLookup()->isValidInterwiki( $prefix ) &&
+			(
+				$services->getLanguageNameUtils()->getLanguageName(
+					$prefix, LanguageNameUtils::AUTONYMS, LanguageNameUtils::DEFINED
+				) || in_array( $prefix, $extraInterlanguageLinkPrefixes, true )
+			)
+		) {
+			// $linkText is ignored for language links, but fragment is kept
+			[ $title, $frag ] = array_pad( explode( '#', $title, 2 ), 2, '' );
+			$parser->getOutput()->addLanguageLink(
+				new TitleValue(
+					NS_MAIN, $title, $frag, $prefix
+				)
+			);
+			return '';
+		}
+		// Invalid language link, render as plain text
+		return [ 'found' => false ];
+	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( CoreParserFunctions::class, 'CoreParserFunctions' );

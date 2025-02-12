@@ -1,13 +1,20 @@
 <?php
 
+namespace Wikimedia\Tests;
+
+use Cookie;
+use MediaWikiCoversValidator;
+use PHPUnit\Framework\TestCase;
+
 /**
- * @covers Cookie
+ * @covers \Cookie
  */
-class CookieTest extends \PHPUnit\Framework\TestCase {
+class CookieTest extends TestCase {
+	use MediaWikiCoversValidator;
 
 	/**
 	 * @dataProvider cookieDomains
-	 * @covers Cookie::validateCookieDomain
+	 * @covers \Cookie::validateCookieDomain
 	 */
 	public function testValidateCookieDomain( $expected, $domain, $origin = null ) {
 		if ( $origin ) {

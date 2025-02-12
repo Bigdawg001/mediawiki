@@ -32,8 +32,6 @@ class MediaHandlerFactory {
 
 	/**
 	 * Default, MediaWiki core media handlers
-	 *
-	 * @var array
 	 */
 	private const CORE_HANDLERS = [
 		'image/jpeg' => JpegHandler::class,
@@ -66,10 +64,6 @@ class MediaHandlerFactory {
 	 */
 	private $handlers;
 
-	/**
-	 * @param LoggerInterface $logger
-	 * @param array $registry
-	 */
 	public function __construct(
 		LoggerInterface $logger,
 		array $registry

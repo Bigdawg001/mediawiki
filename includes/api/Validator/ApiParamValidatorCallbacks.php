@@ -2,8 +2,8 @@
 
 namespace MediaWiki\Api\Validator;
 
-use ApiMain;
-use MediaWiki\Message\Converter as MessageConverter;
+use MediaWiki\Api\ApiBase;
+use MediaWiki\Api\ApiMain;
 use Wikimedia\Message\DataMessageValue;
 use Wikimedia\ParamValidator\Callbacks;
 use Wikimedia\ParamValidator\Util\UploadedFile;
@@ -18,16 +18,12 @@ class ApiParamValidatorCallbacks implements Callbacks {
 	/** @var ApiMain */
 	private $apiMain;
 
-	/** @var MessageConverter */
-	private $messageConverter;
-
 	/**
 	 * @internal
 	 * @param ApiMain $main
 	 */
 	public function __construct( ApiMain $main ) {
 		$this->apiMain = $main;
-		$this->messageConverter = new MessageConverter();
 	}
 
 	public function hasParam( $name, array $options ) {
@@ -81,7 +77,7 @@ class ApiParamValidatorCallbacks implements Callbacks {
 	public function recordCondition(
 		DataMessageValue $message, $name, $value, array $settings, array $options
 	) {
-		/** @var \ApiBase $module */
+		/** @var ApiBase $module */
 		$module = $options['module'];
 
 		$code = $message->getCode();
@@ -114,7 +110,7 @@ class ApiParamValidatorCallbacks implements Callbacks {
 					$m = $p;
 				}
 				$module->addDeprecation(
-					$this->messageConverter->convertMessageValue( $message ),
+					$message,
 					$feature,
 					$message->getData()
 				);
@@ -126,7 +122,7 @@ class ApiParamValidatorCallbacks implements Callbacks {
 
 			default:
 				$module->addWarning(
-					$this->messageConverter->convertMessageValue( $message ),
+					$message,
 					$message->getCode(),
 					$message->getData()
 				);

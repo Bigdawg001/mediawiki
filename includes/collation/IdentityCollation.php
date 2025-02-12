@@ -18,6 +18,8 @@
  * @file
  */
 
+use MediaWiki\Language\Language;
+
 /**
  * Collation class that's essentially a no-op.
  *
@@ -31,9 +33,6 @@ class IdentityCollation extends Collation {
 	/** @var Language */
 	private $contentLanguage;
 
-	/**
-	 * @param Language $contentLanguage
-	 */
 	public function __construct( Language $contentLanguage ) {
 		$this->contentLanguage = $contentLanguage;
 	}

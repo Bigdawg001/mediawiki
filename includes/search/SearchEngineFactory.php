@@ -2,39 +2,26 @@
 
 use MediaWiki\HookContainer\HookContainer;
 use Wikimedia\ObjectFactory\ObjectFactory;
-use Wikimedia\Rdbms\IDatabase;
-use Wikimedia\Rdbms\ILoadBalancer;
+use Wikimedia\Rdbms\IConnectionProvider;
 
 /**
  * Factory class for SearchEngine.
  * Allows to create engine of the specific type.
  */
 class SearchEngineFactory {
-	/**
-	 * Configuration for SearchEngine classes.
-	 * @var SearchEngineConfig
-	 */
-	private $config;
 
-	/** @var HookContainer */
-	private $hookContainer;
+	private SearchEngineConfig $config;
+	private HookContainer $hookContainer;
+	private IConnectionProvider $dbProvider;
 
-	/** @var ILoadBalancer */
-	private $loadBalancer;
-
-	/**
-	 * @param SearchEngineConfig $config
-	 * @param HookContainer $hookContainer
-	 * @param ILoadBalancer $loadBalancer
-	 */
 	public function __construct(
 		SearchEngineConfig $config,
 		HookContainer $hookContainer,
-		ILoadBalancer $loadBalancer
+		IConnectionProvider $dbProvider
 	) {
 		$this->config = $config;
 		$this->hookContainer = $hookContainer;
-		$this->loadBalancer = $loadBalancer;
+		$this->dbProvider = $dbProvider;
 	}
 
 	/**
@@ -52,7 +39,7 @@ class SearchEngineFactory {
 		} elseif ( $configuredClass !== null ) {
 			$class = $configuredClass;
 		} else {
-			$class = self::getSearchEngineClass( $this->loadBalancer );
+			$class = self::getSearchEngineClass( $this->dbProvider );
 		}
 
 		$mappings = $this->config->getSearchMappings();
@@ -63,7 +50,7 @@ class SearchEngineFactory {
 		$args = [];
 
 		if ( isset( $spec['class'] ) && is_subclass_of( $spec['class'], SearchDatabase::class ) ) {
-			$args['extraArgs'][] = $this->loadBalancer;
+			$args['extraArgs'][] = $this->dbProvider;
 		}
 
 		// ObjectFactory::getObjectFromSpec accepts an array, not just a callable (phan bug)
@@ -75,14 +62,12 @@ class SearchEngineFactory {
 	}
 
 	/**
-	 * @param IDatabase|ILoadBalancer $dbOrLb
+	 * @param IConnectionProvider $dbProvider
 	 * @return string SearchEngine subclass name
 	 * @since 1.28
 	 */
-	public static function getSearchEngineClass( $dbOrLb ) {
-		$type = ( $dbOrLb instanceof IDatabase )
-			? $dbOrLb->getType()
-			: $dbOrLb->getServerType( $dbOrLb->getWriterIndex() );
+	public static function getSearchEngineClass( IConnectionProvider $dbProvider ) {
+		$type = $dbProvider->getReplicaDatabase()->getType();
 
 		switch ( $type ) {
 			case 'sqlite':

@@ -20,6 +20,13 @@
  * @since 1.28
  */
 
+namespace MediaWiki\Api;
+
+use LogicException;
+use MediaWiki\Context\IContextSource;
+use SearchEngine;
+use SearchEngineConfig;
+use SearchEngineFactory;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\ParamValidator\TypeDef\IntegerDef;
 
@@ -29,18 +36,15 @@ use Wikimedia\ParamValidator\TypeDef\IntegerDef;
  */
 trait SearchApi {
 
-	/** @var SearchEngineConfig|null */
-	private $searchEngineConfig = null;
-
-	/** @var SearchEngineFactory|null */
-	private $searchEngineFactory = null;
+	private ?SearchEngineConfig $searchEngineConfig = null;
+	private ?SearchEngineFactory $searchEngineFactory = null;
 
 	private function checkDependenciesSet() {
 		// Since this is a trait, we can't have a constructor where the services
 		// that we need are injected. Instead, the api modules that use this trait
 		// are responsible for setting them (since api modules *can* have services
 		// injected). Double check that the api module did indeed set them
-		if ( !$this->searchEngineConfig || !$this->searchEngineFactory ) {
+		if ( $this->searchEngineConfig === null || $this->searchEngineFactory === null ) {
 			throw new LogicException(
 				'SearchApi requires both a SearchEngineConfig and SearchEngineFactory to be set'
 			);
@@ -52,6 +56,7 @@ trait SearchApi {
 	 * a valid option for an array for PARAM_TYPE, so we'll use a fake name
 	 * that can't possibly be a class name and describes what the null behavior
 	 * does
+	 * @var string
 	 */
 	private static $BACKEND_NULL_PARAM = 'database-backed';
 
@@ -87,6 +92,7 @@ trait SearchApi {
 		if ( $isScrollable ) {
 			$params['offset'] = [
 				ParamValidator::PARAM_DEFAULT => 0,
+				IntegerDef::PARAM_MIN => 0,
 				ParamValidator::PARAM_TYPE => 'integer',
 				ApiBase::PARAM_HELP_MSG => 'api-help-param-continue',
 			];
@@ -172,7 +178,7 @@ trait SearchApi {
 	 * ApiBase::extractRequestParams() before)
 	 * @return SearchEngine
 	 */
-	public function buildSearchEngine( array $params = null ) {
+	public function buildSearchEngine( ?array $params = null ) {
 		$this->checkDependenciesSet();
 
 		if ( $params == null ) {
@@ -211,3 +217,6 @@ trait SearchApi {
 	 */
 	abstract public function getContext();
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( SearchApi::class, 'SearchApi' );

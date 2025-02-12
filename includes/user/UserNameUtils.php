@@ -1,5 +1,4 @@
 <?php
-
 /**
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,21 +16,20 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @author DannyS712
  */
 
 namespace MediaWiki\User;
 
 use InvalidArgumentException;
-use Language;
-use MalformedTitleException;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\Language\Language;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Title\MalformedTitleException;
+use MediaWiki\Title\TitleParser;
 use MediaWiki\User\TempUser\TempUserConfig;
 use Psr\Log\LoggerInterface;
-use TitleParser;
 use Wikimedia\IPUtils;
 use Wikimedia\Message\ITextFormatter;
 use Wikimedia\Message\MessageValue;
@@ -40,6 +38,8 @@ use Wikimedia\Message\MessageValue;
  * UserNameUtils service
  *
  * @since 1.35
+ * @ingroup User
+ * @author DannyS712
  */
 class UserNameUtils implements UserRigorOptions {
 
@@ -53,46 +53,26 @@ class UserNameUtils implements UserRigorOptions {
 	];
 
 	/**
-	 * RIGOR_* constants are inherited from UserRigorOptions
+	 * For use by isIP() and isLikeIPv4DashRange()
 	 */
+	private const IPV4_ADDRESS = '\d{1,3}\.\d{1,3}\.\d{1,3}\.(?:xxx|\d{1,3})';
 
-	/**
-	 * @var ServiceOptions
-	 */
-	private $options;
+	// RIGOR_* constants are inherited from UserRigorOptions
 
-	/**
-	 * @var Language
-	 */
-	private $contentLang;
-
-	/**
-	 * @var LoggerInterface
-	 */
-	private $logger;
-
-	/**
-	 * @var TitleParser
-	 */
-	private $titleParser;
-
-	/**
-	 * @var ITextFormatter
-	 */
-	private $textFormatter;
+	// phpcs:ignore MediaWiki.Commenting.PropertyDocumentation.WrongStyle
+	private ServiceOptions $options;
+	private Language $contentLang;
+	private LoggerInterface $logger;
+	private TitleParser $titleParser;
+	private ITextFormatter $textFormatter;
 
 	/**
 	 * @var string[]|false Cache for isUsable()
 	 */
 	private $reservedUsernames = false;
 
-	/**
-	 * @var HookRunner
-	 */
-	private $hookRunner;
-
-	/** @var TempUserConfig */
-	private $tempUserConfig;
+	private HookRunner $hookRunner;
+	private TempUserConfig $tempUserConfig;
 
 	/**
 	 * @param ServiceOptions $options
@@ -126,9 +106,9 @@ class UserNameUtils implements UserRigorOptions {
 	 * Is the input a valid username?
 	 *
 	 * Checks if the input is a valid username, we don't want an empty string,
-	 * an IP address, anything that contains slashes (would mess up subpages),
-	 * is longer than the maximum allowed username size or doesn't begin with
-	 * a capital letter.
+	 * an IP address, any type of IP range, anything that contains slashes
+	 * (would mess up subpages), is longer than the maximum allowed username
+	 * size or doesn't begin with a capital letter.
 	 *
 	 * @param string $name Name to match
 	 * @return bool
@@ -136,6 +116,8 @@ class UserNameUtils implements UserRigorOptions {
 	public function isValid( string $name ): bool {
 		if ( $name === ''
 			|| $this->isIP( $name )
+			|| $this->isValidIPRange( $name )
+			|| $this->isLikeIPv4DashRange( $name )
 			|| str_contains( $name, '/' )
 			|| strlen( $name ) > $this->options->get( MainConfigNames::MaxNameChars )
 			|| $name !== $this->contentLang->ucfirst( $name )
@@ -209,6 +191,18 @@ class UserNameUtils implements UserRigorOptions {
 		if ( in_array( $name, $this->reservedUsernames, true ) ) {
 			return false;
 		}
+
+		// Treat this name as not usable if it is reserved by the temp user system and either:
+		// * Temporary account creation is disabled
+		// * The name is not a temporary account
+		// This is necessary to ensure that CentralAuth auto-creation will be denied (T342475).
+		if (
+			$this->isTempReserved( $name ) &&
+			( !$this->tempUserConfig->isEnabled() || !$this->isTemp( $name ) )
+		) {
+			return false;
+		}
+
 		return true;
 	}
 
@@ -315,20 +309,11 @@ class UserNameUtils implements UserRigorOptions {
 		// RIGOR_NONE handled above
 		switch ( $validate ) {
 			case self::RIGOR_VALID:
-				if ( !$this->isValid( $name ) ) {
-					return false;
-				}
-				return $name;
+				return $this->isValid( $name ) ? $name : false;
 			case self::RIGOR_USABLE:
-				if ( !$this->isUsable( $name ) ) {
-					return false;
-				}
-				return $name;
+				return $this->isUsable( $name ) ? $name : false;
 			case self::RIGOR_CREATABLE:
-				if ( !$this->isCreatable( $name ) ) {
-					return false;
-				}
-				return $name;
+				return $this->isCreatable( $name ) ? $name : false;
 			default:
 				throw new InvalidArgumentException(
 					"Invalid parameter value for validation ($validate) in " .
@@ -356,7 +341,7 @@ class UserNameUtils implements UserRigorOptions {
 	 * @return bool
 	 */
 	public function isIP( string $name ): bool {
-		$anyIPv4 = '/^\d{1,3}\.\d{1,3}\.\d{1,3}\.(?:xxx|\d{1,3})$/';
+		$anyIPv4 = '/^' . self::IPV4_ADDRESS . '$/';
 		$validIP = IPUtils::isValid( $name );
 		return $validIP || preg_match( $anyIPv4, $name );
 	}
@@ -369,6 +354,21 @@ class UserNameUtils implements UserRigorOptions {
 	 */
 	public function isValidIPRange( string $range ): bool {
 		return IPUtils::isValidRange( $range );
+	}
+
+	/**
+	 * Validates IPv4 and IPv4-like ranges in the form of 1.2.3.4-5.6.7.8,
+	 * (which we'd like to avoid as a username/title pattern).
+	 *
+	 * @since 1.42
+	 * @param string $range IPv4 dash range to check
+	 * @return bool
+	 */
+	public function isLikeIPv4DashRange( string $range ): bool {
+		return preg_match(
+			'/^' . self::IPV4_ADDRESS . '-' . self::IPV4_ADDRESS . '$/',
+			$range
+		);
 	}
 
 	/**

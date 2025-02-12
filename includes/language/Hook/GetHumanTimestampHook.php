@@ -2,9 +2,9 @@
 
 namespace MediaWiki\Hook;
 
-use Language;
-use MWTimestamp;
-use User;
+use MediaWiki\Language\Language;
+use MediaWiki\User\User;
+use MediaWiki\Utils\MWTimestamp;
 
 /**
  * This is a hook handler interface, see docs/Hooks.md.

@@ -23,7 +23,7 @@
 
 namespace MediaWiki\Request;
 
-use Config;
+use MediaWiki\Config\Config;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 
@@ -31,8 +31,11 @@ use MediaWiki\MediaWikiServices;
  * @ingroup HTTP
  */
 class FauxResponse extends WebResponse {
+	/** @var null|string[] */
 	private $headers;
+	/** @var array[] */
 	private $cookies = [];
+	/** @var int|null */
 	private $code;
 
 	/** @var ?Config */
@@ -45,7 +48,11 @@ class FauxResponse extends WebResponse {
 	 * @param null|int $http_response_code Forces the HTTP response code to the specified value.
 	 */
 	public function header( $string, $replace = true, $http_response_code = null ) {
-		if ( substr( $string, 0, 5 ) == 'HTTP/' ) {
+		if ( $this->disableForPostSend ) {
+			return;
+		}
+
+		if ( str_starts_with( $string, 'HTTP/' ) ) {
 			$parts = explode( ' ', $string, 3 );
 			$this->code = intval( $parts[1] );
 		} else {
@@ -58,7 +65,7 @@ class FauxResponse extends WebResponse {
 			}
 		}
 
-		if ( $http_response_code !== null ) {
+		if ( $http_response_code ) {
 			$this->code = intval( $http_response_code );
 		}
 	}
@@ -94,9 +101,6 @@ class FauxResponse extends WebResponse {
 		return $this->code;
 	}
 
-	/**
-	 * @return Config
-	 */
 	private function getCookieConfig(): Config {
 		if ( !$this->cookieConfig ) {
 			$this->cookieConfig = MediaWikiServices::getInstance()->getMainConfig();
@@ -104,9 +108,6 @@ class FauxResponse extends WebResponse {
 		return $this->cookieConfig;
 	}
 
-	/**
-	 * @param Config $cookieConfig
-	 */
 	public function setCookieConfig( Config $cookieConfig ): void {
 		$this->cookieConfig = $cookieConfig;
 	}
@@ -118,6 +119,10 @@ class FauxResponse extends WebResponse {
 	 * @param array $options Ignored in this faux subclass.
 	 */
 	public function setCookie( $name, $value, $expire = 0, $options = [] ) {
+		if ( $this->disableForPostSend ) {
+			return;
+		}
+
 		$cookieConfig = $this->getCookieConfig();
 		$cookiePath = $cookieConfig->get( MainConfigNames::CookiePath );
 		$cookiePrefix = $cookieConfig->get( MainConfigNames::CookiePrefix );
@@ -188,4 +193,5 @@ class FauxResponse extends WebResponse {
 
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( FauxResponse::class, 'FauxResponse' );

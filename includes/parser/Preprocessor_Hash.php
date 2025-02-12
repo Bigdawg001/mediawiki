@@ -21,6 +21,10 @@
  * @ingroup Parser
  */
 
+namespace MediaWiki\Parser;
+
+use Wikimedia\ObjectCache\WANObjectCache;
+
 /**
  * Differences from DOM schema:
  *   * attribute nodes are children
@@ -56,7 +60,7 @@ class Preprocessor_Hash extends Preprocessor {
 	 */
 	public function __construct(
 		Parser $parser,
-		WANObjectCache $wanCache = null,
+		?WANObjectCache $wanCache = null,
 		array $options = []
 	) {
 		parent::__construct( $parser, $wanCache, $options );
@@ -145,6 +149,7 @@ class Preprocessor_Hash extends Preprocessor {
 	 * @return array JSON-serializable document object model array
 	 */
 	private function buildDomTreeArrayFromText( $text, $flags ) {
+		$textStartsInSOLState = $flags & self::START_IN_SOL_STATE;
 		$forInclusion = ( $flags & self::DOM_FOR_INCLUSION );
 		$langConversionDisabled = ( $flags & self::DOM_LANG_CONVERSION_DISABLED );
 
@@ -372,8 +377,7 @@ class Preprocessor_Hash extends Preprocessor {
 							// Dump all but the last comment to the accumulator
 							// $endPos includes the newline from the if above, want also eat that
 							[ $startPos, $endPos ] = array_pop( $comments );
-							foreach ( $comments as $com ) {
-								[ $cStartPos, $cEndPos ] = $com;
+							foreach ( $comments as [ $cStartPos, $cEndPos ] ) {
 								// $cEndPos is the next char, no +1 needed to get correct length between start/end
 								$inner = substr( $text, $cStartPos, $cEndPos - $cStartPos );
 								$accum[] = [ 'comment', [ $inner ] ];
@@ -603,7 +607,7 @@ class Preprocessor_Hash extends Preprocessor {
 					: strspn( $text, $curChar, $i );
 
 				$savedPrefix = '';
-				$lineStart = $i > 0 && $text[$i - 1] === "\n";
+				$lineStart = ( $i === 0 ) ? $textStartsInSOLState : ( $text[$i - 1] === "\n" );
 
 				if ( $curChar === "-{" && $count > $curLen ) {
 					// -{ => {{ transition because rightmost wins
@@ -708,7 +712,7 @@ class Preprocessor_Hash extends Preprocessor {
 					$children[] = $titleNode;
 					$argIndex = 1;
 					foreach ( $parts as $part ) {
-						if ( isset( $part->eqpos ) ) {
+						if ( $part->eqpos !== null ) {
 							$equalsNode = $part->out[$part->eqpos];
 							$nameNode = [ 'name', array_slice( $part->out, 0, $part->eqpos ) ];
 							$valueNode = [ 'value', array_slice( $part->out, $part->eqpos + 1 ) ];
@@ -809,3 +813,6 @@ class Preprocessor_Hash extends Preprocessor {
 		}
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( Preprocessor_Hash::class, 'Preprocessor_Hash' );

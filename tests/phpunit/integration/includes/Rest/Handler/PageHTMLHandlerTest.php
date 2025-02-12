@@ -2,20 +2,21 @@
 
 namespace MediaWiki\Tests\Rest\Handler;
 
-use DeferredUpdates;
 use Exception;
-use HashBagOStuff;
+use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\Hook\ParserLogLinterDataHook;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Rest\Handler\PageHTMLHandler;
+use MediaWiki\Rest\HttpException;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\RequestData;
 use MediaWiki\Title\Title;
+use MediaWiki\Utils\MWTimestamp;
 use MediaWikiIntegrationTestCase;
-use MWTimestamp;
 use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Http\Message\StreamInterface;
 use Wikimedia\Message\MessageValue;
+use Wikimedia\ObjectCache\HashBagOStuff;
 use Wikimedia\Parsoid\Core\ClientError;
 use Wikimedia\Parsoid\Core\ResourceLimitExceededException;
 use Wikimedia\Parsoid\Parsoid;
@@ -36,22 +37,16 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 
 	private const HTML = '>World</';
 
-	/** @var HashBagOStuff */
-	private $parserCacheBagOStuff;
+	private HashBagOStuff $parserCacheBagOStuff;
 
 	protected function setUp(): void {
 		parent::setUp();
 
-		// Clean up these tables after each test
-		$this->tablesUsed = [
-			'page',
-			'revision',
-			'comment',
-			'text',
-			'content'
-		];
-
 		$this->parserCacheBagOStuff = new HashBagOStuff();
+		// Protect the ObjectCacheFactory from the service container reset,
+		// so the emulated parser cache persists between calls to executeHandler().
+		$objectCacheFactory = $this->getServiceContainer()->getObjectCacheFactory();
+		$this->setService( 'ObjectCacheFactory', $objectCacheFactory );
 	}
 
 	/**
@@ -60,14 +55,21 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 	 * @return PageHTMLHandler
 	 */
 	private function newHandler( ?Parsoid $parsoid = null ): PageHTMLHandler {
-		return $this->newPageHtmlHandler( $parsoid );
+		if ( $parsoid ) {
+			$this->resetServicesWithMockedParsoid( $parsoid );
+		} else {
+			// ParserOutputAccess has a localCache which can return stale content.
+			// Resetting ensures that ParsoidCachePrewarmJob gets a fresh copy
+			// of ParserOutputAccess without these problems!
+			$this->resetServices();
+		}
+
+		return $this->newPageHtmlHandler();
 	}
 
 	public function testExecuteWithHtml() {
-		$this->markTestSkippedIfExtensionNotLoaded( 'Parsoid' );
 		$page = $this->getExistingTestPage( 'HtmlEndpointTestPage/with/slashes' );
-		$this->assertTrue(
-			$this->editPage( $page, self::WIKITEXT )->isGood(),
+		$this->assertStatusGood( $this->editPage( $page, self::WIKITEXT ),
 			'Edited a page'
 		);
 
@@ -87,8 +89,6 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 	}
 
 	public function testExecuteWillLint() {
-		$this->markTestSkippedIfExtensionNotLoaded( 'Parsoid' );
-
 		$this->overrideConfigValue( MainConfigNames::ParsoidSettings, [
 			'linting' => true
 		] );
@@ -109,13 +109,12 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		);
 
 		$handler = $this->newHandler();
-		$data = $this->executeHandlerAndGetBodyData( $handler, $request, [
+		$this->executeHandlerAndGetBodyData( $handler, $request, [
 			'format' => 'with_html'
 		] );
 	}
 
 	public function testExecuteWithHtmlForSystemMessagePage() {
-		$this->markTestSkippedIfExtensionNotLoaded( 'Parsoid' );
 		$title = Title::newFromText( 'MediaWiki:Logouttext' );
 		$page = $this->getNonexistingTestPage( $title );
 
@@ -144,10 +143,8 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 	}
 
 	public function testExecuteHtmlOnly() {
-		$this->markTestSkippedIfExtensionNotLoaded( 'Parsoid' );
 		$page = $this->getExistingTestPage( 'HtmlEndpointTestPage/with/slashes' );
-		$this->assertTrue(
-			$this->editPage( $page, self::WIKITEXT )->isGood(),
+		$this->assertStatusGood( $this->editPage( $page, self::WIKITEXT ),
 			'Edited a page'
 		);
 
@@ -166,8 +163,43 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		$this->assertStringContainsString( self::HTML, $htmlResponse );
 	}
 
+	public static function provideWikiRedirect() {
+		yield 'follow wiki redirects per default' => [ [], 307 ];
+		yield 'bad redirect param' => [ [ 'redirect' => 'wrong' ], 400 ];
+		yield 'redirect=no' => [ [ 'redirect' => 'no' ], 200 ];
+		yield 'redirect=false' => [ [ 'redirect' => 'false' ], 200 ];
+		yield 'redirect=true' => [ [ 'redirect' => 'true' ], 307 ];
+	}
+
+	/**
+	 * @dataProvider provideWikiRedirect
+	 */
+	public function testWikiRedirect( $params, $expectedStatus ) {
+		$redirect = $this->getExistingTestPage( 'HtmlEndpointTestPage/redirect' );
+		$page = $this->getExistingTestPage( 'HtmlEndpointTestPage/target' );
+
+		$this->editPage( $redirect, "#REDIRECT [[{$page->getTitle()->getPrefixedDBkey()}]]" );
+
+		$request = new RequestData(
+			[
+				'pathParams' => [ 'title' => $redirect->getTitle()->getPrefixedText() ],
+				'queryParams' => $params
+			]
+		);
+
+		try {
+			$handler = $this->newHandler();
+			$response = $this->executeHandler( $handler, $request, [
+				'format' => 'html'
+			] );
+
+			$this->assertSame( $expectedStatus, $response->getStatusCode() );
+		} catch ( HttpException $ex ) {
+			$this->assertSame( $expectedStatus, $ex->getCode() );
+		}
+	}
+
 	public function testExecuteHtmlOnlyForSystemMessagePage() {
-		$this->markTestSkippedIfExtensionNotLoaded( 'Parsoid' );
 		$title = Title::newFromText( 'MediaWiki:Logouttext/de' );
 		$page = $this->getNonexistingTestPage( $title );
 
@@ -195,6 +227,55 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
+	 * Assert that we return a 404 even if an associated remote file description
+	 * page exists (T353688).
+	 */
+	public function testRemoteDescriptionWithNonexistentFilePage() {
+		$name = 'JustSomeSillyFile.png';
+
+		$this->installMockFileRepo( $name );
+
+		$page = $this->getNonexistingTestPage( "File:$name" );
+
+		$request = new RequestData(
+			[ 'pathParams' => [ 'title' => $page->getTitle()->getPrefixedDBkey() ] ]
+		);
+		$handler = $this->newHandler();
+		$exception = $this->executeHandlerAndGetHttpException( $handler, $request, [
+			'format' => 'with_html'
+		] );
+
+		$this->assertSame( 404, $exception->getCode() );
+	}
+
+	/**
+	 * Assert that we return the local page content even if an associated remote
+	 * file description page exists (T353688).
+	 */
+	public function testRemoteDescriptionWithExistingFilePage() {
+		$name = 'JustSomeSillyFile.png';
+
+		$this->installMockFileRepo( $name );
+
+		$pageName = "File:$name";
+		$this->editPage( $pageName, 'Local content' );
+
+		$request = new RequestData(
+			[ 'pathParams' => [ 'title' => $pageName ] ]
+		);
+		$handler = $this->newHandler();
+		$data = $this->executeHandlerAndGetBodyData( $handler, $request, [
+			'format' => 'with_html'
+		] );
+
+		$this->assertSame( $pageName, $data['key'] );
+		$this->assertSame( $pageName, $data['title'] );
+
+		$this->assertStringContainsString( '<html', $data['html'] );
+		$this->assertStringContainsString( 'Local content', $data['html'] );
+	}
+
+	/**
 	 * @dataProvider provideExecuteWithVariant
 	 */
 	public function testExecuteWithVariant(
@@ -203,10 +284,9 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		string $expectedContentLanguage,
 		string $expectedVaryHeader
 	) {
-		$this->overrideConfigValue( 'UsePigLatinVariant', true );
+		$this->overrideConfigValue( MainConfigNames::UsePigLatinVariant, true );
 		$page = $this->getExistingTestPage( 'HtmlVariantConversion' );
-		$this->assertTrue(
-			$this->editPage( $page, '<p>test language conversion</p>' )->isGood(),
+		$this->assertStatusGood( $this->editPage( $page, '<p>test language conversion</p>' ),
 			'Edited a page'
 		);
 
@@ -256,8 +336,6 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 	}
 
 	public function testEtagLastModified() {
-		$this->markTestSkippedIfExtensionNotLoaded( 'Parsoid' );
-
 		$time = time();
 		MWTimestamp::setFakeTime( $time );
 
@@ -346,8 +424,6 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		Exception $parsoidException,
 		Exception $expectedException
 	) {
-		$this->markTestSkippedIfExtensionNotLoaded( 'Parsoid' );
-
 		$page = $this->getExistingTestPage( 'HtmlEndpointTestPage/with/slashes' );
 		$request = new RequestData(
 			[ 'pathParams' => [ 'title' => $page->getTitle()->getPrefixedText() ] ]
@@ -393,10 +469,6 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		$this->executeHandler( $handler, $request, [ 'format' => 'html' ] );
 	}
 
-	/**
-	 * @param WikiPage $page
-	 * @param array $data
-	 */
 	private function assertResponseData( WikiPage $page, array $data ): void {
 		$this->assertSame( $page->getId(), $data['id'] );
 		$this->assertSame( $page->getTitle()->getPrefixedDBkey(), $data['key'] );
@@ -469,8 +541,7 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 	public function testStashingWithRateLimitExceeded() {
 		// Set the rate limit to 1 request per minute
 		$this->overrideConfigValue(
-			MainConfigNames::RateLimits,
-			[
+			MainConfigNames::RateLimits, [
 				'stashbasehtml' => [
 					'&can-bypass' => false,
 					'ip' => [ 1, 60 ],
@@ -480,12 +551,13 @@ class PageHTMLHandlerTest extends MediaWikiIntegrationTestCase {
 		);
 
 		$page = $this->getExistingTestPage();
+		$authority = $this->getAuthority();
 
-		$this->executePageHTMLRequest( $page, [ 'stash' => true ] );
+		$this->executePageHTMLRequest( $page, [ 'stash' => true ], [], $authority );
 		// In this request, the rate limit has been exceeded, so it should throw.
 		$this->expectException( LocalizedHttpException::class );
 		$this->expectExceptionCode( 429 );
-		$this->executePageHTMLRequest( $page, [ 'stash' => true ] );
+		$this->executePageHTMLRequest( $page, [ 'stash' => true ], [], $authority );
 	}
 
 }

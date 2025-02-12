@@ -1,7 +1,10 @@
 <?php
 
+use MediaWiki\Context\DerivativeContext;
+use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Request\FauxRequest;
+use MediaWiki\Specials\SpecialWatchlist;
 use Wikimedia\TestingAccessWrapper;
 
 /**
@@ -9,15 +12,15 @@ use Wikimedia\TestingAccessWrapper;
  *
  * @group Database
  *
- * @covers SpecialWatchlist
+ * @covers \MediaWiki\Specials\SpecialWatchlist
  */
 class SpecialWatchlistTest extends SpecialPageTestBase {
 	protected function setUp(): void {
 		parent::setUp();
-		$this->tablesUsed = [ 'watchlist' ];
+
 		$this->setTemporaryHook(
 			'ChangesListSpecialPageQuery',
-			null
+			HookContainer::NOOP
 		);
 
 		$this->overrideConfigValues( [
@@ -50,8 +53,10 @@ class SpecialWatchlistTest extends SpecialPageTestBase {
 		return new SpecialWatchlist(
 			$services->getWatchedItemStore(),
 			$services->getWatchlistManager(),
-			$services->getDBLoadBalancer(),
-			$services->getUserOptionsLookup()
+			$services->getUserOptionsLookup(),
+			$services->getChangeTagsStore(),
+			$services->getUserIdentityUtils(),
+			$services->getTempUserConfig()
 		);
 	}
 

@@ -18,6 +18,10 @@
  * @file
  */
 
+namespace MediaWiki\Site;
+
+use Wikimedia\ObjectCache\BagOStuff;
+
 /**
  * Hold a configured list of sites (SiteList), with a caching layer.
  *
@@ -37,10 +41,6 @@ class CachingSiteStore implements SiteStore {
 	/** @var SiteList|null */
 	private $sites = null;
 
-	/**
-	 * @param SiteStore $siteStore
-	 * @param BagOStuff $cache
-	 */
 	public function __construct(
 		SiteStore $siteStore,
 		BagOStuff $cache
@@ -164,3 +164,6 @@ class CachingSiteStore implements SiteStore {
 	}
 
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( CachingSiteStore::class, 'CachingSiteStore' );

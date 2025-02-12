@@ -21,24 +21,37 @@
  * @ingroup Parser
  */
 
+namespace MediaWiki\Parser;
+
+use Closure;
+use InvalidArgumentException;
+
 /**
  * @todo document, briefly.
  * @newable
  * @ingroup Parser
  */
 class StripState {
+	/** @var array[] */
 	protected $data;
+	/** @var string */
 	protected $regex;
 
-	protected $parser;
+	protected ?Parser $parser;
 
+	/** @var array */
 	protected $circularRefGuard;
+	/** @var int */
 	protected $depth = 0;
+	/** @var int */
 	protected $highestDepth = 0;
+	/** @var int */
 	protected $expandSize = 0;
 
+	/** @var int */
 	protected $depthLimit = 20;
-	protected $sizeLimit = 5000000;
+	/** @var int */
+	protected $sizeLimit = 5_000_000;
 
 	/**
 	 * @stable to call
@@ -46,7 +59,7 @@ class StripState {
 	 * @param Parser|null $parser
 	 * @param array $options
 	 */
-	public function __construct( Parser $parser = null, $options = [] ) {
+	public function __construct( ?Parser $parser = null, $options = [] ) {
 		$this->data = [
 			'nowiki' => [],
 			'general' => []
@@ -81,14 +94,26 @@ class StripState {
 	}
 
 	/**
-	 * @throws MWException
-	 * @param string $type
 	 * @param string $marker
 	 * @param string|Closure $value
+	 * @since 1.44
+	 * @internal Parsoid use only.
+	 */
+	public function addExtTag( $marker, $value ) {
+		$this->addItem( 'exttag', $marker, $value );
+	}
+
+	/**
+	 * @param string $type
+	 * @param-taint $type none
+	 * @param string $marker
+	 * @param-taint $marker none
+	 * @param string|Closure $value
+	 * @param-taint $value exec_html
 	 */
 	protected function addItem( $type, $marker, $value ) {
 		if ( !preg_match( $this->regex, $marker, $m ) ) {
-			throw new MWException( "Invalid marker: $marker" );
+			throw new InvalidArgumentException( "Invalid marker: $marker" );
 		}
 
 		$this->data[$type][$m[1]] = $value;
@@ -141,6 +166,36 @@ class StripState {
 		};
 
 		return preg_replace_callback( $this->regex, $callback, $text );
+	}
+
+	/**
+	 * Split the given text by strip markers, returning an array that
+	 * alternates between plain text and strip marker information.  The
+	 * strip marker information includes 'type', and 'content'.  The
+	 * resulting array will always be at least 1 element long and contain
+	 * an odd number of elements.
+	 * @return array<string|array{type:string,content:string}>
+	 */
+	public function split( string $text ): array {
+		$pieces = preg_split( $this->regex, $text, -1, PREG_SPLIT_DELIM_CAPTURE );
+		for ( $i = 1; $i < count( $pieces ); $i += 2 ) {
+			$marker = $pieces[$i];
+			foreach ( $this->data as $type => $items ) {
+				if ( isset( $items[$marker] ) ) {
+					$pieces[$i] = [
+						'type' => $type,
+						'content' => $items[$marker],
+					];
+					continue 2;
+				}
+			}
+			$pieces[$i] = [
+				'marker' => $marker,
+				'type' => 'unknown',
+				'content' => null,
+			];
+		}
+		return $pieces;
 	}
 
 	/**
@@ -265,3 +320,6 @@ class StripState {
 		return preg_replace( $this->regex, '', $text );
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( StripState::class, 'StripState' );

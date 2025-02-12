@@ -3,6 +3,7 @@
 use MediaWiki\Tests\Unit\Libs\Rdbms\AddQuoterMock;
 use MediaWiki\Tests\Unit\Libs\Rdbms\SQLPlatformTestHelper;
 use Psr\Log\NullLogger;
+use Wikimedia\ObjectCache\HashBagOStuff;
 use Wikimedia\Rdbms\Database;
 use Wikimedia\Rdbms\Database\DatabaseFlags;
 use Wikimedia\Rdbms\DatabaseDomain;
@@ -19,10 +20,10 @@ use Wikimedia\RequestTimeout\RequestTimeout;
 class DatabaseTestHelper extends Database {
 
 	/**
-	 * @var string[] __CLASS__ of the test suite,
+	 * @var string __CLASS__ of the test suite,
 	 * used to determine, if the function name is passed every time to query()
 	 */
-	protected $testName = [];
+	protected string $testName;
 
 	/**
 	 * @var string[] Array of lastSqls passed to query(),
@@ -46,7 +47,7 @@ class DatabaseTestHelper extends Database {
 	/** @var int[] */
 	protected $forcedAffectedCountQueue = [];
 
-	public function __construct( $testName, array $opts = [] ) {
+	public function __construct( string $testName, array $opts = [] ) {
 		$params = $opts + [
 			'host' => null,
 			'user' => null,
@@ -141,8 +142,8 @@ class DatabaseTestHelper extends Database {
 			$check = $m[1];
 		}
 
-		if ( substr( $check, 0, strlen( $this->testName ) ) !== $this->testName ) {
-			throw new MWException( 'function name does not start with test class. ' .
+		if ( !str_starts_with( $check, $this->testName ) ) {
+			throw new LogicException( 'function name does not start with test class. ' .
 				$fname . ' vs. ' . $this->testName . '. ' .
 				'Please provide __METHOD__ to database methods.' );
 		}
@@ -160,8 +161,8 @@ class DatabaseTestHelper extends Database {
 	}
 
 	public function tableExists( $table, $fname = __METHOD__ ) {
-		$tableRaw = $this->tableName( $table, 'raw' );
-		if ( isset( $this->sessionTempTables[$tableRaw] ) ) {
+		[ $db, $pt ] = $this->platform->getDatabaseAndTableIdentifier( $table );
+		if ( isset( $this->sessionTempTables[$db][$pt] ) ) {
 			return true; // already known to exist
 		}
 
@@ -180,7 +181,7 @@ class DatabaseTestHelper extends Database {
 		return true;
 	}
 
-	public function insertId() {
+	protected function lastInsertId() {
 		return -1;
 	}
 
@@ -204,10 +205,6 @@ class DatabaseTestHelper extends Database {
 
 	public function indexInfo( $table, $index, $fname = 'Database::indexInfo' ) {
 		return false;
-	}
-
-	public function fetchAffectedRowCount() {
-		return -1;
 	}
 
 	public function getSoftwareLink() {
@@ -242,7 +239,8 @@ class DatabaseTestHelper extends Database {
 		if ( $this->nextResMapQueue ) {
 			$this->lastResMap = array_shift( $this->nextResMapQueue );
 			if ( !$this->lastResMap['errno'] && $this->forcedAffectedCountQueue ) {
-				$this->affectedRowCount = array_shift( $this->forcedAffectedCountQueue );
+				$count = array_shift( $this->forcedAffectedCountQueue );
+				$this->lastQueryAffectedRows = $count;
 			}
 		} else {
 			$this->lastResMap = [ 'res' => [], 'errno' => 0, 'error' => '' ];

@@ -21,8 +21,6 @@ declare( strict_types=1 );
 
 namespace Wikimedia\Stats\Metrics;
 
-use InvalidArgumentException;
-use Psr\Log\LoggerInterface;
 use Wikimedia\Stats\Exceptions\IllegalOperationException;
 use Wikimedia\Stats\Sample;
 
@@ -35,30 +33,14 @@ use Wikimedia\Stats\Sample;
  * @since 1.38
  */
 class GaugeMetric implements MetricInterface {
+	use MetricTrait;
 
 	/**
 	 * The StatsD protocol type indicator:
 	 * https://github.com/statsd/statsd/blob/v0.9.0/docs/metric_types.md
 	 * https://docs.datadoghq.com/developers/dogstatsd/datagram_shell/?tab=metrics
-	 *
-	 * @var string
 	 */
 	private const TYPE_INDICATOR = "g";
-
-	/** @var string|null */
-	private ?string $statsdNamespace = null;
-
-	/** @var BaseMetricInterface */
-	private BaseMetricInterface $baseMetric;
-
-	/** @var LoggerInterface */
-	private LoggerInterface $logger;
-
-	/** @inheritDoc */
-	public function __construct( $baseMetric, $logger ) {
-		$this->baseMetric = $baseMetric;
-		$this->logger = $logger;
-	}
 
 	/**
 	 * Sets metric to value.
@@ -67,78 +49,20 @@ class GaugeMetric implements MetricInterface {
 	 * @return void
 	 */
 	public function set( float $value ): void {
-		if ( $this->statsdNamespace !== null ) {
-			$this->baseMetric->getStatsdDataFactory()->updateCount( $this->statsdNamespace, $value );
-			$this->statsdNamespace = null;
+		foreach ( $this->baseMetric->getStatsdNamespaces() as $namespace ) {
+			$this->baseMetric->getStatsdDataFactory()->gauge( $namespace, $value );
 		}
-		$this->baseMetric->addSample( new Sample( $this->baseMetric->getLabelValues(), $value ) );
-	}
 
-	/** @inheritDoc */
-	public function getName(): string {
-		return $this->baseMetric->getName();
-	}
-
-	/** @inheritDoc */
-	public function getComponent(): string {
-		return $this->baseMetric->getComponent();
+		try {
+			$this->baseMetric->addSample( new Sample( $this->baseMetric->getLabelValues(), $value ) );
+		} catch ( IllegalOperationException $ex ) {
+			// Log the condition and give the caller something that will absorb calls.
+			trigger_error( $ex->getMessage(), E_USER_WARNING );
+		}
 	}
 
 	/** @inheritDoc */
 	public function getTypeIndicator(): string {
 		return self::TYPE_INDICATOR;
-	}
-
-	/** @inheritDoc */
-	public function getSamples(): array {
-		return $this->baseMetric->getSamples();
-	}
-
-	/** @inheritDoc */
-	public function getSampleRate(): float {
-		return $this->baseMetric->getSampleRate();
-	}
-
-	/** @inheritDoc */
-	public function withSampleRate( float $sampleRate ) {
-		try {
-			$this->baseMetric->setSampleRate( $sampleRate );
-		} catch ( IllegalOperationException | InvalidArgumentException $ex ) {
-			// Log the condition and give the caller something that will absorb calls.
-			trigger_error( $ex->getMessage(), E_USER_WARNING );
-			return new NullMetric;
-		}
-		return $this;
-	}
-
-	/** @inheritDoc */
-	public function getLabelKeys(): array {
-		return $this->baseMetric->getLabelKeys();
-	}
-
-	/** @inheritDoc */
-	public function withLabel( string $key, string $value ) {
-		try {
-			$this->baseMetric->addLabel( $key, $value );
-		} catch ( IllegalOperationException | InvalidArgumentException $ex ) {
-			// Log the condition and give the caller something that will absorb calls.
-			trigger_error( $ex->getMessage(), E_USER_WARNING );
-			return new NullMetric;
-		}
-		return $this;
-	}
-
-	/** @inheritDoc */
-	public function copyToStatsdAt( string $statsdNamespace ) {
-		if ( $this->baseMetric->getStatsdDataFactory() !== null ) {
-			$this->statsdNamespace = $statsdNamespace;
-		}
-		return $this;
-	}
-
-	/** @inheritDoc */
-	public function fresh(): GaugeMetric {
-		$this->baseMetric->clearLabels();
-		return $this;
 	}
 }

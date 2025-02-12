@@ -1,10 +1,13 @@
 <?php
 
+use MediaWiki\LinkedData\PageDataRequestHandler;
+use MediaWiki\Output\OutputPage;
 use MediaWiki\Request\FauxRequest;
 use MediaWiki\Request\FauxResponse;
+use MediaWiki\Specials\SpecialPageData;
 
 /**
- * @covers SpecialPageData
+ * @covers \MediaWiki\Specials\SpecialPageData
  * @group Database
  * @group SpecialPage
  *

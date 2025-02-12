@@ -21,31 +21,26 @@
 namespace MediaWiki\Storage;
 
 use JobQueueGroup;
-use Language;
+use MediaWiki\ChangeTags\ChangeTagsStore;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Content\IContentHandlerFactory;
 use MediaWiki\Content\Transform\ContentTransformer;
+use MediaWiki\DomainEvent\DomainEventDispatcher;
 use MediaWiki\HookContainer\HookContainer;
+use MediaWiki\Language\Language;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\WikiPageFactory;
-use MediaWiki\Parser\Parsoid\ParsoidOutputAccess;
-use MediaWiki\Permissions\PermissionManager;
+use MediaWiki\Parser\ParserCache;
 use MediaWiki\Revision\RevisionRenderer;
 use MediaWiki\Revision\RevisionStore;
 use MediaWiki\Revision\SlotRoleRegistry;
-use MediaWiki\User\TalkPageNotificationManager;
-use MediaWiki\User\UserEditTracker;
+use MediaWiki\Title\TitleFormatter;
 use MediaWiki\User\UserGroupManager;
 use MediaWiki\User\UserIdentity;
-use MediaWiki\User\UserNameUtils;
-use MessageCache;
-use ParserCache;
 use Psr\Log\LoggerInterface;
-use TitleFormatter;
-use WANObjectCache;
+use Wikimedia\ObjectCache\WANObjectCache;
 use Wikimedia\Rdbms\ILBFactory;
-use WikiPage;
 
 /**
  * A factory for PageUpdater and DerivedPageDataUpdater instances.
@@ -63,11 +58,11 @@ class PageUpdaterFactory {
 	public const CONSTRUCTOR_OPTIONS = [
 		MainConfigNames::ArticleCountMethod,
 		MainConfigNames::RCWatchCategoryMembership,
-		MainConfigNames::PageCreationLog,
 		MainConfigNames::UseAutomaticEditSummaries,
 		MainConfigNames::ManualRevertSearchRadius,
 		MainConfigNames::UseRCPatrol,
 		MainConfigNames::ParsoidCacheConfig,
+		MainConfigNames::PageCreationLog,
 	];
 
 	/** @var RevisionStore */
@@ -85,9 +80,6 @@ class PageUpdaterFactory {
 	/** @var JobQueueGroup */
 	private $jobQueueGroup;
 
-	/** @var MessageCache */
-	private $messageCache;
-
 	/** @var Language */
 	private $contLang;
 
@@ -97,23 +89,20 @@ class PageUpdaterFactory {
 	/** @var IContentHandlerFactory */
 	private $contentHandlerFactory;
 
+	/** @var DomainEventDispatcher */
+	private $eventDispatcher;
+
 	/** @var HookContainer */
 	private $hookContainer;
 
 	/** @var EditResultCache */
 	private $editResultCache;
 
-	/** @var UserNameUtils */
-	private $userNameUtils;
-
 	/** @var LoggerInterface */
 	private $logger;
 
 	/** @var ServiceOptions */
 	private $options;
-
-	/** @var UserEditTracker */
-	private $userEditTracker;
 
 	/** @var UserGroupManager */
 	private $userGroupManager;
@@ -127,14 +116,8 @@ class PageUpdaterFactory {
 	/** @var PageEditStash */
 	private $pageEditStash;
 
-	/** @var TalkPageNotificationManager */
-	private $talkPageNotificationManager;
-
 	/** @var WANObjectCache */
 	private $mainWANObjectCache;
-
-	/** @var PermissionManager */
-	private $permissionManager;
 
 	/** @var WikiPageFactory */
 	private $wikiPageFactory;
@@ -142,61 +125,29 @@ class PageUpdaterFactory {
 	/** @var string[] */
 	private $softwareTags;
 
-	/** @var ParsoidOutputAccess */
-	private $parsoidOutputAccess;
+	private ChangeTagsStore $changeTagsStore;
 
-	/**
-	 * @param RevisionStore $revisionStore
-	 * @param RevisionRenderer $revisionRenderer
-	 * @param SlotRoleRegistry $slotRoleRegistry
-	 * @param ParserCache $parserCache
-	 * @param ParsoidOutputAccess $parsoidOutputAccess
-	 * @param JobQueueGroup $jobQueueGroup
-	 * @param MessageCache $messageCache
-	 * @param Language $contLang
-	 * @param ILBFactory $loadbalancerFactory
-	 * @param IContentHandlerFactory $contentHandlerFactory
-	 * @param HookContainer $hookContainer
-	 * @param EditResultCache $editResultCache
-	 * @param UserNameUtils $userNameUtils
-	 * @param LoggerInterface $logger
-	 * @param ServiceOptions $options
-	 * @param UserEditTracker $userEditTracker
-	 * @param UserGroupManager $userGroupManager
-	 * @param TitleFormatter $titleFormatter
-	 * @param ContentTransformer $contentTransformer
-	 * @param PageEditStash $pageEditStash
-	 * @param TalkPageNotificationManager $talkPageNotificationManager
-	 * @param WANObjectCache $mainWANObjectCache
-	 * @param PermissionManager $permissionManager
-	 * @param WikiPageFactory $wikiPageFactory
-	 * @param string[] $softwareTags
-	 */
 	public function __construct(
 		RevisionStore $revisionStore,
 		RevisionRenderer $revisionRenderer,
 		SlotRoleRegistry $slotRoleRegistry,
 		ParserCache $parserCache,
-		ParsoidOutputAccess $parsoidOutputAccess,
 		JobQueueGroup $jobQueueGroup,
-		MessageCache $messageCache,
 		Language $contLang,
 		ILBFactory $loadbalancerFactory,
 		IContentHandlerFactory $contentHandlerFactory,
+		DomainEventDispatcher $eventDispatcher,
 		HookContainer $hookContainer,
 		EditResultCache $editResultCache,
-		UserNameUtils $userNameUtils,
 		LoggerInterface $logger,
 		ServiceOptions $options,
-		UserEditTracker $userEditTracker,
 		UserGroupManager $userGroupManager,
 		TitleFormatter $titleFormatter,
 		ContentTransformer $contentTransformer,
 		PageEditStash $pageEditStash,
-		TalkPageNotificationManager $talkPageNotificationManager,
 		WANObjectCache $mainWANObjectCache,
-		PermissionManager $permissionManager,
 		WikiPageFactory $wikiPageFactory,
+		ChangeTagsStore $changeTagsStore,
 		array $softwareTags
 	) {
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
@@ -205,27 +156,23 @@ class PageUpdaterFactory {
 		$this->revisionRenderer = $revisionRenderer;
 		$this->slotRoleRegistry = $slotRoleRegistry;
 		$this->parserCache = $parserCache;
-		$this->parsoidOutputAccess = $parsoidOutputAccess;
 		$this->jobQueueGroup = $jobQueueGroup;
-		$this->messageCache = $messageCache;
 		$this->contLang = $contLang;
 		$this->loadbalancerFactory = $loadbalancerFactory;
 		$this->contentHandlerFactory = $contentHandlerFactory;
+		$this->eventDispatcher = $eventDispatcher;
 		$this->hookContainer = $hookContainer;
 		$this->editResultCache = $editResultCache;
-		$this->userNameUtils = $userNameUtils;
 		$this->logger = $logger;
 		$this->options = $options;
-		$this->userEditTracker = $userEditTracker;
 		$this->userGroupManager = $userGroupManager;
 		$this->titleFormatter = $titleFormatter;
 		$this->contentTransformer = $contentTransformer;
 		$this->pageEditStash = $pageEditStash;
-		$this->talkPageNotificationManager = $talkPageNotificationManager;
 		$this->mainWANObjectCache = $mainWANObjectCache;
-		$this->permissionManager = $permissionManager;
 		$this->softwareTags = $softwareTags;
 		$this->wikiPageFactory = $wikiPageFactory;
+		$this->changeTagsStore = $changeTagsStore;
 	}
 
 	/**
@@ -246,8 +193,6 @@ class PageUpdaterFactory {
 		PageIdentity $page,
 		UserIdentity $user
 	): PageUpdater {
-		$page = $this->wikiPageFactory->newFromTitle( $page );
-
 		return $this->newPageUpdaterForDerivedPageDataUpdater(
 			$page,
 			$user,
@@ -259,7 +204,7 @@ class PageUpdaterFactory {
 	 * Return a PageUpdater for building an update to a page, reusing the state of
 	 * an existing DerivedPageDataUpdater.
 	 *
-	 * @param WikiPage $page
+	 * @param PageIdentity $page
 	 * @param UserIdentity $user
 	 * @param DerivedPageDataUpdater $derivedPageDataUpdater
 	 *
@@ -269,20 +214,19 @@ class PageUpdaterFactory {
 	 * @since 1.37
 	 */
 	public function newPageUpdaterForDerivedPageDataUpdater(
-		WikiPage $page,
+		PageIdentity $page,
 		UserIdentity $user,
 		DerivedPageDataUpdater $derivedPageDataUpdater
 	): PageUpdater {
 		$pageUpdater = new PageUpdater(
 			$user,
-			$page, // NOTE: eventually, PageUpdater should not know about WikiPage
+			$page,
 			$derivedPageDataUpdater,
-			$this->loadbalancerFactory->getMainLB(),
+			$this->loadbalancerFactory,
 			$this->revisionStore,
 			$this->slotRoleRegistry,
 			$this->contentHandlerFactory,
 			$this->hookContainer,
-			$this->userEditTracker,
 			$this->userGroupManager,
 			$this->titleFormatter,
 			new ServiceOptions(
@@ -290,11 +234,13 @@ class PageUpdaterFactory {
 				$this->options
 			),
 			$this->softwareTags,
-			$this->logger
+			$this->logger,
+			$this->wikiPageFactory
 		);
 
 		$pageUpdater->setUsePageCreationLog(
 			$this->options->get( MainConfigNames::PageCreationLog ) );
+
 		$pageUpdater->setUseAutomaticEditSummaries(
 			$this->options->get( MainConfigNames::UseAutomaticEditSummaries )
 		);
@@ -303,35 +249,33 @@ class PageUpdaterFactory {
 	}
 
 	/**
-	 * @param WikiPage $page
+	 * @param PageIdentity $page
 	 *
 	 * @return DerivedPageDataUpdater
 	 * @internal Needed by WikiPage to back the deprecated prepareContentForEdit() method.
 	 * @note Avoid direct usage of DerivedPageDataUpdater.
 	 * @see docs/pageupdater.md for more information.
 	 */
-	public function newDerivedPageDataUpdater( WikiPage $page ): DerivedPageDataUpdater {
+	public function newDerivedPageDataUpdater( PageIdentity $page ): DerivedPageDataUpdater {
 		$derivedDataUpdater = new DerivedPageDataUpdater(
 			$this->options,
-			$page, // NOTE: eventually, PageUpdater should not know about WikiPage
+			$page,
 			$this->revisionStore,
 			$this->revisionRenderer,
 			$this->slotRoleRegistry,
 			$this->parserCache,
-			$this->parsoidOutputAccess,
 			$this->jobQueueGroup,
-			$this->messageCache,
 			$this->contLang,
 			$this->loadbalancerFactory,
 			$this->contentHandlerFactory,
 			$this->hookContainer,
+			$this->eventDispatcher,
 			$this->editResultCache,
-			$this->userNameUtils,
 			$this->contentTransformer,
 			$this->pageEditStash,
-			$this->talkPageNotificationManager,
 			$this->mainWANObjectCache,
-			$this->permissionManager
+			$this->wikiPageFactory,
+			$this->changeTagsStore,
 		);
 
 		$derivedDataUpdater->setLogger( $this->logger );

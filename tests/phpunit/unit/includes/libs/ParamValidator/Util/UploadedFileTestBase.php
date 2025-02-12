@@ -1,11 +1,14 @@
 <?php
 
-namespace Wikimedia\ParamValidator\Util;
+namespace Wikimedia\Tests\ParamValidator\Util;
 
+use MediaWikiCoversValidator;
+use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 
-abstract class UploadedFileTestBase extends \PHPUnit\Framework\TestCase {
+abstract class UploadedFileTestBase extends TestCase {
+	use MediaWikiCoversValidator;
 
 	/** @var string|null */
 	protected static $tmpdir;

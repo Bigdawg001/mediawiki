@@ -22,7 +22,7 @@ namespace Wikimedia\Rdbms;
 use InvalidArgumentException;
 
 /**
- * Manager for sites with a single "main" cluster and any number of "external" clusters
+ * LoadBalancer manager for sites with one "main" cluster and any number of "external" clusters
  *
  * @see LBFactoryMulti
  *
@@ -117,7 +117,7 @@ class LBFactorySimple extends LBFactory {
 
 	public function getAllExternalLBs(): array {
 		$lbs = [];
-		foreach ( array_keys( $this->externalServersByCluster ) as $cluster ) {
+		foreach ( $this->externalServersByCluster as $cluster => $_ ) {
 			$lbs[$cluster] = $this->getExternalLB( $cluster );
 		}
 

@@ -30,8 +30,8 @@ namespace MediaWiki\User;
  * in the cache, not keys, and evict them alongside with all their indexes.
  *
  * @since 1.37
- * @internal for use by ActorStore
- * @package MediaWiki\User
+ * @internal For use by ActorStore
+ * @ingroup User
  */
 class ActorCache {
 
@@ -44,8 +44,7 @@ class ActorCache {
 	/** @var string Key by user name */
 	public const KEY_USER_NAME = 'name';
 
-	/** @var int */
-	private $maxSize;
+	private int $maxSize;
 
 	/**
 	 * @var array[][] Contains 3 keys, KEY_ACTOR_ID, KEY_USER_ID, and KEY_USER_NAME,
@@ -100,10 +99,6 @@ class ActorCache {
 		$this->cache[self::KEY_USER_NAME][$actor->getName()] = $value;
 	}
 
-	/**
-	 * Remove $actor from cache.
-	 * @param UserIdentity $actor
-	 */
 	public function remove( UserIdentity $actor ) {
 		$oldByName = $this->cache[self::KEY_USER_NAME][$actor->getName()] ?? null;
 		$oldByUserId = $this->cache[self::KEY_USER_ID][$actor->getId( $actor->getWikiId() )] ?? null;
@@ -135,19 +130,13 @@ class ActorCache {
 	private function getCachedValue( string $keyType, $keyValue ): ?array {
 		if ( isset( $this->cache[$keyType][$keyValue] ) ) {
 			$cached = $this->cache[$keyType][$keyValue];
-			$this->ping( $cached['actorId'] );
+			$actorId = $cached['actorId'];
+			// Record the actor with $actorId was recently used.
+			$item = $this->cache[self::KEY_ACTOR_ID][$actorId];
+			unset( $this->cache[self::KEY_ACTOR_ID][$actorId] );
+			$this->cache[self::KEY_ACTOR_ID][$actorId] = $item;
 			return $cached;
 		}
 		return null;
-	}
-
-	/**
-	 * Record the actor with $actorId was recently used.
-	 * @param int $actorId
-	 */
-	private function ping( int $actorId ) {
-		$item = $this->cache[self::KEY_ACTOR_ID][$actorId];
-		unset( $this->cache[self::KEY_ACTOR_ID][$actorId] );
-		$this->cache[self::KEY_ACTOR_ID][$actorId] = $item;
 	}
 }

@@ -18,6 +18,11 @@
  * @file
  */
 
+namespace MediaWiki\Site;
+
+use InvalidArgumentException;
+use MediaWiki\Xml\Xml;
+
 /**
  * Utility for exporting site entries to XML.
  *
@@ -70,8 +75,6 @@ class SiteExporter {
 
 	/**
 	 * Writes a <site> tag representing the given Site object.
-	 *
-	 * @param Site $site
 	 */
 	private function exportSite( Site $site ) {
 		if ( $site->getType() !== Site::TYPE_UNKNOWN ) {
@@ -113,3 +116,6 @@ class SiteExporter {
 	}
 
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( SiteExporter::class, 'SiteExporter' );

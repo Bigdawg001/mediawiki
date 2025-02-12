@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Copyright © 2004 Brion Vibber <brion@pobox.com>
+ * Copyright © 2004 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
  * This program is free software; you can redistribute it and/or modify
@@ -27,7 +27,6 @@ namespace MediaWiki\Feed;
 use MediaWiki\Html\TemplateParser;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
-use MediaWiki\Title\Title;
 
 /**
  * Class to support the outputting of syndication feeds in Atom and RSS format.
@@ -43,7 +42,7 @@ abstract class ChannelFeed extends FeedItem {
 	/**
 	 * @stable to call
 	 *
-	 * @param string|Title $title Feed's title
+	 * @param string $title Feed's title
 	 * @param string $description
 	 * @param string $url URL uniquely designating the feed.
 	 * @param string $date Feed's date
@@ -144,4 +143,5 @@ abstract class ChannelFeed extends FeedItem {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( ChannelFeed::class, 'ChannelFeed' );

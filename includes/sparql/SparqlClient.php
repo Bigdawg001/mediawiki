@@ -37,38 +37,31 @@ class SparqlClient {
 
 	/**
 	 * User agent for HTTP requests.
-	 * @var string
 	 */
-	private $userAgent;
+	private string $userAgent;
 
 	/**
 	 * Query timeout (seconds)
-	 * @var int
 	 */
-	private $timeout = 30;
+	private int $timeout = 30;
 
 	/**
 	 * SPARQL endpoint URL
-	 * @var string
 	 */
-	private $endpoint;
+	private string $endpoint;
 
 	/**
 	 * Client options
-	 * @var array
 	 */
-	private $options = [];
+	private array $options = [];
 
-	/**
-	 * @var HttpRequestFactory
-	 */
-	private $requestFactory;
+	private HttpRequestFactory $requestFactory;
 
 	/**
 	 * @param string $url SPARQL Endpoint
 	 * @param HttpRequestFactory $requestFactory
 	 */
-	public function __construct( $url, HttpRequestFactory $requestFactory ) {
+	public function __construct( string $url, HttpRequestFactory $requestFactory ) {
 		$this->endpoint = $url;
 		$this->requestFactory = $requestFactory;
 		$this->userAgent = $requestFactory->getUserAgent() . " SparqlClient";
@@ -79,7 +72,7 @@ class SparqlClient {
 	 * @param int $timeout
 	 * @return $this
 	 */
-	public function setTimeout( $timeout ) {
+	public function setTimeout( int $timeout ): SparqlClient {
 		if ( $timeout >= 0 ) {
 			$this->timeout = $timeout;
 		}
@@ -90,16 +83,15 @@ class SparqlClient {
 	 * @param array $options
 	 * @return $this
 	 */
-	public function setClientOptions( $options ) {
+	public function setClientOptions( array $options ): SparqlClient {
 		$this->options = $options;
 		return $this;
 	}
 
 	/**
 	 * Get current user agent.
-	 * @return string
 	 */
-	public function getUserAgent() {
+	public function getUserAgent(): string {
 		return $this->userAgent;
 	}
 
@@ -110,7 +102,7 @@ class SparqlClient {
 	 *
 	 * @param string $agent
 	 */
-	public function setUserAgent( $agent ) {
+	public function setUserAgent( string $agent ) {
 		$this->userAgent = $agent;
 	}
 
@@ -120,10 +112,8 @@ class SparqlClient {
 	 * This is the recommended way of specifying the user agent
 	 * for specific applications of the SparqlClient inside MediaWiki
 	 * and extension code.
-	 *
-	 * @param string $agent
 	 */
-	public function appendUserAgent( $agent ) {
+	public function appendUserAgent( string $agent ) {
 		$this->userAgent .= ' ' . $agent;
 	}
 
@@ -137,8 +127,8 @@ class SparqlClient {
 	 *               Each row will contain fields indexed by variable name.
 	 * @throws SparqlException
 	 */
-	public function query( $sparql, $rawData = false ) {
-		if ( empty( $this->endpoint ) ) {
+	public function query( string $sparql, bool $rawData = false ): array {
+		if ( !$this->endpoint ) {
 			throw new SparqlException( 'Endpoint URL can not be empty' );
 		}
 		$queryData = [ "query" => $sparql, "format" => "json" ];
@@ -191,7 +181,7 @@ class SparqlClient {
 	 *
 	 * @return array[] List of results, one row per element.
 	 */
-	private function extractData( $data, $rawData = false ) {
+	private function extractData( array $data, bool $rawData = false ): array {
 		$result = [];
 		if ( $data && !empty( $data['results'] ) ) {
 			$vars = $data['head']['vars'];

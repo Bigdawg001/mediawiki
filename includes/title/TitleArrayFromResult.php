@@ -27,6 +27,7 @@
 namespace MediaWiki\Title;
 
 use Countable;
+use Iterator;
 use Wikimedia\Rdbms\IResultWrapper;
 
 /**
@@ -34,7 +35,7 @@ use Wikimedia\Rdbms\IResultWrapper;
  * @note marked as newable in 1.35 for lack of a better alternative,
  *       but should probably become part of the TitleFactory service.
  */
-class TitleArrayFromResult extends TitleArray implements Countable {
+class TitleArrayFromResult implements Countable, Iterator {
 	/** @var IResultWrapper */
 	public $res;
 
@@ -67,9 +68,6 @@ class TitleArrayFromResult extends TitleArray implements Countable {
 		}
 	}
 
-	/**
-	 * @return int
-	 */
 	public function count(): int {
 		return $this->res->numRows();
 	}
@@ -94,12 +92,10 @@ class TitleArrayFromResult extends TitleArray implements Countable {
 		$this->setCurrent( $this->res->current() );
 	}
 
-	/**
-	 * @return bool
-	 */
 	public function valid(): bool {
 		return $this->current !== false;
 	}
 }
 
+/** @deprecated class alias since 1.41 */
 class_alias( TitleArrayFromResult::class, 'TitleArrayFromResult' );

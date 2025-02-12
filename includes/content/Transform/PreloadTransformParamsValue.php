@@ -2,7 +2,7 @@
 namespace MediaWiki\Content\Transform;
 
 use MediaWiki\Page\PageReference;
-use ParserOptions;
+use MediaWiki\Parser\ParserOptions;
 
 /**
  * @internal
@@ -24,26 +24,14 @@ class PreloadTransformParamsValue implements PreloadTransformParams {
 		$this->params = $params;
 	}
 
-	/**
-	 *
-	 * @return PageReference
-	 */
 	public function getPage(): PageReference {
 		return $this->page;
 	}
 
-	/**
-	 *
-	 * @return array
-	 */
 	public function getParams(): array {
 		return $this->params;
 	}
 
-	/**
-	 *
-	 * @return ParserOptions
-	 */
 	public function getParserOptions(): ParserOptions {
 		return $this->parserOptions;
 	}

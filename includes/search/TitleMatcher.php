@@ -1,20 +1,21 @@
 <?php
 namespace MediaWiki\Search;
 
-use ILanguageConverter;
 use ISearchResultSet;
-use Language;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\Language\ILanguageConverter;
+use MediaWiki\Language\Language;
 use MediaWiki\Languages\LanguageConverterFactory;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\WikiPageFactory;
+use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Title\Title;
+use MediaWiki\Title\TitleFactory;
 use MediaWiki\User\UserNameUtils;
 use RepoGroup;
 use SearchNearMatchResultSet;
-use SpecialPage;
 
 /**
  * Service implementation of near match title search.
@@ -22,58 +23,20 @@ use SpecialPage;
 class TitleMatcher {
 	/**
 	 * @internal For use by ServiceWiring.
-	 * @var string[]
 	 */
 	public const CONSTRUCTOR_OPTIONS = [
 		MainConfigNames::EnableSearchContributorsByIP,
 	];
 
-	/**
-	 * @var ServiceOptions
-	 */
-	private $options;
+	private ServiceOptions $options;
+	private Language $language;
+	private ILanguageConverter $languageConverter;
+	private HookRunner $hookRunner;
+	private WikiPageFactory $wikiPageFactory;
+	private UserNameUtils $userNameUtils;
+	private RepoGroup $repoGroup;
+	private TitleFactory $titleFactory;
 
-	/**
-	 * Current language
-	 * @var Language
-	 */
-	private $language;
-
-	/**
-	 * Current language converter
-	 * @var ILanguageConverter
-	 */
-	private $languageConverter;
-
-	/**
-	 * @var HookRunner
-	 */
-	private $hookRunner;
-
-	/**
-	 * @var WikiPageFactory
-	 */
-	private $wikiPageFactory;
-
-	/**
-	 * @var UserNameUtils
-	 */
-	private $userNameUtils;
-
-	/**
-	 * @var RepoGroup
-	 */
-	private $repoGroup;
-
-	/**
-	 * @param ServiceOptions $options
-	 * @param Language $contentLanguage
-	 * @param LanguageConverterFactory $languageConverterFactory
-	 * @param HookContainer $hookContainer
-	 * @param WikiPageFactory $wikiPageFactory
-	 * @param UserNameUtils $userNameUtils
-	 * @param RepoGroup $repoGroup
-	 */
 	public function __construct(
 		ServiceOptions $options,
 		Language $contentLanguage,
@@ -81,7 +44,8 @@ class TitleMatcher {
 		HookContainer $hookContainer,
 		WikiPageFactory $wikiPageFactory,
 		UserNameUtils $userNameUtils,
-		RepoGroup $repoGroup
+		RepoGroup $repoGroup,
+		TitleFactory $titleFactory
 	) {
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
 		$this->options = $options;
@@ -92,6 +56,7 @@ class TitleMatcher {
 		$this->wikiPageFactory = $wikiPageFactory;
 		$this->userNameUtils = $userNameUtils;
 		$this->repoGroup = $repoGroup;
+		$this->titleFactory = $titleFactory;
 	}
 
 	/**
@@ -148,7 +113,7 @@ class TitleMatcher {
 
 		foreach ( $allSearchTerms as $term ) {
 			# Exact match? No need to look further.
-			$title = Title::newFromText( $term );
+			$title = $this->titleFactory->newFromText( $term );
 			if ( $title === null ) {
 				return null;
 			}
@@ -175,25 +140,25 @@ class TitleMatcher {
 			}
 
 			# Now try all lower case (i.e. first letter capitalized)
-			$title = Title::newFromText( $this->language->lc( $term ) );
+			$title = $this->titleFactory->newFromText( $this->language->lc( $term ) );
 			if ( $title && $title->exists() ) {
 				return $title;
 			}
 
 			# Now try capitalized string
-			$title = Title::newFromText( $this->language->ucwords( $term ) );
+			$title = $this->titleFactory->newFromText( $this->language->ucwords( $term ) );
 			if ( $title && $title->exists() ) {
 				return $title;
 			}
 
 			# Now try all upper case
-			$title = Title::newFromText( $this->language->uc( $term ) );
+			$title = $this->titleFactory->newFromText( $this->language->uc( $term ) );
 			if ( $title && $title->exists() ) {
 				return $title;
 			}
 
 			# Now try Word-Caps-Breaking-At-Word-Breaks, for hyphenated names etc
-			$title = Title::newFromText( $this->language->ucwordbreaks( $term ) );
+			$title = $this->titleFactory->newFromText( $this->language->ucwordbreaks( $term ) );
 			if ( $title && $title->exists() ) {
 				return $title;
 			}
@@ -206,7 +171,7 @@ class TitleMatcher {
 			}
 		}
 
-		$title = Title::newFromText( $searchterm );
+		$title = $this->titleFactory->newFromTextThrow( $searchterm );
 
 		# Entering an IP address goes to the contributions page
 		if ( $this->options->get( MainConfigNames::EnableSearchContributorsByIP ) ) {
@@ -246,8 +211,3 @@ class TitleMatcher {
 		return null;
 	}
 }
-
-/**
- * @deprecated since 1.40, remove in 1.41.
- */
-class_alias( TitleMatcher::class, 'SearchNearMatcher' );

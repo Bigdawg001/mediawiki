@@ -1,6 +1,6 @@
 <?php
 
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Language\Language;
 
 /**
  * Helping class to run tests using a clean language instance.
@@ -56,7 +56,7 @@ abstract class LanguageClassesTestCase extends MediaWikiIntegrationTestCase {
 			$lang = strtolower( str_replace( '_', '-', $m[1] ) );
 		}
 		if ( $lang === false ||
-			!MediaWikiServices::getInstance()->getLanguageNameUtils()->isSupportedLanguage( $lang )
+			!$this->getServiceContainer()->getLanguageNameUtils()->isSupportedLanguage( $lang )
 		) {
 			# Fallback to english language
 			$lang = 'en';
@@ -65,7 +65,7 @@ abstract class LanguageClassesTestCase extends MediaWikiIntegrationTestCase {
 					. 'out of ' . static::class . ", falling back to 'en'"
 			);
 		}
-		$this->languageObject = MediaWikiServices::getInstance()->getLanguageFactory()
+		$this->languageObject = $this->getServiceContainer()->getLanguageFactory()
 			->getLanguage( $lang );
 	}
 

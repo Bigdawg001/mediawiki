@@ -19,11 +19,20 @@
  * @file
  */
 
+use MediaWiki\Context\IContextSource;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\Language\Language;
+use MediaWiki\Language\RawMessage;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
+use MediaWiki\Output\OutputPage;
 use MediaWiki\Permissions\Authority;
+use MediaWiki\Request\WebRequest;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
+use Wikimedia\Message\MessageParam;
+use Wikimedia\Message\MessageSpecifier;
 
 /**
  * @defgroup Actions Actions
@@ -82,7 +91,7 @@ abstract class Action implements MessageLocalizer {
 	final public static function factory(
 		string $action,
 		Article $article,
-		IContextSource $context = null
+		?IContextSource $context = null
 	) {
 		return MediaWikiServices::getInstance()
 			->getActionFactory()
@@ -101,22 +110,6 @@ abstract class Action implements MessageLocalizer {
 	final public static function getActionName( IContextSource $context ) {
 		// Optimisation: Reuse/prime the cached value of RequestContext
 		return $context->getActionName();
-	}
-
-	/**
-	 * Check if a given action is recognised, even if it's disabled
-	 *
-	 * @since 1.17
-	 * @deprecated since 1.38 use (bool)ActionFactory::getAction()
-	 *
-	 * @param string $name Name of an action
-	 * @return bool
-	 */
-	final public static function exists( string $name ): bool {
-		wfDeprecated( __METHOD__, '1.38' );
-		return MediaWikiServices::getInstance()
-			->getActionFactory()
-			->actionExists( $name );
 	}
 
 	/**
@@ -227,7 +220,9 @@ abstract class Action implements MessageLocalizer {
 	 * Parameters are the same as wfMessage()
 	 *
 	 * @param string|string[]|MessageSpecifier $key
-	 * @param mixed ...$params
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param MessageParam|MessageSpecifier|string|int|float|list<MessageParam|MessageSpecifier|string|int|float> ...$params
+	 *   See Message::params()
 	 * @return Message
 	 */
 	final public function msg( $key, ...$params ) {
@@ -293,6 +288,10 @@ abstract class Action implements MessageLocalizer {
 	/**
 	 * Get the permission required to perform this action.  Often, but not always,
 	 * the same as the action name
+	 *
+	 * Implementations of this methods must always return the same value, regardless
+	 * of parameters passed to the constructor or system state.
+	 *
 	 * @since 1.17
 	 * @stable to override
 	 *
@@ -304,6 +303,10 @@ abstract class Action implements MessageLocalizer {
 
 	/**
 	 * Indicates whether this action requires read rights
+	 *
+	 * Implementations of this methods must always return the same value, regardless
+	 * of parameters passed to the constructor or system state.
+	 *
 	 * @since 1.38
 	 * @stable to override
 	 * @return bool
@@ -326,10 +329,7 @@ abstract class Action implements MessageLocalizer {
 		$right = $this->getRestriction();
 		$permissionManager = MediaWikiServices::getInstance()->getPermissionManager();
 		if ( $right !== null ) {
-			$errors = $permissionManager->getPermissionErrors( $right, $user, $this->getTitle() );
-			if ( count( $errors ) ) {
-				throw new PermissionsError( $right, $errors );
-			}
+			$permissionManager->throwPermissionErrors( $right, $user, $this->getTitle() );
 		}
 
 		// If the action requires an unblock, explicitly check the user's block.
@@ -361,7 +361,20 @@ abstract class Action implements MessageLocalizer {
 	}
 
 	/**
-	 * Whether this action requires the wiki not to be locked
+	 * Indicates whether this action page write access to the wiki.
+	 *
+	 * Subclasses must override this method to return true if the operation they will
+	 * perform is not "safe" per RFC 7231 section 4.2.1. A subclass's operation is "safe"
+	 * if it is essentially read-only, i.e. the client does not request nor expect any
+	 * state change that would be observable in the responses to future requests.
+	 *
+	 * Implementations of this method must always return the same value, regardless of the
+	 * parameters passed to the constructor or system state.
+	 *
+	 * When handling GET/HEAD requests, subclasses should only perform "safe" operations.
+	 * Note that subclasses handling POST requests might still implement "safe" operations,
+	 * particularly in the case where large input parameters are required.
+	 *
 	 * @since 1.17
 	 * @stable to override
 	 *
@@ -372,7 +385,11 @@ abstract class Action implements MessageLocalizer {
 	}
 
 	/**
-	 * Whether this action can still be executed by a blocked user
+	 * Whether this action can still be executed by a blocked user.
+	 *
+	 * Implementations of this methods must always return the same value, regardless
+	 * of parameters passed to the constructor or system state.
+	 *
 	 * @since 1.17
 	 * @stable to override
 	 *
@@ -391,7 +408,13 @@ abstract class Action implements MessageLocalizer {
 	protected function setHeaders() {
 		$out = $this->getOutput();
 		$out->setRobotPolicy( 'noindex,nofollow' );
-		$out->setPageTitle( $this->getPageTitle() );
+		$title = $this->getPageTitle();
+		if ( is_string( $title ) ) {
+			// T343849: deprecated
+			wfDeprecated( 'string return from Action::getPageTitle()', '1.41' );
+			$title = ( new RawMessage( '$1' ) )->rawParams( $title );
+		}
+		$out->setPageTitleMsg( $title );
 		$out->setSubtitle( $this->getDescription() );
 		$out->setArticleRelated( true );
 	}
@@ -399,11 +422,13 @@ abstract class Action implements MessageLocalizer {
 	/**
 	 * Returns the name that goes in the `<h1>` page title.
 	 *
+	 * Since 1.41, returning a string from this method has been deprecated.
+	 *
 	 * @stable to override
-	 * @return string
+	 * @return string|Message
 	 */
 	protected function getPageTitle() {
-		return $this->getTitle()->getPrefixedText();
+		return ( new RawMessage( '$1' ) )->plaintextParams( $this->getTitle()->getPrefixedText() );
 	}
 
 	/**
@@ -461,7 +486,20 @@ abstract class Action implements MessageLocalizer {
 	}
 
 	/**
-	 * Indicates whether this action may perform database writes
+	 * Indicates whether POST requests handled by this action require write access to the wiki.
+	 *
+	 * Subclasses must override this method to return true if any of the operations that
+	 * they perform on POST requests are not "safe" per RFC 7231 section 4.2.1. A subclass's
+	 * operation is "safe" if it is essentially read-only, i.e. the client does not request
+	 * nor expect any state change that would be observable in the responses to future requests.
+	 *
+	 * Implementations of this method must always return the same value, regardless of the
+	 * parameters passed to the constructor or system state.
+	 *
+	 * When handling GET/HEAD requests, subclasses should only perform "safe" operations.
+	 * Note that some subclasses might only perform "safe" operations even for POST requests,
+	 * particularly in the case where large input parameters are required.
+	 *
 	 * @return bool
 	 * @since 1.27
 	 * @stable to override

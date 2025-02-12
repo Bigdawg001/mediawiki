@@ -1,7 +1,5 @@
 <?php
 /**
- * Implements Special:Mostimages
- *
  * Copyright © 2005 Ævar Arnfjörð Bjarmason
  *
  * This program is free software; you can redistribute it and/or modify
@@ -20,28 +18,24 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
- * @author Ævar Arnfjörð Bjarmason <avarab@gmail.com>
  */
 
 namespace MediaWiki\Specials;
 
-use ImageQueryPage;
-use Wikimedia\Rdbms\ILoadBalancer;
+use MediaWiki\SpecialPage\ImageQueryPage;
+use Wikimedia\Rdbms\IConnectionProvider;
 
 /**
- * A special page that lists most used images
+ * List of the most used images.
  *
  * @ingroup SpecialPage
+ * @author Ævar Arnfjörð Bjarmason <avarab@gmail.com>
  */
 class SpecialMostImages extends ImageQueryPage {
 
-	/**
-	 * @param ILoadBalancer $loadBalancer
-	 */
-	public function __construct( ILoadBalancer $loadBalancer ) {
+	public function __construct( IConnectionProvider $dbProvider ) {
 		parent::__construct( 'Mostimages' );
-		$this->setDBLoadBalancer( $loadBalancer );
+		$this->setDatabaseProvider( $dbProvider );
 	}
 
 	public function isExpensive() {

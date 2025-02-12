@@ -18,8 +18,8 @@
 
 namespace MediaWiki\Skin;
 
+use MediaWiki\SpecialPage\SpecialPage;
 use RuntimeException;
-use SpecialPage;
 
 /**
  * @internal for use inside Skin and SkinTemplate classes only
@@ -32,9 +32,6 @@ class SkinComponentRegistry {
 	/** @var SkinComponentRegistryContext */
 	private $skinContext;
 
-	/**
-	 * @param SkinComponentRegistryContext $skinContext
-	 */
 	public function __construct( SkinComponentRegistryContext $skinContext ) {
 		$this->skinContext = $skinContext;
 	}
@@ -82,7 +79,6 @@ class SkinComponentRegistry {
 	 */
 	private function registerComponent( string $name ) {
 		$skin = $this->skinContext;
-		$user = $skin->getUser();
 		switch ( $name ) {
 			case 'copyright':
 				$component = new SkinComponentCopyright(
@@ -98,10 +94,8 @@ class SkinComponentRegistry {
 			case 'search-box':
 				$component = new SkinComponentSearch(
 					$skin->getConfig(),
-					$user,
 					$skin->getMessageLocalizer(),
-					SpecialPage::newSearchPage( $user ),
-					$skin->getRelevantTitle()
+					SpecialPage::newSearchPage( $skin->getUser() )
 				);
 				break;
 			case 'toc':

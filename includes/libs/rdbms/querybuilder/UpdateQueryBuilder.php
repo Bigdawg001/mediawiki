@@ -6,13 +6,15 @@ use InvalidArgumentException;
 use UnexpectedValueException;
 
 /**
- * A query builder for UPDATE queries with a fluent interface.
+ * Build UPDATE queries with a fluent interface.
  *
- * Any particular query builder object should only be used for a single database query,
- * and not be reused afterwards. However, to run multiple similar queries,
- * you can create a “template” query builder to set up most of the query,
- * and then clone the object (and potentially modify the clone) for each individual query.
+ * Each query builder object must be used for a single database query only,
+ * and not be reused afterwards. To run multiple similar queries, you can
+ * create a query builder to set up most of your query, which you can use
+ * as a "template" to clone. You can then modify the cloned object for
+ * each individual query.
  *
+ * @since 1.41
  * @stable to extend
  * @ingroup Database
  */
@@ -46,10 +48,8 @@ class UpdateQueryBuilder {
 	protected $db;
 
 	/**
-	 * Only for use in subclasses. To create a SelectQueryBuilder instance,
+	 * Only for use in subclasses. To create a UpdateQueryBuilder instance,
 	 * use `$db->newUpdateQueryBuilder()` instead.
-	 *
-	 * @param IDatabase $db
 	 */
 	public function __construct( IDatabase $db ) {
 		$this->db = $db;
@@ -84,6 +84,7 @@ class UpdateQueryBuilder {
 	 *   - set: The set conditions
 	 *   - conds: The conditions
 	 *   - options: The query options
+	 *   - caller: The caller signature.
 	 *
 	 * @return $this
 	 */
@@ -100,13 +101,17 @@ class UpdateQueryBuilder {
 		if ( isset( $info['options'] ) ) {
 			$this->options( (array)$info['options'] );
 		}
+		if ( isset( $info['caller'] ) ) {
+			$this->caller( $info['caller'] );
+		}
 		return $this;
 	}
 
 	/**
 	 * Manually set the table name to be passed to IDatabase::update()
 	 *
-	 * @param string $table The table name
+	 * @param string $table The unqualified name of a table
+	 * @param-taint $table exec_sql
 	 * @return $this
 	 */
 	public function table( $table ) {
@@ -117,7 +122,8 @@ class UpdateQueryBuilder {
 	/**
 	 * Set table for the query. Alias for table().
 	 *
-	 * @param string $table The table name
+	 * @param string $table The unqualified name of a table
+	 * @param-taint $table exec_sql
 	 * @return $this
 	 */
 	public function update( string $table ) {
@@ -157,7 +163,9 @@ class UpdateQueryBuilder {
 	 * Add conditions to the query. The supplied conditions will be appended
 	 * to the existing conditions, separated by AND.
 	 *
-	 * @param string|array $conds
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param string|IExpression|array<string,?scalar|non-empty-array<int,?scalar>|RawSQLValue>|array<int,string|IExpression> $conds
+	 * @param-taint $conds exec_sql_numkey
 	 *
 	 * May be either a string containing a single condition, or an array of
 	 * conditions. If an array is given, the conditions constructed from each
@@ -212,7 +220,9 @@ class UpdateQueryBuilder {
 	/**
 	 * Add conditions to the query. Alias for where().
 	 *
-	 * @param string|array $conds
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param string|IExpression|array<string,?scalar|non-empty-array<int,?scalar>|RawSQLValue>|array<int,string|IExpression> $conds
+	 * @param-taint $conds exec_sql_numkey
 	 * @return $this
 	 */
 	public function andWhere( $conds ) {
@@ -222,7 +232,9 @@ class UpdateQueryBuilder {
 	/**
 	 * Add conditions to the query. Alias for where().
 	 *
-	 * @param string|array $conds
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param string|IExpression|array<string,?scalar|non-empty-array<int,?scalar>|RawSQLValue>|array<int,string|IExpression> $conds
+	 * @param-taint $conds exec_sql_numkey
 	 * @return $this
 	 */
 	public function conds( $conds ) {
@@ -230,10 +242,11 @@ class UpdateQueryBuilder {
 	}
 
 	/**
-	 * Add conditions to the query. The supplied conditions will be appended
-	 * to the existing conditions, separated by AND.
+	 * Add SET part to the query. It takes an array containing arrays of column names map to
+	 * the set values.
 	 *
-	 * @param string|array $set
+	 * @param string|array<string,?scalar|RawSQLValue>|array<int,string> $set
+	 * @param-taint $set exec_sql_numkey
 	 *
 	 * Combination map/list where each string-keyed entry maps a column
 	 * to a literal assigned value and each integer-keyed value is a SQL expression in the
@@ -268,7 +281,8 @@ class UpdateQueryBuilder {
 	/**
 	 * Add set values to the query. Alias for set().
 	 *
-	 * @param string|array $set
+	 * @param string|array<string,?scalar|RawSQLValue>|array<int,string> $set
+	 * @param-taint $set exec_sql_numkey
 	 * @return $this
 	 */
 	public function andSet( $set ) {
@@ -277,6 +291,7 @@ class UpdateQueryBuilder {
 
 	/**
 	 * Enable the IGNORE option.
+	 *
 	 * Skip update of rows that would cause unique key conflicts.
 	 * IDatabase::affectedRows() can be used to determine how many rows were updated.
 	 *
@@ -291,6 +306,7 @@ class UpdateQueryBuilder {
 	 * Set the method name to be included in an SQL comment.
 	 *
 	 * @param string $fname
+	 * @param-taint $fname exec_sql
 	 * @return $this
 	 */
 	public function caller( $fname ) {
@@ -299,11 +315,9 @@ class UpdateQueryBuilder {
 	}
 
 	/**
-	 * Run the constructed UPDATE query and return the result.
-	 *
-	 * @return bool
+	 * Run the constructed UPDATE query.
 	 */
-	public function execute() {
+	public function execute(): void {
 		if ( !$this->conds ) {
 			throw new UnexpectedValueException(
 				__METHOD__ . ' expects at least one condition to be set' );
@@ -316,7 +330,7 @@ class UpdateQueryBuilder {
 			throw new UnexpectedValueException(
 				__METHOD__ . ' expects table not to be empty' );
 		}
-		return $this->db->update( $this->table, $this->set, $this->conds, $this->caller, $this->options );
+		$this->db->update( $this->table, $this->set, $this->conds, $this->caller, $this->options );
 	}
 
 	/**
@@ -328,13 +342,18 @@ class UpdateQueryBuilder {
 	 *   - set: The set array
 	 *   - conds: The conditions
 	 *   - options: The query options
+	 *   - caller: The caller signature
 	 */
 	public function getQueryInfo() {
-		return [
+		$info = [
 			'table' => $this->table,
 			'set' => $this->set,
 			'conds' => $this->conds,
 			'options' => $this->options,
 		];
+		if ( $this->caller !== __CLASS__ ) {
+			$info['caller'] = $this->caller;
+		}
+		return $info;
 	}
 }

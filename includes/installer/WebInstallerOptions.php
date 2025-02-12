@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,7 +20,10 @@
  * @ingroup Installer
  */
 
+namespace MediaWiki\Installer;
+
 use MediaWiki\Html\Html;
+use MediaWiki\Specials\SpecialVersion;
 use Wikimedia\IPUtils;
 
 class WebInstallerOptions extends WebInstallerPage {
@@ -99,7 +103,6 @@ class WebInstallerOptions extends WebInstallerPage {
 
 	/**
 	 * Wiki mode - user rights and copyright model.
-	 * @return void
 	 */
 	private function addModeOptions(): void {
 		$this->addHTML(
@@ -120,7 +123,7 @@ class WebInstallerOptions extends WebInstallerPage {
 			// For grep: The following messages are used as the item labels:
 			// config-license-cc-by, config-license-cc-by-sa, config-license-cc-by-nc-sa,
 			// config-license-cc-0, config-license-pd, config-license-gfdl,
-			// config-license-none, config-license-cc-choose
+			// config-license-none
 			$this->parent->getRadioSet( [
 				'var' => '_LicenseCode',
 				'label' => 'config-license',
@@ -128,14 +131,12 @@ class WebInstallerOptions extends WebInstallerPage {
 				'values' => array_keys( $this->parent->licenses ),
 				'commonAttribs' => [ 'class' => 'licenseRadio' ],
 			] ) .
-			$this->getCCChooser() .
 			$this->parent->getHelpBox( 'config-license-help' )
 		);
 	}
 
 	/**
 	 * User email options.
-	 * @return void
 	 */
 	private function addEmailOptions(): void {
 		$emailwrapperStyle = $this->getVar( 'wgEnableEmail' ) ? '' : 'display: none';
@@ -180,7 +181,6 @@ class WebInstallerOptions extends WebInstallerPage {
 
 	/**
 	 * Opt-in for bundled skins.
-	 * @return void
 	 */
 	private function addSkinOptions(): void {
 		$skins = $this->parent->findExtensions( 'skins' )->value;
@@ -216,7 +216,7 @@ class WebInstallerOptions extends WebInstallerPage {
 			}
 		} else {
 			$skinHtml .=
-				Html::warningBox( wfMessage( 'config-skins-missing' )->plain(), 'config-warning-box' ) .
+				Html::warningBox( wfMessage( 'config-skins-missing' )->parse(), 'config-warning-box' ) .
 				Html::hidden( 'config_wgDefaultSkin', $chosenSkinName );
 		}
 
@@ -227,7 +227,6 @@ class WebInstallerOptions extends WebInstallerPage {
 
 	/**
 	 * Opt-in for bundled extensions.
-	 * @return void
 	 */
 	private function addExtensionOptions(): void {
 		global $wgLang;
@@ -260,7 +259,7 @@ class WebInstallerOptions extends WebInstallerPage {
 				foreach ( $extByType[$type] as $ext => $info ) {
 					$attribs = [
 						'data-name' => $ext,
-						'class' => 'config-ext-input'
+						'class' => 'config-ext-input cdx-checkbox__input'
 					];
 					$labelAttribs = [];
 					if ( isset( $info['requires']['extensions'] ) ) {
@@ -315,14 +314,13 @@ class WebInstallerOptions extends WebInstallerPage {
 			$this->addHTML( $extHtml );
 			// Push the dependency map to the client side
 			$this->addHTML( Html::inlineScript(
-				'var extDependencyMap = ' . Xml::encodeJsVar( $dependencyMap )
+				'var extDependencyMap = ' . Html::encodeJsVar( $dependencyMap )
 			) );
 		}
 	}
 
 	/**
 	 * Image and file upload options.
-	 * @return void
 	 */
 	private function addFileOptions(): void {
 		// Having / in paths in Windows looks funny :)
@@ -364,7 +362,6 @@ class WebInstallerOptions extends WebInstallerPage {
 
 	/**
 	 * System administration related options.
-	 * @return void
 	 */
 	private function addAdvancedOptions(): void {
 		$caches = [ 'none' ];
@@ -461,98 +458,6 @@ class WebInstallerOptions extends WebInstallerPage {
 	}
 
 	/**
-	 * @return string
-	 */
-	public function getCCPartnerUrl() {
-		$server = $this->getVar( 'wgServer' );
-		$exitUrl = $server . $this->parent->getUrl( [
-			'page' => 'Options',
-			'SubmitCC' => 'indeed',
-			'config__LicenseCode' => 'cc',
-			'config_wgRightsUrl' => '[license_url]',
-			'config_wgRightsText' => '[license_name]',
-			'config_wgRightsIcon' => '[license_button]',
-		] );
-		$styleUrl = $server . dirname( dirname( $this->parent->getUrl() ) ) .
-			'/mw-config/config-cc.css';
-		$iframeUrl = 'https://creativecommons.org/license/?' .
-			wfArrayToCgi( [
-				'partner' => 'MediaWiki',
-				'exit_url' => $exitUrl,
-				'lang' => $this->getVar( '_UserLang' ),
-				'stylesheet' => $styleUrl,
-			] );
-
-		return $iframeUrl;
-	}
-
-	/**
-	 * @return string
-	 */
-	public function getCCChooser() {
-		$iframeAttribs = [
-			'class' => 'config-cc-iframe',
-			'name' => 'config-cc-iframe',
-			'id' => 'config-cc-iframe',
-			'frameborder' => 0,
-			'width' => '100%',
-			'height' => '100%',
-		];
-		if ( $this->getVar( '_CCDone' ) ) {
-			$iframeAttribs['src'] = $this->parent->getUrl( [ 'ShowCC' => 'yes' ] );
-		} else {
-			$iframeAttribs['src'] = $this->getCCPartnerUrl();
-		}
-		$wrapperStyle = ( $this->getVar( '_LicenseCode' ) == 'cc-choose' ) ? '' : 'display: none';
-
-		return "<div class=\"config-cc-wrapper\" id=\"config-cc-wrapper\" style=\"$wrapperStyle\">\n" .
-			Html::element( 'iframe', $iframeAttribs ) .
-			"</div>\n";
-	}
-
-	/**
-	 * @return string
-	 */
-	public function getCCDoneBox() {
-		$js = "parent.document.getElementById('config-cc-wrapper').style.height = '$1';";
-		// If you change this height, also change it in config.css
-		$expandJs = str_replace( '$1', '54em', $js );
-		$reduceJs = str_replace( '$1', '70px', $js );
-
-		return '<p>' .
-			Html::element( 'img', [ 'src' => $this->getVar( 'wgRightsIcon' ) ] ) .
-			"\u{00A0}\u{00A0}" .
-			htmlspecialchars( $this->getVar( 'wgRightsText' ) ) .
-			"</p>\n" .
-			"<p style=\"text-align: center;\">" .
-			Html::element( 'a',
-				[
-					'href' => $this->getCCPartnerUrl(),
-					'onclick' => $expandJs,
-				],
-				wfMessage( 'config-cc-again' )->text()
-			) .
-			"</p>\n" .
-			"<script>\n" .
-			# Reduce the wrapper div height
-			htmlspecialchars( $reduceJs ) .
-			"\n" .
-			"</script>\n";
-	}
-
-	public function submitCC() {
-		$newValues = $this->parent->setVarsFromRequest(
-			[ 'wgRightsUrl', 'wgRightsText', 'wgRightsIcon' ] );
-		if ( count( $newValues ) != 3 ) {
-			$this->parent->showError( 'config-cc-error' );
-
-			return;
-		}
-		$this->setVar( '_CCDone', true );
-		$this->addHTML( $this->getCCDoneBox() );
-	}
-
-	/**
 	 * If the user skips this installer page, we still need to set up the default skins, but ignore
 	 * everything else.
 	 *
@@ -588,16 +493,10 @@ class WebInstallerOptions extends WebInstallerPage {
 		}
 
 		$code = $this->getVar( '_LicenseCode' );
-		if ( $code == 'cc-choose' ) {
-			if ( !$this->getVar( '_CCDone' ) ) {
-				$this->parent->showError( 'config-cc-not-chosen' );
-				$retVal = false;
-			}
-		} elseif ( array_key_exists( $code, $this->parent->licenses ) ) {
+		if ( array_key_exists( $code, $this->parent->licenses ) ) {
 			// Messages:
 			// config-license-cc-by, config-license-cc-by-sa, config-license-cc-by-nc-sa,
-			// config-license-cc-0, config-license-pd, config-license-gfdl, config-license-none,
-			// config-license-cc-choose
+			// config-license-cc-0, config-license-pd, config-license-gfdl, config-license-none
 			$entry = $this->parent->licenses[$code];
 			$this->setVar( 'wgRightsText',
 				$entry['text'] ?? wfMessage( 'config-license-' . $code )->text() );

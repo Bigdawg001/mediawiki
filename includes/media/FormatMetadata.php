@@ -25,6 +25,9 @@
  * @file
  */
 
+use MediaWiki\Api\ApiResult;
+use MediaWiki\Context\ContextSource;
+use MediaWiki\Context\IContextSource;
 use MediaWiki\HookContainer\ProtectedHookAccessorTrait;
 use MediaWiki\Html\Html;
 use MediaWiki\Logger\LoggerFactory;
@@ -344,6 +347,13 @@ class FormatMetadata extends ContextSource {
 					case 'DateTimeMetadata':
 					case 'FirstPhotoDate':
 					case 'LastPhotoDate':
+						if ( $val === null ) {
+							// T384879 - we don't need to call literal to turn this into a string, but
+							// we might as well call it for consistency and future proofing of the default value
+							$val = $this->literal( $val );
+							break;
+						}
+
 						if ( $val === '0000:00:00 00:00:00' || $val === '    :  :     :  :  ' ) {
 							$val = $this->msg( 'exif-unknowndate' )->text();
 							break;
@@ -459,6 +469,9 @@ class FormatMetadata extends ContextSource {
 						break;
 
 					case 'Flash':
+						if ( $val === '' ) {
+							$val = 0;
+						}
 						$flashDecode = [
 							'fired' => $val & 0b00000001,
 							'return' => ( $val & 0b00000110 ) >> 1,
@@ -1216,13 +1229,12 @@ class FormatMetadata extends ContextSource {
 	 * @param string $lang Lang code of item or false
 	 * @param bool $default If it is default value.
 	 * @param bool $noHtml If to avoid html (for back-compat)
-	 * @throws MWException
 	 * @return string Language item (Note: despite how this looks, this is
 	 *   treated as wikitext, not as HTML).
 	 */
 	private function langItem( $value, $lang, $default = false, $noHtml = false ) {
 		if ( $lang === false && $default === false ) {
-			throw new MWException( '$lang and $default cannot both be false.' );
+			throw new InvalidArgumentException( '$lang and $default cannot both be false.' );
 		}
 
 		if ( $noHtml ) {
@@ -1828,7 +1840,7 @@ class FormatMetadata extends ContextSource {
 
 		// otherwise just return any one language
 		unset( $value['_type'] );
-		if ( !empty( $value ) ) {
+		if ( $value ) {
 			return reset( $value );
 		}
 
@@ -1951,7 +1963,7 @@ class FormatMetadata extends ContextSource {
 		// drop all characters which are not valid in an XML tag name
 		// a bunch of non-ASCII letters would be valid but probably won't
 		// be used so we take the easy way
-		$key = preg_replace( '/[^a-zA-z0-9_:.\-]/', '', $key );
+		$key = preg_replace( '/[^a-zA-Z0-9_:.\-]/', '', $key );
 		// drop characters which are invalid at the first position
 		$key = preg_replace( '/^[\d\-.]+/', '', $key );
 

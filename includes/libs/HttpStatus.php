@@ -26,6 +26,18 @@
 class HttpStatus {
 
 	/**
+	 * @var null|callable
+	 */
+	private static $headersSentCallback = null;
+
+	public static function registerHeadersSentCallback( callable $callback ): ?callable {
+		$old = self::$headersSentCallback;
+		self::$headersSentCallback = $callback;
+
+		return $old;
+	}
+
+	/**
 	 * Get the message associated with an HTTP response status code
 	 *
 	 * @param int $code Status code
@@ -88,28 +100,51 @@ class HttpStatus {
 	}
 
 	/**
+	 * Construct an HTTP status code header
+	 *
+	 * @since 1.42
+	 * @param int $code Status code
+	 * @return string
+	 */
+	public static function getHeader( $code ): string {
+		static $version = null;
+		$message = self::getMessage( $code );
+		if ( $message === null ) {
+			throw new InvalidArgumentException( "Unknown HTTP status code $code" );
+		}
+
+		if ( $version === null ) {
+			$version = isset( $_SERVER['SERVER_PROTOCOL'] ) &&
+			$_SERVER['SERVER_PROTOCOL'] === 'HTTP/1.0' ?
+				'1.0' :
+				'1.1';
+		}
+
+		return "HTTP/$version $code $message";
+	}
+
+	/**
 	 * Output an HTTP status code header
 	 *
 	 * @since 1.26
 	 * @param int $code Status code
 	 */
 	public static function header( $code ) {
-		static $version = null;
-		$message = self::getMessage( $code );
-		if ( $message === null ) {
+		if ( headers_sent() ) {
+			if ( self::$headersSentCallback ) {
+				( self::$headersSentCallback )();
+				return;
+			}
+
+			// NOTE: If there is no custom callback, we continue normally and
+			//       rely on the implementation of header() to emit a warning.
+		}
+
+		try {
+			header( self::getHeader( $code ) );
+		} catch ( InvalidArgumentException $ex ) {
 			trigger_error( "Unknown HTTP status code $code", E_USER_WARNING );
-			return;
 		}
-
-		\MediaWiki\Request\HeaderCallback::warnIfHeadersSent();
-		if ( $version === null ) {
-			$version = isset( $_SERVER['SERVER_PROTOCOL'] ) &&
-				$_SERVER['SERVER_PROTOCOL'] === 'HTTP/1.0' ?
-					'1.0' :
-					'1.1';
-		}
-
-		header( "HTTP/$version $code $message" );
 	}
 
 }

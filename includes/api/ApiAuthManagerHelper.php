@@ -21,12 +21,19 @@
  * @since 1.27
  */
 
+namespace MediaWiki\Api;
+
 use MediaWiki\Auth\AuthenticationRequest;
 use MediaWiki\Auth\AuthenticationResponse;
 use MediaWiki\Auth\AuthManager;
 use MediaWiki\Auth\CreateFromLoginAuthenticationRequest;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
+use MediaWiki\Parser\Parser;
+use MediaWiki\User\UserIdentity;
+use MediaWiki\User\UserIdentityUtils;
+use UnexpectedValueException;
 use Wikimedia\ParamValidator\ParamValidator;
 
 /**
@@ -43,19 +50,27 @@ class ApiAuthManagerHelper {
 	/** @var string Message output format */
 	private $messageFormat;
 
-	/** @var AuthManager */
-	private $authManager;
+	private AuthManager $authManager;
+
+	private UserIdentityUtils $identityUtils;
 
 	/**
 	 * @param ApiBase $module API module, for context and parameters
 	 * @param AuthManager|null $authManager
+	 * @param UserIdentityUtils|null $identityUtils
 	 */
-	public function __construct( ApiBase $module, AuthManager $authManager = null ) {
+	public function __construct(
+		ApiBase $module,
+		?AuthManager $authManager = null,
+		?UserIdentityUtils $identityUtils = null
+	) {
 		$this->module = $module;
 
 		$params = $module->extractRequestParams();
 		$this->messageFormat = $params['messageformat'] ?? 'wikitext';
 		$this->authManager = $authManager ?: MediaWikiServices::getInstance()->getAuthManager();
+		// TODO: inject this as currently it's always taken from container
+		$this->identityUtils = $identityUtils ?: MediaWikiServices::getInstance()->getUserIdentityUtils();
 	}
 
 	/**
@@ -64,7 +79,7 @@ class ApiAuthManagerHelper {
 	 * @param AuthManager|null $authManager
 	 * @return ApiAuthManagerHelper
 	 */
-	public static function newForModule( ApiBase $module, AuthManager $authManager = null ) {
+	public static function newForModule( ApiBase $module, ?AuthManager $authManager = null ) {
 		return new self( $module, $authManager );
 	}
 
@@ -243,23 +258,21 @@ class ApiAuthManagerHelper {
 	/**
 	 * Logs successful or failed authentication.
 	 * @param string $event Event type (e.g. 'accountcreation')
-	 * @param string|AuthenticationResponse $result Response or error message
+	 * @param UserIdentity $performer
+	 * @param AuthenticationResponse $result Response or error message
 	 */
-	public function logAuthenticationResult( $event, $result ) {
-		if ( is_string( $result ) ) {
-			$status = Status::newFatal( $result );
-		} elseif ( $result->status === AuthenticationResponse::PASS ) {
-			$status = Status::newGood();
-		} elseif ( $result->status === AuthenticationResponse::FAIL ) {
-			$status = Status::newFatal( $result->message );
-		} else {
+	public function logAuthenticationResult( $event, UserIdentity $performer, AuthenticationResponse $result ) {
+		if ( !in_array( $result->status, [ AuthenticationResponse::PASS, AuthenticationResponse::FAIL ] ) ) {
 			return;
 		}
+		$accountType = $this->identityUtils->getShortUserTypeInternal( $performer );
 
 		$module = $this->module->getModuleName();
 		LoggerFactory::getInstance( 'authevents' )->info( "$module API attempt", [
 			'event' => $event,
-			'status' => strval( $status ),
+			'successful' => $result->status === AuthenticationResponse::PASS,
+			'status' => $result->message ? $result->message->getKey() : '-',
+			'accountType' => $accountType,
 			'module' => $module,
 		] );
 	}
@@ -405,3 +418,6 @@ class ApiAuthManagerHelper {
 		return $ret;
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiAuthManagerHelper::class, 'ApiAuthManagerHelper' );

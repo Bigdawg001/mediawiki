@@ -1,10 +1,14 @@
 <?php
 
+use MediaWiki\Title\Title;
+use MediaWiki\User\User;
+
 /**
  * Integration test for T277618.
  *
  * Add @noVarDump annotations to large properties if these tests fail.
  *
+ * @group Database
  * @coversNothing
  */
 class DumpableObjectsTest extends MediaWikiIntegrationTestCase {
@@ -22,13 +26,13 @@ class DumpableObjectsTest extends MediaWikiIntegrationTestCase {
 	}
 
 	public function testUser() {
-		$u = $this->getTestUser()->getUser();
+		$u = new User();
 		$u->isAllowed( 'read' );
 		$this->assertLessThan( 100000, $this->dumpSize( $u ) );
 	}
 
 	public function testTitle() {
-		$object = Title::newFromText( 'Test' );
+		$object = Title::makeTitle( NS_MAIN, 'Test' );
 		$this->assertLessThan( 100000, $this->dumpSize( $object ) );
 	}
 

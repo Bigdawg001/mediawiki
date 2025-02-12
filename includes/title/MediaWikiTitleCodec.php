@@ -20,11 +20,19 @@
  * @file
  * @author Daniel Kinzler
  */
+
+namespace MediaWiki\Title;
+
+use InvalidArgumentException;
+use LogicException;
+use MediaWiki\Cache\GenderCache;
 use MediaWiki\Interwiki\InterwikiLookup;
-use MediaWiki\Linker\LinkTarget;
+use MediaWiki\Language\Language;
+use MediaWiki\Message\Message;
 use MediaWiki\Page\PageReference;
-use MediaWiki\Title\Title;
+use MediaWiki\Parser\Sanitizer;
 use Wikimedia\IPUtils;
+use Wikimedia\Parsoid\Core\LinkTarget;
 
 /**
  * A codec for MediaWiki page titles.
@@ -38,20 +46,12 @@ use Wikimedia\IPUtils;
  * @since 1.23
  */
 class MediaWikiTitleCodec implements TitleFormatter, TitleParser {
-	/** @var Language */
-	protected $language;
-
-	/** @var GenderCache */
-	protected $genderCache;
-
+	protected Language $language;
+	protected GenderCache $genderCache;
 	/** @var string[] */
-	protected $localInterwikis;
-
-	/** @var InterwikiLookup */
-	protected $interwikiLookup;
-
-	/** @var NamespaceInfo */
-	protected $nsInfo;
+	protected array $localInterwikis;
+	protected InterwikiLookup $interwikiLookup;
+	protected NamespaceInfo $nsInfo;
 
 	/**
 	 * The code here can throw MalformedTitleException, which cannot be created in
@@ -101,7 +101,7 @@ class MediaWikiTitleCodec implements TitleFormatter, TitleParser {
 	public function overrideCreateMalformedTitleExceptionCallback( callable $callback ) {
 		// @codeCoverageIgnoreStart
 		if ( !defined( 'MW_PHPUNIT_TEST' ) ) {
-			throw new RuntimeException( __METHOD__ . ' can only be used in tests' );
+			throw new LogicException( __METHOD__ . ' can only be used in tests' );
 		}
 		// @codeCoverageIgnoreEnd
 		$this->createMalformedTitleException = $callback;
@@ -177,7 +177,7 @@ class MediaWikiTitleCodec implements TitleFormatter, TitleParser {
 	 * Parses the given text and constructs a TitleValue.
 	 *
 	 * @param string $text The text to parse
-	 * @param int $defaultNamespace Namespace to assume per default (usually NS_MAIN)
+	 * @param int $defaultNamespace Namespace to assume by default (usually NS_MAIN)
 	 *
 	 * @throws MalformedTitleException
 	 * @return TitleValue
@@ -383,7 +383,7 @@ class MediaWikiTitleCodec implements TitleFormatter, TitleParser {
 		);
 		$dbkey = trim( $dbkey, '_' );
 
-		if ( strpos( $dbkey, UtfNormal\Constants::UTF8_REPLACEMENT ) !== false ) {
+		if ( strpos( $dbkey, \UtfNormal\Constants::UTF8_REPLACEMENT ) !== false ) {
 			# Contained illegal UTF-8 sequences or forbidden Unicode chars.
 			$exception = ( $this->createMalformedTitleException )( 'title-invalid-utf8', $text );
 			throw $exception;
@@ -427,7 +427,7 @@ class MediaWikiTitleCodec implements TitleFormatter, TitleParser {
 						} elseif ( $this->interwikiLookup->isValidInterwiki( $x[1] ) ) {
 							# Disallow Talk:Interwiki:x type titles...
 							$exception = ( $this->createMalformedTitleException )(
-								'title-invalid-talk-namespace',
+								'title-invalid-talk-interwiki',
 								$text
 							);
 							throw $exception;
@@ -527,7 +527,7 @@ class MediaWikiTitleCodec implements TitleFormatter, TitleParser {
 			$exception = ( $this->createMalformedTitleException )(
 				'title-invalid-too-long',
 				$text,
-				[ Message::numParam( $maxLength ) ]
+				[ Message::numParam( $maxLength ), Message::numParam( strlen( $dbkey ) ) ]
 			);
 			throw $exception;
 		}
@@ -611,3 +611,6 @@ class MediaWikiTitleCodec implements TitleFormatter, TitleParser {
 		return $rxTc;
 	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( MediaWikiTitleCodec::class, 'MediaWikiTitleCodec' );

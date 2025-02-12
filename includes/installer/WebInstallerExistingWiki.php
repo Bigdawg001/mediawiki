@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,6 +19,10 @@
  * @file
  * @ingroup Installer
  */
+
+namespace MediaWiki\Installer;
+
+use MediaWiki\Status\Status;
 
 class WebInstallerExistingWiki extends WebInstallerPage {
 
@@ -51,12 +56,7 @@ class WebInstallerExistingWiki extends WebInstallerPage {
 
 		// If there is no $wgUpgradeKey, tell the user to add one to LocalSettings.php
 		if ( $vars['wgUpgradeKey'] === false ) {
-			if ( $this->getVar( 'wgUpgradeKey', false ) === false ) {
-				$secretKey = $this->getVar( 'wgSecretKey' ); // preserve $wgSecretKey
-				$this->parent->generateKeys();
-				$this->setVar( 'wgSecretKey', $secretKey );
-				$this->setVar( '_UpgradeKeySupplied', true );
-			}
+			$this->setVar( '_UpgradeKeySupplied', true );
 			$this->startForm();
 			$this->addHTML( $this->parent->getInfoBox(
 				wfMessage( 'config-upgrade-key-missing', "<pre dir=\"ltr\">\$wgUpgradeKey = '" .
@@ -105,6 +105,7 @@ class WebInstallerExistingWiki extends WebInstallerPage {
 			'<br />' .
 			$this->parent->getTextBox( [
 				'var' => 'wgUpgradeKey',
+				'value' => '',
 				'label' => 'config-localsettings-key',
 				'attribs' => [ 'autocomplete' => 'off' ],
 			] )
@@ -158,7 +159,7 @@ class WebInstallerExistingWiki extends WebInstallerPage {
 		$this->setVar( '_InstallPassword', $vars['wgDBadminpassword'] ?? $vars['wgDBpassword'] );
 
 		// Test the database connection
-		$status = $installer->getConnection();
+		$status = $installer->getConnection( DatabaseInstaller::CONN_CREATE_DATABASE );
 		if ( !$status->isOK() ) {
 			// Adjust the error message to explain things correctly
 			$status->replaceMessage( 'config-connection-error',

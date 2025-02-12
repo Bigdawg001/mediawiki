@@ -20,6 +20,8 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
 use MediaWiki\CommentFormatter\RowCommentFormatter;
 use MediaWiki\CommentStore\CommentStore;
 use MediaWiki\MainConfigNames;
@@ -34,21 +36,12 @@ use Wikimedia\ParamValidator\TypeDef\IntegerDef;
  */
 class ApiQueryProtectedTitles extends ApiQueryGeneratorBase {
 
-	/** @var CommentStore */
-	private $commentStore;
+	private CommentStore $commentStore;
+	private RowCommentFormatter $commentFormatter;
 
-	/** @var RowCommentFormatter */
-	private $commentFormatter;
-
-	/**
-	 * @param ApiQuery $query
-	 * @param string $moduleName
-	 * @param CommentStore $commentStore
-	 * @param RowCommentFormatter $commentFormatter
-	 */
 	public function __construct(
 		ApiQuery $query,
-		$moduleName,
+		string $moduleName,
 		CommentStore $commentStore,
 		RowCommentFormatter $commentFormatter
 	) {
@@ -233,6 +226,10 @@ class ApiQueryProtectedTitles extends ApiQueryGeneratorBase {
 					'older'
 				],
 				ApiBase::PARAM_HELP_MSG => 'api-help-param-direction',
+				ApiBase::PARAM_HELP_MSG_PER_VALUE => [
+					'newer' => 'api-help-paramvalue-direction-newer',
+					'older' => 'api-help-paramvalue-direction-older',
+				],
 			],
 			'start' => [
 				ParamValidator::PARAM_TYPE => 'timestamp'
@@ -273,3 +270,6 @@ class ApiQueryProtectedTitles extends ApiQueryGeneratorBase {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Protectedtitles';
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiQueryProtectedTitles::class, 'ApiQueryProtectedTitles' );

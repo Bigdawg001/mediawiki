@@ -26,19 +26,17 @@
 namespace MediaWiki\Storage;
 
 use AppendIterator;
-use DBAccessObjectUtils;
 use ExternalStoreAccess;
+use ExternalStoreException;
 use HistoryBlobUtils;
-use IDBAccessObject;
 use InvalidArgumentException;
-use MWException;
 use StatusValue;
-use WANObjectCache;
 use Wikimedia\Assert\Assert;
-use Wikimedia\AtEase\AtEase;
+use Wikimedia\ObjectCache\WANObjectCache;
+use Wikimedia\Rdbms\DBAccessObjectUtils;
 use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IDBAccessObject;
 use Wikimedia\Rdbms\ILoadBalancer;
-use Wikimedia\Rdbms\IResultWrapper;
 
 /**
  * Service for storing and loading Content objects representing revision data blobs.
@@ -48,10 +46,13 @@ use Wikimedia\Rdbms\IResultWrapper;
  * @note This was written to act as a drop-in replacement for the corresponding
  *       static methods in the old Revision class (which was later removed in 1.37).
  */
-class SqlBlobStore implements IDBAccessObject, BlobStore {
+class SqlBlobStore implements BlobStore {
 
 	// Note: the name has been taken unchanged from the old Revision class.
 	public const TEXT_CACHE_GROUP = 'revisiontext:10';
+
+	/** @internal */
+	public const DEFAULT_TTL = 7 * 24 * 3600; // 7 days
 
 	/**
 	 * @var ILoadBalancer
@@ -76,7 +77,7 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 	/**
 	 * @var int
 	 */
-	private $cacheExpiry = 604800; // 7 days
+	private $cacheExpiry = self::DEFAULT_TTL;
 
 	/**
 	 * @var bool
@@ -117,28 +118,28 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 	}
 
 	/**
-	 * @return int time for which blobs can be cached, in seconds
+	 * @return int Time for which blobs can be cached, in seconds
 	 */
 	public function getCacheExpiry() {
 		return $this->cacheExpiry;
 	}
 
 	/**
-	 * @param int $cacheExpiry time for which blobs can be cached, in seconds
+	 * @param int $cacheExpiry Time for which blobs can be cached, in seconds
 	 */
 	public function setCacheExpiry( int $cacheExpiry ) {
 		$this->cacheExpiry = $cacheExpiry;
 	}
 
 	/**
-	 * @return bool whether blobs should be compressed for storage
+	 * @return bool Whether blobs should be compressed for storage
 	 */
 	public function getCompressBlobs() {
 		return $this->compressBlobs;
 	}
 
 	/**
-	 * @param bool $compressBlobs whether blobs should be compressed for storage
+	 * @param bool $compressBlobs Whether blobs should be compressed for storage
 	 */
 	public function setCompressBlobs( $compressBlobs ) {
 		$this->compressBlobs = $compressBlobs;
@@ -192,7 +193,7 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 	 */
 	private function getDBConnection( $index ) {
 		$lb = $this->getDBLoadBalancer();
-		return $lb->getConnectionRef( $index, [], $this->dbDomain );
+		return $lb->getConnection( $index, [], $this->dbDomain );
 	}
 
 	/**
@@ -206,39 +207,35 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 	 * @return string an address that can be used with getBlob() to retrieve the data.
 	 */
 	public function storeBlob( $data, $hints = [] ) {
-		try {
-			$flags = $this->compressData( $data );
+		$flags = $this->compressData( $data );
 
-			# Write to external storage if required
-			if ( $this->useExternalStore ) {
-				// Store and get the URL
+		# Write to external storage if required
+		if ( $this->useExternalStore ) {
+			// Store and get the URL
+			try {
 				$data = $this->extStoreAccess->insert( $data, [ 'domain' => $this->dbDomain ] );
-				if ( !$data ) {
-					throw new BlobAccessException( "Failed to store text to external storage" );
-				}
-				if ( $flags ) {
-					$flags .= ',';
-				}
-				$flags .= 'external';
-
-				// TODO: we could also return an address for the external store directly here.
-				// That would mean bypassing the text table entirely when the external store is
-				// used. We'll need to assess expected fallout before doing that.
+			} catch ( ExternalStoreException $e ) {
+				throw new BlobAccessException( $e->getMessage(), 0, $e );
 			}
-
+			if ( !$data ) {
+				throw new BlobAccessException( "Failed to store text to external storage" );
+			}
+			if ( $flags ) {
+				return 'es:' . $data . '?flags=' . $flags;
+			} else {
+				return 'es:' . $data;
+			}
+		} else {
 			$dbw = $this->getDBConnection( DB_PRIMARY );
 
-			$dbw->insert(
-				'text',
-				[ 'old_text' => $data, 'old_flags' => $flags ],
-				__METHOD__
-			);
+			$dbw->newInsertQueryBuilder()
+				->insertInto( 'text' )
+				->row( [ 'old_text' => $data, 'old_flags' => $flags ] )
+				->caller( __METHOD__ )->execute();
 
 			$textId = $dbw->insertId();
 
 			return self::makeAddressFromTextId( $textId );
-		} catch ( MWException $e ) {
-			throw new BlobAccessException( $e->getMessage(), 0, $e );
 		}
 	}
 
@@ -336,7 +333,7 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 		$errors = [];
 		foreach ( $blobAddresses as $blobAddress ) {
 			try {
-				[ $schema, $id ] = self::splitBlobAddress( $blobAddress );
+				[ $schema, $id, $params ] = self::splitBlobAddress( $blobAddress );
 			} catch ( InvalidArgumentException $ex ) {
 				throw new BlobAccessException(
 					$ex->getMessage() . '. Use findBadBlobs.php to remedy.',
@@ -345,8 +342,21 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 				);
 			}
 
-			// TODO: MCR: also support 'ex' schema with ExternalStore URLs, plus flags encoded in the URL!
-			if ( $schema === 'bad' ) {
+			if ( $schema === 'es' ) {
+				if ( $params && isset( $params['flags'] ) ) {
+					$blob = $this->expandBlob( $id, $params['flags'] . ',external', $blobAddress );
+				} else {
+					$blob = $this->expandBlob( $id, 'external', $blobAddress );
+				}
+
+				if ( $blob === false ) {
+					$errors[$blobAddress] = [
+						'internalerror',
+						"Bad data in external store address $id. Use findBadBlobs.php to remedy."
+					];
+				}
+				$result[$blobAddress] = $blob;
+			} elseif ( $schema === 'bad' ) {
 				// Database row was marked as "known bad"
 				wfDebug(
 					__METHOD__
@@ -384,24 +394,20 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 		}
 		// Callers doing updates will pass in READ_LATEST as usual. Since the text/blob tables
 		// do not normally get rows changed around, set READ_LATEST_IMMUTABLE in those cases.
-		$queryFlags |= DBAccessObjectUtils::hasFlags( $queryFlags, self::READ_LATEST )
-			? self::READ_LATEST_IMMUTABLE
+		$queryFlags |= DBAccessObjectUtils::hasFlags( $queryFlags, IDBAccessObject::READ_LATEST )
+			? IDBAccessObject::READ_LATEST_IMMUTABLE
 			: 0;
 		[ $index, $options, $fallbackIndex, $fallbackOptions ] =
-			DBAccessObjectUtils::getDBOptions( $queryFlags );
+			self::getDBOptions( $queryFlags );
 		// Text data is immutable; check replica DBs first.
 		$dbConnection = $this->getDBConnection( $index );
-		$rows = $dbConnection->select(
-			'text',
-			[ 'old_id', 'old_text', 'old_flags' ],
-			[ 'old_id' => $textIds ],
-			__METHOD__,
-			$options
-		);
-		$numRows = 0;
-		if ( $rows instanceof IResultWrapper ) {
-			$numRows = $rows->numRows();
-		}
+		$rows = $dbConnection->newSelectQueryBuilder()
+			->select( [ 'old_id', 'old_text', 'old_flags' ] )
+			->from( 'text' )
+			->where( [ 'old_id' => $textIds ] )
+			->options( $options )
+			->caller( __METHOD__ )->fetchResultSet();
+		$numRows = $rows->numRows();
 
 		// Fallback to DB_PRIMARY in some cases if not all the rows were found, using the appropriate
 		// options, such as FOR UPDATE to avoid missing rows due to REPEATABLE-READ.
@@ -412,13 +418,12 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 			}
 			$missingTextIds = array_diff( $textIds, $fetchedTextIds );
 			$dbConnection = $this->getDBConnection( $fallbackIndex );
-			$rowsFromFallback = $dbConnection->select(
-				'text',
-				[ 'old_id', 'old_text', 'old_flags' ],
-				[ 'old_id' => $missingTextIds ],
-				__METHOD__,
-				$fallbackOptions
-			);
+			$rowsFromFallback = $dbConnection->newSelectQueryBuilder()
+				->select( [ 'old_id', 'old_text', 'old_flags' ] )
+				->from( 'text' )
+				->where( [ 'old_id' => $missingTextIds ] )
+				->options( $fallbackOptions )
+				->caller( __METHOD__ )->fetchResultSet();
 			$appendIterator = new AppendIterator();
 			$appendIterator->append( $rows );
 			$appendIterator->append( $rowsFromFallback );
@@ -453,6 +458,36 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 			}
 		}
 		return [ $result, $errors ];
+	}
+
+	private static function getDBOptions( $bitfield ) {
+		if ( DBAccessObjectUtils::hasFlags( $bitfield, IDBAccessObject::READ_LATEST_IMMUTABLE ) ) {
+			$index = DB_REPLICA; // override READ_LATEST if set
+			$fallbackIndex = DB_PRIMARY;
+		} elseif ( DBAccessObjectUtils::hasFlags( $bitfield, IDBAccessObject::READ_LATEST ) ) {
+			$index = DB_PRIMARY;
+			$fallbackIndex = null;
+		} else {
+			$index = DB_REPLICA;
+			$fallbackIndex = null;
+		}
+
+		$lockingOptions = [];
+		if ( DBAccessObjectUtils::hasFlags( $bitfield, IDBAccessObject::READ_EXCLUSIVE ) ) {
+			$lockingOptions[] = 'FOR UPDATE';
+		} elseif ( DBAccessObjectUtils::hasFlags( $bitfield, IDBAccessObject::READ_LOCKING ) ) {
+			$lockingOptions[] = 'LOCK IN SHARE MODE';
+		}
+
+		if ( $fallbackIndex !== null ) {
+			$options = []; // locks on DB_REPLICA make no sense
+			$fallbackOptions = $lockingOptions;
+		} else {
+			$options = $lockingOptions;
+			$fallbackOptions = []; // no fallback
+		}
+
+		return [ $index, $options, $fallbackIndex, $fallbackOptions ];
 	}
 
 	/**
@@ -529,21 +564,21 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 				return $this->cache->getWithSetCallback(
 					$this->getCacheKey( $blobAddress ),
 					$this->getCacheTTL(),
-					function () use ( $url, $flags ) {
+					function () use ( $url, $flags, $blobAddress ) {
 						// Ignore $setOpts; blobs are immutable and negatives are not cached
 						$blob = $this->extStoreAccess
 							->fetchFromURL( $url, [ 'domain' => $this->dbDomain ] );
 
-						return $blob === false ? false : $this->decompressData( $blob, $flags );
+						return $blob === false ? false : $this->decompressData( $blob, $flags, $blobAddress );
 					},
 					$this->getCacheOptions()
 				);
 			} else {
 				$blob = $this->extStoreAccess->fetchFromURL( $url, [ 'domain' => $this->dbDomain ] );
-				return $blob === false ? false : $this->decompressData( $blob, $flags );
+				return $blob === false ? false : $this->decompressData( $blob, $flags, $blobAddress );
 			}
 		} else {
-			return $this->decompressData( $raw, $flags );
+			return $this->decompressData( $raw, $flags, $blobAddress );
 		}
 	}
 
@@ -600,23 +635,26 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 	 * @param array $blobFlags Compression flags, such as 'gzip'.
 	 *   Note that not including 'utf-8' in $blobFlags will cause the data to be decoded
 	 *   according to the legacy encoding specified via setLegacyEncoding.
+	 * @param string|null $blobAddress Used for log message
 	 *
-	 * @return string|bool Decompressed text, or false on failure
+	 * @return string|false Decompressed text, or false on failure
 	 */
-	public function decompressData( string $blob, array $blobFlags ) {
+	public function decompressData( string $blob, array $blobFlags, ?string $blobAddress = null ) {
 		if ( in_array( 'error', $blobFlags ) ) {
 			// Error row, return false
 			return false;
 		}
 
+		// Deal with optional compression of archived pages.
+		// This can be done periodically via maintenance/compressOld.php, and
+		// as pages are saved if $wgCompressRevisions is set.
 		if ( in_array( 'gzip', $blobFlags ) ) {
-			# Deal with optional compression of archived pages.
-			# This can be done periodically via maintenance/compressOld.php, and
-			# as pages are saved if $wgCompressRevisions is set.
-			$blob = gzinflate( $blob );
-
+			// Silence native warning in favour of more detailed warning (T380347)
+			// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			$blob = @gzinflate( $blob );
 			if ( $blob === false ) {
-				wfWarn( __METHOD__ . ': gzinflate() failed' );
+				wfWarn( __METHOD__ . ': gzinflate() failed' .
+					( $blobAddress ? ' (at blob address ' . $blobAddress . ')' : '' ) );
 				return false;
 			}
 		}
@@ -635,17 +673,17 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 		if ( $blob !== false && $this->legacyEncoding
 			&& !in_array( 'utf-8', $blobFlags ) && !in_array( 'utf8', $blobFlags )
 		) {
-			# Old revisions kept around in a legacy encoding?
-			# Upconvert on demand.
-			# ("utf8" checked for compatibility with some broken
-			#  conversion scripts 2008-12-30)
-			# Even with //IGNORE iconv can whine about illegal characters in
-			# *input* string. We just ignore those too.
-			# REF: https://bugs.php.net/bug.php?id=37166
-			# REF: https://phabricator.wikimedia.org/T18885
-			AtEase::suppressWarnings();
-			$blob = iconv( $this->legacyEncoding, 'UTF-8//IGNORE', $blob );
-			AtEase::restoreWarnings();
+			// - Old revisions kept around in a legacy encoding?
+			//   Upconvert on demand.
+			// - "utf8" checked for compatibility with some broken
+			//   conversion scripts 2008-12-30.
+			// - Even with "//IGNORE" iconv can whine about illegal characters in
+			//   *input* string. We just ignore those too.
+			//   Ref https://bugs.php.net/bug.php?id=37166
+			//   Ref https://phabricator.wikimedia.org/T18885
+			//
+			// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
+			$blob = @iconv( $this->legacyEncoding, 'UTF-8//IGNORE', $blob );
 		}
 
 		return $blob;
@@ -741,7 +779,6 @@ class SqlBlobStore implements IDBAccessObject, BlobStore {
 	 *
 	 * @param string $address
 	 *
-	 * @throws InvalidArgumentException
 	 * @return array [ $schema, $id, $parameters ], with $parameters being an assoc array.
 	 */
 	public static function splitBlobAddress( $address ) {

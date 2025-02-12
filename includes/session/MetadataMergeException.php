@@ -46,7 +46,7 @@ class MetadataMergeException extends UnexpectedValueException {
 	public function __construct(
 		$message = '',
 		$code = 0,
-		Exception $previous = null,
+		?Exception $previous = null,
 		array $context = []
 	) {
 		parent::__construct( $message, $code, $previous );
@@ -63,7 +63,6 @@ class MetadataMergeException extends UnexpectedValueException {
 
 	/**
 	 * Set context data.
-	 * @param array $context
 	 */
 	public function setContext( array $context ) {
 		$this->context = $context;

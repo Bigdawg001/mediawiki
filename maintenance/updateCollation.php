@@ -24,15 +24,19 @@
  * @author Aryeh Gregor (Simetrical)
  */
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
+use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MainConfigNames;
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\Storage\NameTableStore;
+use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\Title\Title;
 use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\IMaintainableDatabase;
 use Wikimedia\Rdbms\IResultWrapper;
-use Wikimedia\Rdbms\LBFactory;
 
 /**
  * Maintenance script that will find all rows in the categorylinks table
@@ -48,10 +52,10 @@ class UpdateCollation extends Maintenance {
 	private $numRowsProcessed = 0;
 
 	/** @var bool */
-	private $dryRun;
+	private $force;
 
 	/** @var bool */
-	private $force;
+	private $dryRun;
 
 	/** @var bool */
 	private $verboseStats;
@@ -65,14 +69,13 @@ class UpdateCollation extends Maintenance {
 	/** @var string|null */
 	private $targetTable;
 
+	private bool $normalization = false;
+
 	/** @var IDatabase */
 	private $dbr;
 
 	/** @var IMaintainableDatabase */
 	private $dbw;
-
-	/** @var LBFactory */
-	private $lbFactory;
 
 	/** @var NamespaceInfo */
 	private $namespaceInfo;
@@ -102,6 +105,8 @@ TEXT
 			false, true );
 		$this->addOption( 'target-table', 'Copy rows from categorylinks into the ' .
 			'specified table instead of updating them in place.', false, true );
+		$this->addOption( 'only-migrate-normalization', 'Only backfill cl_collation_id ' .
+			'field from cl_collation', false );
 		$this->addOption( 'remote', 'Use Shellbox to calculate the new sort keys ' .
 			'remotely.' );
 		$this->addOption( 'dry-run', 'Don\'t actually change the collations, just ' .
@@ -113,9 +118,8 @@ TEXT
 	 * Get services and initialise member variables
 	 */
 	private function init() {
-		$services = MediaWikiServices::getInstance();
+		$services = $this->getServiceContainer();
 		$this->namespaceInfo = $services->getNamespaceInfo();
-		$this->lbFactory = $services->getDBLoadBalancerFactory();
 
 		if ( $this->hasOption( 'target-collation' ) ) {
 			$this->collationName = $this->getOption( 'target-collation' );
@@ -136,14 +140,20 @@ TEXT
 		$this->force = $this->getOption( 'force' );
 		$this->dryRun = $this->getOption( 'dry-run' );
 		$this->verboseStats = $this->getOption( 'verbose-stats' );
-		$this->dbw = $this->getDB( DB_PRIMARY );
-		$this->dbr = $this->getDB( DB_REPLICA );
+		$this->dbw = $this->getPrimaryDB();
+		$this->dbr = $this->getReplicaDB();
 		$this->targetTable = $this->getOption( 'target-table' );
+		$this->normalization = $this->getOption( 'only-migrate-normalization', false );
 	}
 
 	public function execute() {
 		$this->init();
 		$batchSize = $this->getBatchSize();
+
+		if ( $this->normalization ) {
+			$this->runNormalizationMigration();
+			return;
+		}
 
 		if ( $this->targetTable ) {
 			if ( !$this->dbw->tableExists( $this->targetTable, __METHOD__ ) ) {
@@ -156,60 +166,21 @@ TEXT
 			}
 		}
 
-		// Locally at least, (my local is a rather old version of mysql)
-		// mysql seems to filesort if there is both an equality
-		// (but not for an inequality) condition on cl_collation in the
-		// WHERE and it is also the first item in the ORDER BY.
-		if ( $this->hasOption( 'previous-collation' ) ) {
-			$orderBy = 'cl_to, cl_type, cl_from';
-		} else {
-			$orderBy = 'cl_collation, cl_to, cl_type, cl_from';
-		}
-		$options = [
-			'LIMIT' => $batchSize,
-			'ORDER BY' => $orderBy,
-			'STRAIGHT_JOIN' // per T58041
-		];
-
 		$collationConds = [];
 		if ( !$this->force && !$this->targetTable ) {
 			if ( $this->hasOption( 'previous-collation' ) ) {
 				$collationConds['cl_collation'] = $this->getOption( 'previous-collation' );
 			} else {
-				$collationConds = [
-					0 => 'cl_collation != ' . $this->dbr->addQuotes( $this->collationName )
-				];
-			}
-
-			$count = $this->dbr->estimateRowCount(
-				'categorylinks',
-				'*',
-				$collationConds,
-				__METHOD__
-			);
-			// Improve estimate if feasible
-			if ( $count < 1000000 ) {
-				$count = $this->dbr->selectField(
-					'categorylinks',
-					'COUNT(*)',
-					$collationConds,
-					__METHOD__
-				);
-			}
-			if ( $count == 0 ) {
-				$this->output( "Collations up-to-date.\n" );
-
-				return;
-			}
-			if ( $this->dryRun ) {
-				$this->output( "$count rows would be updated.\n" );
-			} else {
-				$this->output( "Fixing collation for $count rows.\n" );
+				$collationConds[] = $this->dbr->expr( 'cl_collation', '!=', $this->collationName );
 			}
 		}
-		$batchConds = [];
+		$maxPageId = (int)$this->dbr->newSelectQueryBuilder()
+			->select( 'MAX(page_id)' )
+			->from( 'page' )
+			->caller( __METHOD__ )->fetchField();
+		$batchValue = 0;
 		do {
-			$this->output( "Selecting next $batchSize rows..." );
+			$this->output( "Selecting next $batchSize pages from cl_from = $batchValue... " );
 
 			// cl_type must be selected as a number for proper paging because
 			// enums suck.
@@ -218,18 +189,23 @@ TEXT
 			} else {
 				$clType = 'cl_type';
 			}
-			$res = $this->dbw->select(
-				[ 'categorylinks', 'page' ],
-				[
+			$res = $this->dbw->newSelectQueryBuilder()
+				->select( [
 					'cl_from', 'cl_to', 'cl_sortkey_prefix', 'cl_collation',
 					'cl_sortkey', $clType, 'cl_timestamp',
 					'page_namespace', 'page_title'
-				],
-				array_merge( $collationConds, $batchConds, [ 'cl_from = page_id' ] ),
-				__METHOD__,
-				$options
-			);
-			$this->output( " processing..." );
+				] )
+				->from( 'categorylinks' )
+				// per T58041
+				->straightJoin( 'page', null, 'cl_from = page_id' )
+				->where( $collationConds )
+				->andWhere(
+					$this->dbw->expr( 'cl_from', '>=', $batchValue )
+						->and( 'cl_from', '<', $batchValue + $this->getBatchSize() )
+				)
+				->orderBy( 'cl_from' )
+				->caller( __METHOD__ )->fetchResultSet();
+			$this->output( "processing... " );
 
 			if ( $res->numRows() ) {
 				if ( $this->targetTable ) {
@@ -237,17 +213,15 @@ TEXT
 				} else {
 					$this->updateBatch( $res );
 				}
-				$res->seek( $res->numRows() - 1 );
-				$lastRow = $res->fetchObject();
-				$batchConds = [ $this->getBatchCondition( $lastRow, $this->dbw ) ];
 			}
+			$batchValue += $this->getBatchSize();
 
 			if ( $this->dryRun ) {
 				$this->output( "{$this->numRowsProcessed} rows would be updated so far.\n" );
 			} else {
 				$this->output( "{$this->numRowsProcessed} done.\n" );
 			}
-		} while ( $res->numRows() == $batchSize );
+		} while ( $maxPageId >= $batchValue );
 
 		if ( !$this->dryRun ) {
 			$this->output( "{$this->numRowsProcessed} rows processed\n" );
@@ -260,39 +234,9 @@ TEXT
 	}
 
 	/**
-	 * Return an SQL expression selecting rows which sort above the given row,
-	 * assuming an ordering of cl_collation, cl_to, cl_type, cl_from
-	 * @param stdClass $row
-	 * @param IDatabase $dbw
-	 * @return string
-	 */
-	private function getBatchCondition( $row, $dbw ) {
-		if ( $this->hasOption( 'previous-collation' ) ) {
-			$fields = [ 'cl_to', 'cl_type', 'cl_from' ];
-		} else {
-			$fields = [ 'cl_collation', 'cl_to', 'cl_type', 'cl_from' ];
-		}
-		$conds = [];
-		foreach ( $fields as $field ) {
-			if ( $dbw->getType() === 'mysql' && $field === 'cl_type' ) {
-				// Range conditions with enums are weird in mysql
-				// This must be a numeric literal, or it won't work.
-				$value = intval( $row->cl_type_numeric );
-			} else {
-				$value = $row->$field;
-			}
-			$conds[ $field ] = $value;
-		}
-
-		return $dbw->buildComparison( '>', $conds );
-	}
-
-	/**
 	 * Update a set of rows in the categorylinks table
-	 *
-	 * @param IResultWrapper $res The rows to update
 	 */
-	private function updateBatch( $res ) {
+	private function updateBatch( IResultWrapper $res ) {
 		if ( !$this->dryRun ) {
 			$this->beginTransaction( $this->dbw, __METHOD__ );
 		}
@@ -301,12 +245,12 @@ TEXT
 			if ( !$row->cl_collation ) {
 				# This is an old-style row, so the sortkey needs to be
 				# converted.
-				if ( $row->cl_sortkey == $title->getText()
-					|| $row->cl_sortkey == $title->getPrefixedText()
+				if ( $row->cl_sortkey === $title->getText()
+					|| $row->cl_sortkey === $title->getPrefixedText()
 				) {
 					$prefix = '';
 				} else {
-					# Custom sortkey, use it as a prefix
+					# Custom sortkey, so use it as a prefix
 					$prefix = $row->cl_sortkey;
 				}
 			} else {
@@ -326,18 +270,18 @@ TEXT
 				// other fields, if any, those usually only happen when upgrading old MediaWikis.)
 				$this->numRowsProcessed += ( $row->cl_sortkey !== $newSortKey );
 			} else {
-				$this->dbw->update(
-					'categorylinks',
-					[
+				$this->dbw->newUpdateQueryBuilder()
+					->update( 'categorylinks' )
+					->set( [
 						'cl_sortkey' => $newSortKey,
 						'cl_sortkey_prefix' => $prefix,
 						'cl_collation' => $this->collationName,
 						'cl_type' => $type,
 						'cl_timestamp = cl_timestamp',
-					],
-					[ 'cl_from' => $row->cl_from, 'cl_to' => $row->cl_to ],
-					__METHOD__
-				);
+					] )
+					->where( [ 'cl_from' => $row->cl_from, 'cl_to' => $row->cl_to ] )
+					->caller( __METHOD__ )
+					->execute();
 				$this->numRowsProcessed++;
 			}
 		}
@@ -348,10 +292,8 @@ TEXT
 
 	/**
 	 * Copy a set of rows to the target table
-	 *
-	 * @param IResultWrapper $res
 	 */
-	private function copyBatch( $res ) {
+	private function copyBatch( IResultWrapper $res ) {
 		$sortKeyInputs = [];
 		foreach ( $res as $row ) {
 			$title = Title::newFromRow( $row );
@@ -382,7 +324,11 @@ TEXT
 			$this->numRowsProcessed += count( $rowsToInsert );
 		} else {
 			$this->beginTransaction( $this->dbw, __METHOD__ );
-			$this->dbw->insert( $this->targetTable, $rowsToInsert, __METHOD__, [ 'IGNORE' ] );
+			$this->dbw->newInsertQueryBuilder()
+				->insertInto( $this->targetTable )
+				->ignore()
+				->rows( $rowsToInsert )
+				->caller( __METHOD__ )->execute();
 			$this->numRowsProcessed += $this->dbw->affectedRows();
 			$this->commitTransaction( $this->dbw, __METHOD__ );
 		}
@@ -390,10 +336,8 @@ TEXT
 
 	/**
 	 * Update the verbose statistics
-	 *
-	 * @param string $key
 	 */
-	private function updateSortKeySizeHistogram( $key ) {
+	private function updateSortKeySizeHistogram( string $key ) {
 		if ( !$this->verboseStats ) {
 			return;
 		}
@@ -412,7 +356,7 @@ TEXT
 			return;
 		}
 		$maxLength = max( array_keys( $this->sizeHistogram ) );
-		if ( $maxLength == 0 ) {
+		if ( $maxLength === 0 ) {
 			return;
 		}
 		$numBins = 20;
@@ -437,7 +381,7 @@ TEXT
 					break;
 				}
 			}
-			if ( $coarseIndex == $numBins - 1 ) {
+			if ( $coarseIndex === ( $numBins - 1 ) ) {
 				$coarseHistogram[$coarseIndex] += $val;
 			}
 			$raw .= $val;
@@ -446,20 +390,83 @@ TEXT
 		$this->output( "Sort key size histogram\nRaw data: $raw\n\n" );
 
 		$maxBinVal = max( $coarseHistogram );
-		$scale = 60 / $maxBinVal;
+		$scale = (int)( 60 / $maxBinVal );
 		$prevBoundary = 0;
 		for ( $coarseIndex = 0; $coarseIndex < $numBins; $coarseIndex++ ) {
 			$val = $coarseHistogram[$coarseIndex] ?? 0;
 			// @phan-suppress-next-line PhanTypePossiblyInvalidDimOffset False positive
 			$boundary = $coarseBoundaries[$coarseIndex];
-			$this->output( sprintf( "%-10s %-10d |%s\n",
-				$prevBoundary . '-' . ( $boundary - 1 ) . ': ',
-				$val,
-				str_repeat( '*', $scale * $val ) ) );
+			$this->output(
+				sprintf( "%-10s %-10d |%s\n",
+					$prevBoundary . '-' . ( $boundary - 1 ) . ': ',
+					$val,
+					str_repeat( '*', $scale * $val )
+				)
+			);
 			$prevBoundary = $boundary;
+		}
+	}
+
+	private function runNormalizationMigration() {
+		$maxPageId = (int)$this->dbr->newSelectQueryBuilder()
+			->select( 'MAX(page_id)' )
+			->from( 'page' )
+			->caller( __METHOD__ )->fetchField();
+		$batchValue = 0;
+		$batchSize = $this->getBatchSize();
+
+		$collationNameStore = new NameTableStore(
+			$this->getServiceContainer()->getDBLoadBalancer(),
+			$this->getServiceContainer()->getMainWANObjectCache(),
+			LoggerFactory::getInstance( 'SecondaryDataUpdate' ),
+			'collation',
+			'collation_id',
+			'collation_name'
+		);
+		do {
+			$this->output( "Selecting next $batchSize pages from cl_from = $batchValue... " );
+
+			$res = $this->dbw->newSelectQueryBuilder()
+				->select( [ 'cl_collation' ] )
+				->distinct()
+				->from( 'categorylinks' )
+				->where( [ 'cl_collation_id' => 0 ] )
+				->andWhere(
+					$this->dbw->expr( 'cl_from', '>=', $batchValue )
+						->and( 'cl_from', '<', $batchValue + $this->getBatchSize() )
+				)
+				->orderBy( 'cl_from' )
+				->caller( __METHOD__ )->fetchResultSet();
+			$this->output( "processing... " );
+
+			if ( $res->numRows() && !$this->dryRun ) {
+				foreach ( $res as $row ) {
+					$collationName = $row->cl_collation;
+					$collationId = $collationNameStore->acquireId( $collationName );
+					$this->dbw->newUpdateQueryBuilder()
+						->update( 'categorylinks' )
+						->set( [ 'cl_collation_id' => $collationId ] )
+						->where( [ 'cl_collation' => $collationName ] )
+						->andWhere(
+							$this->dbw->expr( 'cl_from', '>=', $batchValue )
+								->and( 'cl_from', '<', $batchValue + $this->getBatchSize() )
+						)
+						->caller( __METHOD__ )->execute();
+					$this->numRowsProcessed += $this->dbw->affectedRows();
+				}
+			}
+			$batchValue += $this->getBatchSize();
+
+			$this->output( "{$this->numRowsProcessed} done.\n" );
+		} while ( $maxPageId >= $batchValue );
+
+		if ( !$this->dryRun ) {
+			$this->output( "{$this->numRowsProcessed} rows processed\n" );
 		}
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = UpdateCollation::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

@@ -23,10 +23,14 @@
  * @since 1.23
  */
 
+namespace MediaWiki\Api;
+
 use MediaWiki\Permissions\GroupPermissionsLookup;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\RevisionStore;
+use MediaWiki\Title\Title;
 use MediaWiki\User\ActorMigration;
+use MediaWiki\User\TempUser\TempUserConfig;
 use MediaWiki\User\UserGroupManager;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\ParamValidator\TypeDef\IntegerDef;
@@ -44,33 +48,20 @@ class ApiQueryContributors extends ApiQueryBase {
 	 */
 	private const MAX_PAGES = 100;
 
-	/** @var RevisionStore */
-	private $revisionStore;
+	private RevisionStore $revisionStore;
+	private ActorMigration $actorMigration;
+	private UserGroupManager $userGroupManager;
+	private GroupPermissionsLookup $groupPermissionsLookup;
+	private TempUserConfig $tempUserConfig;
 
-	/** @var ActorMigration */
-	private $actorMigration;
-
-	/** @var UserGroupManager */
-	private $userGroupManager;
-
-	/** @var GroupPermissionsLookup */
-	private $groupPermissionsLookup;
-
-	/**
-	 * @param ApiQuery $query
-	 * @param string $moduleName
-	 * @param RevisionStore $revisionStore
-	 * @param ActorMigration $actorMigration
-	 * @param UserGroupManager $userGroupManager
-	 * @param GroupPermissionsLookup $groupPermissionsLookup
-	 */
 	public function __construct(
 		ApiQuery $query,
-		$moduleName,
+		string $moduleName,
 		RevisionStore $revisionStore,
 		ActorMigration $actorMigration,
 		UserGroupManager $userGroupManager,
-		GroupPermissionsLookup $groupPermissionsLookup
+		GroupPermissionsLookup $groupPermissionsLookup,
+		TempUserConfig $tempUserConfig
 	) {
 		// "pc" is short for "page contributors", "co" was already taken by the
 		// GeoData extension's prop=coordinates.
@@ -79,6 +70,7 @@ class ApiQueryContributors extends ApiQueryBase {
 		$this->actorMigration = $actorMigration;
 		$this->userGroupManager = $userGroupManager;
 		$this->groupPermissionsLookup = $groupPermissionsLookup;
+		$this->tempUserConfig = $tempUserConfig;
 	}
 
 	public function execute() {
@@ -125,7 +117,7 @@ class ApiQueryContributors extends ApiQueryBase {
 		] );
 		$this->addWhereFld( $pageField, $pages );
 		$this->addWhere( $this->actorMigration->isAnon( $revQuery['fields']['rev_user'] ) );
-		$this->addWhere( $db->bitAnd( 'rev_deleted', RevisionRecord::DELETED_USER ) . ' = 0' );
+		$this->addWhere( [ $db->bitAnd( 'rev_deleted', RevisionRecord::DELETED_USER ) => 0 ] );
 		$this->addOption( 'GROUP BY', $pageField );
 		$res = $this->select( __METHOD__ );
 		foreach ( $res as $row ) {
@@ -157,7 +149,7 @@ class ApiQueryContributors extends ApiQueryBase {
 		] );
 		$this->addWhereFld( $pageField, $pages );
 		$this->addWhere( $this->actorMigration->isNotAnon( $revQuery['fields']['rev_user'] ) );
-		$this->addWhere( $db->bitAnd( 'rev_deleted', RevisionRecord::DELETED_USER ) . ' = 0' );
+		$this->addWhere( [ $db->bitAnd( 'rev_deleted', RevisionRecord::DELETED_USER ) => 0 ] );
 		$this->addOption( 'GROUP BY', [ $pageField, $idField ] );
 		$this->addOption( 'LIMIT', $params['limit'] + 1 );
 
@@ -210,12 +202,12 @@ class ApiQueryContributors extends ApiQueryBase {
 				[
 					'ug_user=' . $revQuery['fields']['rev_user'],
 					'ug_group' => $limitGroups,
-					'ug_expiry IS NULL OR ug_expiry >= ' . $db->addQuotes( $db->timestamp() )
+					$db->expr( 'ug_expiry', '=', null )->or( 'ug_expiry', '>=', $db->timestamp() )
 				]
 			] ] );
 			// @phan-suppress-next-next-line PhanTypeMismatchArgumentNullable,PhanPossiblyUndeclaredVariable
 			// excludeGroups declared when limitGroups set
-			$this->addWhereIf( 'ug_user IS NULL', $excludeGroups );
+			$this->addWhereIf( [ 'ug_user' => null ], $excludeGroups );
 		}
 
 		if ( $params['continue'] !== null ) {
@@ -294,8 +286,11 @@ class ApiQueryContributors extends ApiQueryBase {
 	}
 
 	protected function getExamplesMessages() {
+		$title = Title::newMainPage()->getPrefixedText();
+		$mp = rawurlencode( $title );
+
 		return [
-			'action=query&prop=contributors&titles=Main_Page'
+			"action=query&prop=contributors&titles={$mp}"
 				=> 'apihelp-query+contributors-example-simple',
 		];
 	}
@@ -303,4 +298,14 @@ class ApiQueryContributors extends ApiQueryBase {
 	public function getHelpUrls() {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Contributors';
 	}
+
+	protected function getSummaryMessage() {
+		if ( $this->tempUserConfig->isKnown() ) {
+			return 'apihelp-query+contributors-summary-tempusers-enabled';
+		}
+		return parent::getSummaryMessage();
+	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiQueryContributors::class, 'ApiQueryContributors' );

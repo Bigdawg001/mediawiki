@@ -19,9 +19,11 @@
  * @ingroup Maintenance
  */
 
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Maintenance\Maintenance;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Clear the cache of interwiki prefixes.
@@ -36,9 +38,9 @@ class ClearInterwikiCache extends Maintenance {
 	}
 
 	public function execute() {
-		$lookup = MediaWikiServices::getInstance()->getInterwikiLookup();
+		$lookup = $this->getServiceContainer()->getInterwikiLookup();
 
-		$dbr = $this->getDB( DB_REPLICA );
+		$dbr = $this->getReplicaDB();
 		$prefixes = $dbr->newSelectQueryBuilder()
 			->select( 'iw_prefix' )
 			->from( 'interwiki' )
@@ -53,5 +55,7 @@ class ClearInterwikiCache extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = ClearInterwikiCache::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

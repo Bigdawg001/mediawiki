@@ -5,6 +5,10 @@ use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\Languages\LanguageNameUtils;
 use MediaWiki\MainConfigNames;
 
+/**
+ * @group Language
+ * @covers \MediaWiki\Languages\LanguageNameUtils
+ */
 class LanguageNameUtilsTest extends MediaWikiUnitTestCase {
 	use LanguageNameUtilsTestTrait;
 
@@ -16,12 +20,12 @@ class LanguageNameUtilsTest extends MediaWikiUnitTestCase {
 		$this->hookContainer = $this->createHookContainer();
 	}
 
-	/**
-	 * @param array $optionsArray
-	 * @return LanguageNameUtils
-	 */
 	private function newObj( array $optionsArray = [] ): LanguageNameUtils {
-		// TODO Why is hookContainer unset here sometimes?
+		// NOTE: hookContainer can be undefined here because
+		// data providers run before test case instantiation,
+		// and provideExceptionFromInvalidCode() calls newObj() via getFileName()
+		// TODO: Fix this by making the data provider not dependent on newObj()
+		// and instead calling getFileName() during the test.
 		$this->hookContainer ??= $this->createHookContainer();
 		return new LanguageNameUtils(
 			new ServiceOptions(
@@ -31,6 +35,7 @@ class LanguageNameUtilsTest extends MediaWikiUnitTestCase {
 					MainConfigNames::ExtraLanguageNames => [],
 					MainConfigNames::LanguageCode => 'en',
 					MainConfigNames::UsePigLatinVariant => true,
+					MainConfigNames::UseXssLanguage => false,
 				]
 			),
 			$this->hookContainer
@@ -39,6 +44,10 @@ class LanguageNameUtilsTest extends MediaWikiUnitTestCase {
 
 	protected function setLanguageTemporaryHook( string $hookName, $handler ): void {
 		$this->hookContainer->register( $hookName, $handler );
+	}
+
+	protected function clearLanguageHook( string $hookName ): void {
+		$this->hookContainer->clear( $hookName );
 	}
 
 	private function isSupportedLanguage( $code ) {

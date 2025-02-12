@@ -1,20 +1,27 @@
 <?php
 
-namespace Wikimedia\DebugInfo;
+namespace Wikimedia\Tests\DebugInfo;
+
+use MediaWikiCoversValidator;
+use PHPUnit\Framework\TestCase;
+use stdClass;
+use Wikimedia\DebugInfo\Placeholder;
 
 /**
  * @covers \Wikimedia\DebugInfo\Placeholder
  */
-class PlaceholderTest extends \PHPUnit\Framework\TestCase {
+class PlaceholderTest extends TestCase {
+	use MediaWikiCoversValidator;
+
 	public static function provideConstruct() {
 		return [
 			[
-				new \stdClass,
+				new stdClass,
 				'/^stdClass#[0-9]*$/'
 			],
 			[
 				1,
-				'/^integer$/'
+				'/^int$/'
 			],
 			[
 				'test',

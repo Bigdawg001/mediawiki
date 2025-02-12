@@ -20,16 +20,13 @@ class SequenceSpec {
 	public $timeStep;
 	/** @var float|int */
 	public $softExpiry;
-	/** @var float|int */
+	/** @var int */
 	public $hardExpiry;
 
-	/**
-	 * @param array $spec
-	 */
 	public function __construct( array $spec ) {
 		$this->timeStep = $spec['timeStep'] ?? self::DEFAULT_TIME_STEP;
 		$this->softExpiry = $spec['expiry'] ?? self::DEFAULT_EXPIRY;
-		$this->hardExpiry = $this->softExpiry + $this->timeStep;
+		$this->hardExpiry = (int)ceil( $this->softExpiry + $this->timeStep );
 		$this->name = $spec['name'] ?? '';
 	}
 }

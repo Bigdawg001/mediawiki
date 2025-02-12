@@ -2,7 +2,7 @@
 /**
  * Page protection
  *
- * Copyright © 2005 Brion Vibber <brion@pobox.com>
+ * Copyright © 2005 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
  * This program is free software; you can redistribute it and/or modify
@@ -27,26 +27,26 @@ namespace MediaWiki\Page;
 
 use Article;
 use ErrorPageError;
-use HTMLForm;
-use IContextSource;
-use Language;
 use LogEventsList;
 use LogPage;
 use MediaWiki\CommentStore\CommentStore;
+use MediaWiki\Context\IContextSource;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\Html\Html;
+use MediaWiki\HTMLForm\HTMLForm;
+use MediaWiki\Language\Language;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Output\OutputPage;
 use MediaWiki\Permissions\Authority;
 use MediaWiki\Permissions\PermissionManager;
 use MediaWiki\Permissions\PermissionStatus;
 use MediaWiki\Permissions\RestrictionStore;
+use MediaWiki\Request\WebRequest;
 use MediaWiki\Title\Title;
+use MediaWiki\Title\TitleFormatter;
 use MediaWiki\Watchlist\WatchlistManager;
-use OutputPage;
-use TitleFormatter;
-use WebRequest;
-use Xml;
-use XmlSelect;
+use MediaWiki\Xml\Xml;
+use MediaWiki\Xml\XmlSelect;
 
 /**
  * Handles the page protection UI and backend
@@ -82,49 +82,20 @@ class ProtectionForm {
 	/** @var array Map of action to the expiry time of the existing protection */
 	protected $mExistingExpiry = [];
 
-	/** @var Article */
-	protected $mArticle;
-
-	/** @var Title */
-	protected $mTitle;
-
-	/** @var bool */
-	protected $disabled;
-
-	/** @var array */
-	protected $disabledAttrib;
-
-	/** @var IContextSource */
-	private $mContext;
-
-	/** @var WebRequest */
-	private $mRequest;
-
-	/** @var Authority */
-	private $mPerformer;
-
-	/** @var Language */
-	private $mLang;
-
-	/** @var OutputPage */
-	private $mOut;
-
-	/** @var PermissionManager */
-	private $permManager;
-
-	/**
-	 * @var WatchlistManager
-	 */
-	private $watchlistManager;
-
-	/** @var HookRunner */
-	private $hookRunner;
-
-	/** @var RestrictionStore */
-	private $restrictionStore;
-
-	/** @var TitleFormatter */
-	private $titleFormatter;
+	protected Article $mArticle;
+	protected Title $mTitle;
+	protected bool $disabled;
+	protected array $disabledAttrib;
+	private IContextSource $mContext;
+	private WebRequest $mRequest;
+	private Authority $mPerformer;
+	private Language $mLang;
+	private OutputPage $mOut;
+	private PermissionManager $permManager;
+	private HookRunner $hookRunner;
+	private WatchlistManager $watchlistManager;
+	private TitleFormatter $titleFormatter;
+	private RestrictionStore $restrictionStore;
 
 	public function __construct( Article $article ) {
 		// Set instance variables.
@@ -214,7 +185,7 @@ class ProtectionForm {
 			}
 
 			$val = $this->mRequest->getVal( "mwProtect-level-$action" );
-			if ( isset( $val ) && in_array( $val, $levels ) ) {
+			if ( $val !== null && in_array( $val, $levels ) ) {
 				$this->mRestrictions[$action] = $val;
 			}
 		}
@@ -293,8 +264,9 @@ class ProtectionForm {
 		if ( $this->mApplicableTypes === [] ) {
 			// No restriction types available for the current title
 			// this might happen if an extension alters the available types
-			$out->setPageTitle( $this->mContext->msg(
-				'protect-norestrictiontypes-title',
+			$out->setPageTitleMsg( $this->mContext->msg(
+				'protect-norestrictiontypes-title'
+			)->plaintextParams(
 				$this->mTitle->getPrefixedText()
 			) );
 			$out->addWikiTextAsInterface(
@@ -326,16 +298,15 @@ class ProtectionForm {
 		# Show an appropriate message if the user isn't allowed or able to change
 		# the protection settings at this time
 		if ( $this->disabled ) {
-			$out->setPageTitle(
-				$this->mContext->msg( 'protect-title-notallowed',
-					$this->mTitle->getPrefixedText() )
+			$out->setPageTitleMsg(
+				$this->mContext->msg( 'protect-title-notallowed' )->plaintextParams( $this->mTitle->getPrefixedText() )
 			);
 			$out->addWikiTextAsInterface(
 				$out->formatPermissionStatus( $this->mPermStatus, 'protect' )
 			);
 		} else {
-			$out->setPageTitle(
-				$this->mContext->msg( 'protect-title', $this->mTitle->getPrefixedText() )
+			$out->setPageTitleMsg(
+				$this->mContext->msg( 'protect-title' )->plaintextParams( $this->mTitle->getPrefixedText() )
 			);
 			$out->addWikiMsg( 'protect-text',
 				wfEscapeWikiText( $this->mTitle->getPrefixedText() ) );
@@ -570,7 +541,7 @@ class ProtectionForm {
 				'id' => 'wpProtectReasonSelection',
 				'name' => 'wpProtectReasonSelection',
 				'flatlist' => true,
-				'options' => Xml::listDropDownOptions(
+				'options' => Html::listDropdownOptions(
 					$this->mContext->msg( 'protect-dropdown' )->inContentLanguage()->text(),
 					[ 'other' => $this->mContext->msg( 'protect-otherreason-op' )->text() ]
 				),
@@ -663,4 +634,5 @@ class ProtectionForm {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( ProtectionForm::class, 'ProtectionForm' );

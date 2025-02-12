@@ -1,7 +1,5 @@
 <?php
 /**
- * Implements Special:Recentchangeslinked
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,56 +16,65 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
  */
 
+namespace MediaWiki\Specials;
+
+use MediaWiki\ChangeTags\ChangeTagsStore;
 use MediaWiki\Html\FormOptions;
 use MediaWiki\Html\Html;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Title\Title;
-use MediaWiki\User\UserOptionsLookup;
-use Wikimedia\Rdbms\ILoadBalancer;
+use MediaWiki\User\Options\UserOptionsLookup;
+use MediaWiki\User\TempUser\TempUserConfig;
+use MediaWiki\User\UserIdentityUtils;
+use MediaWiki\Watchlist\WatchedItemStoreInterface;
+use MediaWiki\Xml\Xml;
+use MessageCache;
+use RecentChange;
+use SearchEngineFactory;
 use Wikimedia\Rdbms\SelectQueryBuilder;
 use Wikimedia\Rdbms\Subquery;
 
 /**
  * This is to display changes made to all articles linked in an article.
  *
+ * @ingroup RecentChanges
  * @ingroup SpecialPage
  */
 class SpecialRecentChangesLinked extends SpecialRecentChanges {
 	/** @var bool|Title */
 	protected $rclTargetTitle;
 
-	/** @var ILoadBalancer */
-	private $loadBalancer;
-
-	/** @var SearchEngineFactory */
-	private $searchEngineFactory;
+	private SearchEngineFactory $searchEngineFactory;
+	private ChangeTagsStore $changeTagsStore;
 
 	/**
 	 * @param WatchedItemStoreInterface $watchedItemStore
 	 * @param MessageCache $messageCache
-	 * @param ILoadBalancer $loadBalancer
 	 * @param UserOptionsLookup $userOptionsLookup
 	 * @param SearchEngineFactory $searchEngineFactory
 	 */
 	public function __construct(
 		WatchedItemStoreInterface $watchedItemStore,
 		MessageCache $messageCache,
-		ILoadBalancer $loadBalancer,
 		UserOptionsLookup $userOptionsLookup,
-		SearchEngineFactory $searchEngineFactory
+		SearchEngineFactory $searchEngineFactory,
+		ChangeTagsStore $changeTagsStore,
+		UserIdentityUtils $userIdentityUtils,
+		TempUserConfig $tempUserConfig
 	) {
 		parent::__construct(
 			$watchedItemStore,
 			$messageCache,
-			$loadBalancer,
-			$userOptionsLookup
+			$userOptionsLookup,
+			$changeTagsStore,
+			$userIdentityUtils,
+			$tempUserConfig
 		);
 		$this->mName = 'Recentchangeslinked';
-		$this->loadBalancer = $loadBalancer;
 		$this->searchEngineFactory = $searchEngineFactory;
+		$this->changeTagsStore = $changeTagsStore;
 	}
 
 	public function getDefaultOptions() {
@@ -83,6 +90,8 @@ class SpecialRecentChangesLinked extends SpecialRecentChanges {
 	}
 
 	/**
+	 * FIXME: Port useful changes from SpecialRecentChanges
+	 *
 	 * @inheritDoc
 	 */
 	protected function doMainQuery( $tables, $select, $conds, $query_options,
@@ -104,7 +113,9 @@ class SpecialRecentChangesLinked extends SpecialRecentChanges {
 			return false;
 		}
 
-		$outputPage->setPageTitle( $this->msg( 'recentchangeslinked-title', $title->getPrefixedText() ) );
+		$outputPage->setPageTitleMsg(
+			$this->msg( 'recentchangeslinked-title' )->plaintextParams( $title->getPrefixedText() )
+		);
 
 		/*
 		 * Ordinary links are in the pagelinks table, while transclusions are
@@ -114,7 +125,7 @@ class SpecialRecentChangesLinked extends SpecialRecentChanges {
 		 * merging the results, but the code we inherit from our parent class
 		 * expects only one result set so we use UNION instead.
 		 */
-		$dbr = $this->loadBalancer->getConnectionRef( ILoadBalancer::DB_REPLICA );
+		$dbr = $this->getDB();
 		$id = $title->getArticleID();
 		$ns = $title->getNamespace();
 		$dbkey = $title->getDBkey();
@@ -133,18 +144,19 @@ class SpecialRecentChangesLinked extends SpecialRecentChanges {
 		$select[] = 'page_latest';
 
 		$tagFilter = $opts['tagfilter'] !== '' ? explode( '|', $opts['tagfilter'] ) : [];
-		ChangeTags::modifyDisplayQuery(
+		$this->changeTagsStore->modifyDisplayQuery(
 			$tables,
 			$select,
 			$conds,
 			$join_conds,
 			$query_options,
-			$tagFilter
+			$tagFilter,
+			$opts['inverttags']
 		);
 
 		if ( $dbr->unionSupportsOrderAndLimit() ) {
-			if ( count( $tagFilter ) > 1 ) {
-				// ChangeTags::modifyDisplayQuery() will have added DISTINCT.
+			if ( in_array( 'DISTINCT', $query_options ) ) {
+				// ChangeTagsStore::modifyDisplayQuery() will have added DISTINCT.
 				// To prevent this from causing query performance problems, we need to add
 				// a GROUP BY, and add rc_id to the ORDER BY.
 				$order = [
@@ -279,13 +291,14 @@ class SpecialRecentChangesLinked extends SpecialRecentChanges {
 				->setMaxExecutionTime( $this->getConfig()->get( MainConfigNames::MaxExecutionTimeForExpensiveQueries ) )
 				->caller( __METHOD__ )->fetchResultSet();
 		} else {
-			$sqls = array_map( static function ( $queryBuilder ) {
-				return $queryBuilder->getSQL();
-			}, $subsql );
+			$unionQueryBuilder = $dbr->newUnionQueryBuilder()->caller( __METHOD__ );
+			foreach ( $subsql as $selectQueryBuilder ) {
+				$unionQueryBuilder->add( $selectQueryBuilder );
+			}
 			return $dbr->newSelectQueryBuilder()
 				->select( '*' )
 				->from(
-					new Subquery( $dbr->unionQueries( $sqls, $dbr::UNION_DISTINCT ) ),
+					new Subquery( $unionQueryBuilder->getSQL() ),
 					'main'
 				)
 				->orderBy( 'rc_timestamp', SelectQueryBuilder::SORT_DESC )
@@ -315,7 +328,7 @@ class SpecialRecentChangesLinked extends SpecialRecentChanges {
 		$opts->consumeValues( [ 'showlinkedto', 'target' ] );
 
 		$extraOpts['target'] = [ $this->msg( 'recentchangeslinked-page' )->escaped(),
-			Xml::input( 'target', 40, str_replace( '_', ' ', $opts['target'] ) ) .
+			Xml::input( 'target', 40, str_replace( '_', ' ', $opts['target'] ) ) . ' ' .
 			Xml::check( 'showlinkedto', $opts['showlinkedto'], [ 'id' => 'showlinkedto' ] ) . ' ' .
 			Xml::label( $this->msg( 'recentchangeslinked-to' )->text(), 'showlinkedto' ) ];
 
@@ -374,3 +387,9 @@ class SpecialRecentChangesLinked extends SpecialRecentChanges {
 		}
 	}
 }
+
+/**
+ * Retain the old class name for backwards compatibility.
+ * @deprecated since 1.41
+ */
+class_alias( SpecialRecentChangesLinked::class, 'SpecialRecentChangesLinked' );

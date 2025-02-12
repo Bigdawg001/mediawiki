@@ -1,7 +1,5 @@
 <?php
 /**
- * Implements Special:Wantedfiles
- *
  * Copyright © 2008 Soxred93
  *
  * This program is free software; you can redistribute it and/or modify
@@ -20,42 +18,40 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
- * @author Soxred93 <soxred93@gmail.com>
  */
 
 namespace MediaWiki\Specials;
 
 use MediaWiki\Cache\LinkBatchFactory;
 use MediaWiki\Page\PageReferenceValue;
+use MediaWiki\SpecialPage\WantedQueryPage;
 use MediaWiki\Title\Title;
 use RepoGroup;
-use WantedQueryPage;
-use Wikimedia\Rdbms\ILoadBalancer;
+use Wikimedia\Rdbms\IConnectionProvider;
 
 /**
- * Querypage that lists the most wanted files
+ * List of the most linked non-existent files.
  *
  * @ingroup SpecialPage
+ * @author Soxred93 <soxred93@gmail.com>
  */
 class SpecialWantedFiles extends WantedQueryPage {
 
-	/** @var RepoGroup */
-	private $repoGroup;
+	private RepoGroup $repoGroup;
 
 	/**
 	 * @param RepoGroup $repoGroup
-	 * @param ILoadBalancer $loadBalancer
+	 * @param IConnectionProvider $dbProvider
 	 * @param LinkBatchFactory $linkBatchFactory
 	 */
 	public function __construct(
 		RepoGroup $repoGroup,
-		ILoadBalancer $loadBalancer,
+		IConnectionProvider $dbProvider,
 		LinkBatchFactory $linkBatchFactory
 	) {
 		parent::__construct( 'Wantedfiles' );
 		$this->repoGroup = $repoGroup;
-		$this->setDBLoadBalancer( $loadBalancer );
+		$this->setDatabaseProvider( $dbProvider );
 		$this->setLinkBatchFactory( $linkBatchFactory );
 	}
 

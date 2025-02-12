@@ -4,12 +4,14 @@ namespace MediaWiki\Tests\Unit\Settings\Config;
 
 use MediaWiki\Settings\Config\MergeStrategy;
 use MediaWiki\Settings\SettingsBuilderException;
+use MediaWikiCoversValidator;
 use PHPUnit\Framework\TestCase;
 
 /**
  * @covers \MediaWiki\Settings\Config\MergeStrategy
  */
 class MergeStrategyTest extends TestCase {
+	use MediaWikiCoversValidator;
 
 	public function testUnknownStrategy() {
 		$this->expectException( SettingsBuilderException::class );
@@ -32,8 +34,8 @@ class MergeStrategyTest extends TestCase {
 		yield 'array_plus_2d' => [
 			'strategy' => MergeStrategy::ARRAY_PLUS_2D,
 			'newArray' => [ 'a' => [ 'b' => [ 'c' => [ 'e' => 'f' ] ] ] ],
-			'baseArray' => [ 'a' => [ 'b' => [ 'c' => [ 'g' => 'h' ] ], 'i' => 'j' ] ] ,
-			'expected' => [ 'a' => [ 'b' => [ 'c' => [ 'e' => 'f' ] ], 'i' => 'j' ] ] ,
+			'baseArray' => [ 'a' => [ 'b' => [ 'c' => [ 'g' => 'h' ] ], 'i' => 'j' ] ],
+			'expected' => [ 'a' => [ 'b' => [ 'c' => [ 'e' => 'f' ] ], 'i' => 'j' ] ],
 		];
 		yield 'array_plus' => [
 			'strategy' => MergeStrategy::ARRAY_PLUS,

@@ -1,11 +1,17 @@
 <?php
 
+namespace Wikimedia\Tests\Stats;
+
+use MediaWikiCoversValidator;
+use PHPUnit\Framework\TestCase;
+use Wikimedia\Stats\BufferingStatsdDataFactory;
 use Wikimedia\TestingAccessWrapper;
 
 /**
- * @covers BufferingStatsdDataFactory
+ * @covers \Wikimedia\Stats\BufferingStatsdDataFactory
  */
-class BufferingStatsdDataFactoryTest extends PHPUnit\Framework\TestCase {
+class BufferingStatsdDataFactoryTest extends TestCase {
+	use MediaWikiCoversValidator;
 
 	public static function provideNormalizeMetricKey() {
 		// Reasonable and relied upon

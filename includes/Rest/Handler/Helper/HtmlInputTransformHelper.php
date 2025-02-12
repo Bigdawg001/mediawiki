@@ -19,36 +19,39 @@
  */
 namespace MediaWiki\Rest\Handler\Helper;
 
-use Content;
 use InvalidArgumentException;
-use Language;
-use LanguageCode;
-use Liuggio\StatsdClient\Factory\StatsdDataFactoryInterface;
+use MediaWiki\Content\Content;
 use MediaWiki\Edit\ParsoidOutputStash;
+use MediaWiki\Edit\ParsoidRenderID;
 use MediaWiki\Edit\SelserContext;
+use MediaWiki\Language\LanguageCode;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\PageIdentity;
+use MediaWiki\Page\PageLookup;
+use MediaWiki\Page\PageRecord;
+use MediaWiki\Page\ParserOutputAccess;
+use MediaWiki\Parser\ParserOptions;
+use MediaWiki\Parser\ParserOutput;
 use MediaWiki\Parser\Parsoid\HtmlToContentTransform;
 use MediaWiki\Parser\Parsoid\HtmlTransformFactory;
 use MediaWiki\Parser\Parsoid\PageBundleParserOutputConverter;
-use MediaWiki\Parser\Parsoid\ParsoidOutputAccess;
-use MediaWiki\Parser\Parsoid\ParsoidRenderID;
 use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\HttpException;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\ResponseInterface;
 use MediaWiki\Revision\RevisionAccessException;
+use MediaWiki\Revision\RevisionLookup;
 use MediaWiki\Revision\RevisionRecord;
+use MediaWiki\Status\Status;
 use MWUnknownContentModelException;
-use ParserOptions;
-use ParserOutput;
-use Status;
+use Wikimedia\Bcp47Code\Bcp47Code;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\Parsoid\Core\ClientError;
 use Wikimedia\Parsoid\Core\PageBundle;
 use Wikimedia\Parsoid\Core\ResourceLimitExceededException;
 use Wikimedia\Parsoid\Parsoid;
+use Wikimedia\Stats\StatsFactory;
 
 /**
  * REST helper for converting HTML to page content source (e.g. wikitext).
@@ -60,23 +63,13 @@ use Wikimedia\Parsoid\Parsoid;
 class HtmlInputTransformHelper {
 	/**
 	 * @internal
-	 * @var string[]
 	 */
 	public const CONSTRUCTOR_OPTIONS = [
 		MainConfigNames::ParsoidCacheConfig
 	];
 
-	/** @var HtmlTransformFactory */
-	private $htmlTransformFactory;
-
 	/** @var PageIdentity|null */
 	private $page = null;
-
-	/** @var StatsdDataFactoryInterface */
-	private $stats;
-
-	/** @var array|null */
-	private $parameters = null;
 
 	/**
 	 * @var HtmlToContentTransform
@@ -84,47 +77,62 @@ class HtmlInputTransformHelper {
 	private $transform;
 
 	/**
-	 * @var ParsoidOutputStash
-	 */
-	private $parsoidOutputStash;
-
-	/**
-	 * @var ParsoidOutputAccess
-	 */
-	private $parsoidOutputAccess;
-
-	/**
 	 * @var array
 	 */
 	private $envOptions;
 
+	private StatsFactory $statsFactory;
+	private HtmlTransformFactory $htmlTransformFactory;
+	private ParsoidOutputStash $parsoidOutputStash;
+	private ParserOutputAccess $parserOutputAccess;
+	private PageLookup $pageLookup;
+	private RevisionLookup $revisionLookup;
+
 	/**
-	 * @param StatsdDataFactoryInterface $statsDataFactory
+	 * @param StatsFactory $statsFactory
 	 * @param HtmlTransformFactory $htmlTransformFactory
 	 * @param ParsoidOutputStash $parsoidOutputStash
-	 * @param ParsoidOutputAccess $parsoidOutputAccess
+	 * @param ParserOutputAccess $parserOutputAccess
+	 * @param PageLookup $pageLookup
+	 * @param RevisionLookup $revisionLookup
 	 * @param array $envOptions
+	 * @param ?PageIdentity $page
+	 * @param array|string $body Body structure, or an HTML string
+	 * @param array $parameters
+	 * @param RevisionRecord|null $originalRevision
+	 * @param Bcp47Code|null $pageLanguage
 	 */
 	public function __construct(
-		StatsdDataFactoryInterface $statsDataFactory,
+		StatsFactory $statsFactory,
 		HtmlTransformFactory $htmlTransformFactory,
 		ParsoidOutputStash $parsoidOutputStash,
-		ParsoidOutputAccess $parsoidOutputAccess,
-		array $envOptions = []
+		ParserOutputAccess $parserOutputAccess,
+		PageLookup $pageLookup,
+		RevisionLookup $revisionLookup,
+		array $envOptions = [],
+		?PageIdentity $page = null,
+		$body = '',
+		array $parameters = [],
+		?RevisionRecord $originalRevision = null,
+		?Bcp47Code $pageLanguage = null
 	) {
-		$this->stats = $statsDataFactory;
+		$this->statsFactory = $statsFactory;
 		$this->htmlTransformFactory = $htmlTransformFactory;
 		$this->parsoidOutputStash = $parsoidOutputStash;
 		$this->envOptions = $envOptions + [
 			'outputContentVersion' => Parsoid::defaultHTMLVersion(),
 			'offsetType' => 'byte',
 		];
-		$this->parsoidOutputAccess = $parsoidOutputAccess;
+		$this->parserOutputAccess = $parserOutputAccess;
+		$this->pageLookup = $pageLookup;
+		$this->revisionLookup = $revisionLookup;
+		if ( $page === null ) {
+			wfDeprecated( __METHOD__ . ' without $page', '1.43' );
+		} else {
+			$this->initInternal( $page, $body, $parameters, $originalRevision, $pageLanguage );
+		}
 	}
 
-	/**
-	 * @return array
-	 */
 	public function getParamSettings(): array {
 		// JSON body schema:
 		/*
@@ -176,6 +184,7 @@ class HtmlInputTransformHelper {
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_DEFAULT => '',
 				ParamValidator::PARAM_REQUIRED => false,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-html-input-title' )
 			],
 			// XXX: Needed for compatibility with the parsoid transform endpoint.
 			//      But revid should just be part of the info about the original data
@@ -185,6 +194,7 @@ class HtmlInputTransformHelper {
 				ParamValidator::PARAM_TYPE => 'int',
 				ParamValidator::PARAM_DEFAULT => 0,
 				ParamValidator::PARAM_REQUIRED => false,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-html-input-oldid' )
 			],
 			// XXX: Supported for compatibility with the parsoid transform endpoint.
 			//      If given, it should be 'html' or 'pagebundle'.
@@ -193,6 +203,7 @@ class HtmlInputTransformHelper {
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_DEFAULT => '',
 				ParamValidator::PARAM_REQUIRED => false,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-html-input-from' )
 			],
 			// XXX: Supported for compatibility with the parsoid transform endpoint.
 			//      Ignored.
@@ -201,18 +212,21 @@ class HtmlInputTransformHelper {
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_DEFAULT => '',
 				ParamValidator::PARAM_REQUIRED => false,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-html-input-format' )
 			],
 			'contentmodel' => [ // XXX: get this from the Accept header?
 				Handler::PARAM_SOURCE => 'query',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_DEFAULT => '',
 				ParamValidator::PARAM_REQUIRED => false,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-html-input-contentmodel' )
 			],
 			'language' => [ // TODO: get this from Accept-Language header?!
 				Handler::PARAM_SOURCE => 'query',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_DEFAULT => '',
 				ParamValidator::PARAM_REQUIRED => false,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-html-input-language' )
 			]
 		];
 	}
@@ -266,7 +280,9 @@ class HtmlInputTransformHelper {
 			$parameters['from'] !== ParsoidFormatHelper::FORMAT_HTML &&
 			$parameters['from'] !== ParsoidFormatHelper::FORMAT_PAGEBUNDLE
 		) {
-			throw new HttpException( 'Unsupported input: ' . $parameters['from'], 400 );
+			throw new LocalizedHttpException(
+				new MessageValue( "rest-unsupported-transform-input", [ $parameters['from'] ] ), 400
+			);
 		}
 
 		if ( isset( $body['contentmodel'] ) && $body['contentmodel'] !== '' ) {
@@ -281,16 +297,37 @@ class HtmlInputTransformHelper {
 	 * @param array|string $body Body structure, or an HTML string
 	 * @param array $parameters
 	 * @param RevisionRecord|null $originalRevision
-	 * @param Language|null $pageLanguage
+	 * @param Bcp47Code|null $pageLanguage
 	 *
 	 * @throws HttpException
+	 * @deprecated since 1.43; pass arguments to constructor instead
 	 */
 	public function init(
 		PageIdentity $page,
 		$body,
 		array $parameters,
 		?RevisionRecord $originalRevision = null,
-		?Language $pageLanguage = null
+		?Bcp47Code $pageLanguage = null
+	) {
+		wfDeprecated( __METHOD__, '1.43' );
+		$this->initInternal( $page, $body, $parameters, $originalRevision, $pageLanguage );
+	}
+
+	/**
+	 * @param PageIdentity $page
+	 * @param array|string $body Body structure, or an HTML string
+	 * @param array $parameters
+	 * @param RevisionRecord|null $originalRevision
+	 * @param Bcp47Code|null $pageLanguage
+	 *
+	 * @throws HttpException
+	 */
+	private function initInternal(
+		PageIdentity $page,
+		$body,
+		array $parameters,
+		?RevisionRecord $originalRevision = null,
+		?Bcp47Code $pageLanguage = null
 	) {
 		if ( is_string( $body ) ) {
 			$body = [ 'html' => $body ];
@@ -299,10 +336,9 @@ class HtmlInputTransformHelper {
 		self::normalizeParameters( $body, $parameters );
 
 		$this->page = $page;
-		$this->parameters = $parameters;
 
 		if ( !isset( $body['html'] ) ) {
-			throw new HttpException( 'Expected `html` key in body' );
+			throw new LocalizedHttpException( new MessageValue( "rest-missing-body-field", [ 'html' ] ) );
 		}
 
 		$html = is_array( $body['html'] ) ? $body['html']['body'] : $body['html'];
@@ -313,12 +349,12 @@ class HtmlInputTransformHelper {
 			$this->page
 		);
 
-		$this->transform->setMetrics( $this->stats );
+		$this->transform->setMetrics( $this->statsFactory );
 
 		// NOTE: Env::getContentModel will fall back to the page's recorded content model
 		//       if none is set here.
 		$this->transform->setOptions( [
-			'contentmodel' => $this->parameters['contentmodel'] ?? null,
+			'contentmodel' => $parameters['contentmodel'] ?? null,
 			'offsetType' => $body['offsetType'] ?? $this->envOptions['offsetType'],
 		] );
 
@@ -331,10 +367,17 @@ class HtmlInputTransformHelper {
 				$originalRendering = ParsoidRenderID::newFromETag( $key );
 
 				if ( !$originalRendering ) {
-					throw new HttpException( "Bad ETag: $key", 400 );
+					throw new LocalizedHttpException( new MessageValue( "rest-bad-etag", [ $key ] ), 400 );
 				}
 			} else {
-				$originalRendering = ParsoidRenderID::newFromKey( $key );
+				try {
+					$originalRendering = ParsoidRenderID::newFromKey( $key );
+				} catch ( InvalidArgumentException $e ) {
+					throw new LocalizedHttpException(
+						new MessageValue( 'rest-parsoid-bad-render-id', [ $key ] ),
+						400
+					);
+				}
 			}
 		} elseif ( !empty( $original['html'] ) || !empty( $original['data-parsoid'] ) ) {
 			// NOTE: We might have an incomplete PageBundle here, with no HTML but with data-parsoid!
@@ -356,9 +399,21 @@ class HtmlInputTransformHelper {
 			$this->setOriginal( $originalRevision, $originalRendering );
 		} else {
 			if ( $this->page->exists() ) {
-				$this->stats->increment( 'html_input_transform.original_html.not_given.page_exists' );
+				$this->statsFactory
+					->getCounter( 'html_input_transform_total' )
+					->setLabel( 'original_html_given', 'false' )
+					->setLabel( 'page_exists', 'true' )
+					->setLabel( 'status', 'unknown' )
+					->copyToStatsdAt( 'html_input_transform.original_html.not_given.page_exists' )
+					->increment();
 			} else {
-				$this->stats->increment( 'html_input_transform.original_html.not_given.page_not_exist' );
+				$this->statsFactory
+					->getCounter( 'html_input_transform_total' )
+					->setLabel( 'original_html_given', 'false' )
+					->setLabel( 'page_exists', 'false' )
+					->setLabel( 'status', 'unknown' )
+					->copyToStatsdAt( 'html_input_transform.original_html.not_given.page_not_exist' )
+					->increment();
 			}
 		}
 
@@ -383,7 +438,6 @@ class HtmlInputTransformHelper {
 
 	/**
 	 * Return HTMLTransform object, so additional context can be provided by calling setters on it.
-	 * @return HtmlToContentTransform
 	 */
 	public function getTransform(): HtmlToContentTransform {
 		return $this->transform;
@@ -391,14 +445,12 @@ class HtmlInputTransformHelper {
 
 	/**
 	 * Set metrics sink.
-	 *
-	 * @param StatsdDataFactoryInterface $stats
 	 */
-	public function setMetrics( StatsdDataFactoryInterface $stats ) {
-		$this->stats = $stats;
+	public function setMetrics( StatsFactory $statsFactory ) {
+		$this->statsFactory = $statsFactory;
 
 		if ( $this->transform ) {
-			$this->transform->setMetrics( $stats );
+			$this->transform->setMetrics( $statsFactory );
 		}
 	}
 
@@ -417,9 +469,14 @@ class HtmlInputTransformHelper {
 			try {
 				$selserContext = $this->fetchSelserContextFromStash( $renderId );
 			} catch ( InvalidArgumentException $ex ) {
-				$this->stats->increment( 'html_input_transform.original_html.given.as_renderid.bad' );
-				throw new HttpException(
-					'Bad stash key',
+				$this->statsFactory
+					->getCounter( 'html_input_transform_total' )
+					->setLabel( 'original_html_given', 'as_renderid' )
+					->setLabel( 'page_exists', 'unknown' )
+					->setLabel( 'status', 'bad_renderid' )
+					->copyToStatsdAt( 'html_input_transform.original_html.given.as_renderid.bad' )
+					->increment();
+				throw new LocalizedHttpException( new MessageValue( "rest-bad-stash-key" ),
 					400,
 					[
 						'reason' => $ex->getMessage(),
@@ -434,8 +491,8 @@ class HtmlInputTransformHelper {
 				//       On the other hand, of the client only provided a base revision ID,
 				//       we can re-parse and hope for the best.
 
-				throw new HttpException(
-					'No stashed content found for ' . $renderId, 412
+				throw new LocalizedHttpException(
+					new MessageValue( "rest-no-stashed-content", [ $renderId->getKey() ] ), 412
 				);
 
 				// TODO: This class should provide getETag and getLastModified methods for use by
@@ -459,15 +516,30 @@ class HtmlInputTransformHelper {
 			// Try to get a rendering for the given revision, and use it as the basis for selser.
 			// Chances are good that the resulting diff will be reasonably clean.
 			// NOTE: If we don't have a revision ID, we should not attempt selser!
-			$originalRendering = $this->fetchParserOutputFromParsoid( $rev, true );
+			$originalRendering = $this->fetchParserOutputFromParsoid( $this->page, $rev, true );
 
 			if ( $originalRendering ) {
-				$this->stats->increment( 'html_input_transform.original_html.given.as_revid.found' );
+				$this->statsFactory->getCounter( 'html_input_transform_total' )
+					->setLabel( 'original_html_given', 'as_revid' )
+					->setLabel( 'page_exists', 'unknown' )
+					->setLabel( 'status', 'found' )
+					->copyToStatsdAt( 'html_input_transform.original_html.given.as_revid.found' )
+					->increment();
 			} else {
-				$this->stats->increment( 'html_input_transform.original_html.given.as_revid.not_found' );
+				$this->statsFactory->getCounter( 'html_input_transform_total' )
+					->setLabel( 'original_html_given', 'as_revid' )
+					->setLabel( 'page_exists', 'unknown' )
+					->setLabel( 'status', 'not_found' )
+					->copyToStatsdAt( 'html_input_transform.original_html.given.as_revid.not_found' )
+					->increment();
 			}
 		} elseif ( $originalRendering ) {
-			$this->stats->increment( 'html_input_transform.original_html.given.verbatim' );
+			$this->statsFactory->getCounter( 'html_input_transform_total' )
+				->setLabel( 'original_html_given', 'true' )
+				->setLabel( 'page_exists', 'unknown' )
+				->setLabel( 'status', 'verbatim' )
+				->copyToStatsdAt( 'html_input_transform.original_html.given.verbatim' )
+				->increment();
 		}
 
 		if ( $originalRendering instanceof ParserOutput ) {
@@ -506,18 +578,16 @@ class HtmlInputTransformHelper {
 
 		// NOTE: We might have an incomplete PageBundle here, with no HTML.
 		//       PageBundle::$html is declared to not be nullable, so it would be set to the empty
-		//       string if not given. Note however that it might also be null, since it's a public field.
-		if ( $originalRendering->html !== null && $originalRendering->html !== '' ) {
+		//       string if not given.
+		if ( $originalRendering->html !== '' ) {
 			$this->transform->setOriginalHtml( $originalRendering->html );
 		}
 
 		if ( $originalRendering->parsoid !== null ) {
-			// @phan-suppress-next-line PhanTypeMismatchArgumentNullable Silly Phan, we just checked.
 			$this->transform->setOriginalDataParsoid( $originalRendering->parsoid );
 		}
 
 		if ( $originalRendering->mw !== null ) {
-			// @phan-suppress-next-line PhanTypeMismatchArgumentNullable Silly Phan, we just checked.
 			$this->transform->setOriginalDataMW( $originalRendering->mw );
 		}
 	}
@@ -531,7 +601,7 @@ class HtmlInputTransformHelper {
 			return $this->transform->htmlToContent();
 		} catch ( ClientError $e ) {
 			throw new LocalizedHttpException(
-				new MessageValue( 'rest-html-backend-error' ),
+				new MessageValue( 'rest-html-backend-error', [ $e->getMessage() ] ),
 				400,
 				[ 'reason' => $e->getMessage() ]
 			);
@@ -542,15 +612,16 @@ class HtmlInputTransformHelper {
 				[ 'reason' => $e->getMessage() ]
 			);
 		} catch ( MWUnknownContentModelException $e ) {
-			throw new HttpException( $e->getMessage(), 400 );
+			throw new LocalizedHttpException(
+				new MessageValue( "rest-unknown-content-model", [ $e->getModelId() ] ),
+				400
+			);
 		}
 	}
 
 	/**
 	 * Creates a response containing the content derived from the input HTML.
 	 * This will set the appropriate Content-Type header.
-	 *
-	 * @param ResponseInterface $response
 	 */
 	public function putContent( ResponseInterface $response ) {
 		$content = $this->getContent();
@@ -572,22 +643,53 @@ class HtmlInputTransformHelper {
 	}
 
 	/**
-	 * @param RevisionRecord|int $rev
+	 * @param PageIdentity $page
+	 * @param RevisionRecord|int $revision
 	 * @param bool $mayParse
 	 *
 	 * @return ParserOutput|null
 	 * @throws HttpException
 	 */
-	private function fetchParserOutputFromParsoid( $rev, bool $mayParse ): ?ParserOutput {
+	private function fetchParserOutputFromParsoid( PageIdentity $page, $revision, bool $mayParse ): ?ParserOutput {
 		$parserOptions = ParserOptions::newFromAnon();
+		$parserOptions->setUseParsoid();
 
 		try {
+			if ( !$page instanceof PageRecord ) {
+				$name = "$page";
+				$page = $this->pageLookup->getPageByReference( $page );
+				if ( !$page ) {
+					throw new RevisionAccessException( 'Page {name} not found',
+						[ 'name' => $name ] );
+				}
+			}
+
+			if ( is_int( $revision ) ) {
+				$revId = $revision;
+				$revision = $this->revisionLookup->getRevisionById( $revId, 0, $page );
+
+				if ( !$revision ) {
+					throw new RevisionAccessException( 'Revision {revId} not found',
+						[ 'revId' => $revId ] );
+				}
+			}
+
+			if ( $page->getId() !== $revision->getPageId() ) {
+				throw new RevisionAccessException( 'Revision {revId} does not belong to page {name}',
+					[ 'name' => $page->getDBkey(),
+						'revId' => $revision->getId() ] );
+			}
+
 			if ( $mayParse ) {
-				$status = $this->parsoidOutputAccess->getParserOutput(
-					$this->page,
-					$parserOptions,
-					$rev
-				);
+				try {
+					$status = $this->parserOutputAccess->getParserOutput(
+						$page, $parserOptions, $revision
+					);
+				} catch ( ClientError $e ) {
+					$status = Status::newFatal( 'parsoid-client-error', $e->getMessage() );
+				} catch ( ResourceLimitExceededException $e ) {
+					$status = Status::newFatal( 'parsoid-resource-limit-exceeded', $e->getMessage() );
+				}
 
 				if ( !$status->isOK() ) {
 					$this->throwHttpExceptionForStatus( $status );
@@ -595,16 +697,13 @@ class HtmlInputTransformHelper {
 
 				$parserOutput = $status->getValue();
 			} else {
-				$parserOutput = $this->parsoidOutputAccess->getCachedParserOutput(
-					$this->page,
-					$parserOptions,
-					$rev
+				$parserOutput = $this->parserOutputAccess->getCachedParserOutput(
+					$page, $parserOptions, $revision
 				);
 			}
 		} catch ( RevisionAccessException $e ) {
 			// The client supplied bad revision ID, or the revision was deleted or suppressed.
-			throw new HttpException(
-				'The specified revision does not exist.',
+			throw new LocalizedHttpException( new MessageValue( "rest-specified-revision-unavailable" ),
 				404,
 				[ 'reason' => $e->getMessage() ]
 			);
@@ -620,42 +719,63 @@ class HtmlInputTransformHelper {
 	 */
 	private function fetchSelserContextFromStash( $renderID ): ?SelserContext {
 		$selserContext = $this->parsoidOutputStash->get( $renderID );
-
+		$labels = [
+			'original_html_given' => 'as_renderid',
+			'page_exists' => 'unknown',
+			'status' => 'hit-stashed'
+		];
+		$counter = $this->statsFactory->getCounter( 'html_input_transform_total' );
 		if ( $selserContext ) {
-			$this->stats->increment( 'html_input_transform.original_html.given.as_renderid.' .
-				'stash_hit.found.hit' );
-
+			$counter->setLabels( $labels )
+				->copyToStatsdAt( 'html_input_transform.original_html.given.as_renderid.stash_hit.found.hit' )
+				->increment();
 			return $selserContext;
 		} else {
 			// Looks like the rendering is gone from stash (or the client send us a bogus key).
 			// Try to load it from the parser cache instead.
 			// On a wiki with low edit frequency, there is a good chance that it's still there.
 			try {
-				$parserOutput = $this->fetchParserOutputFromParsoid( $renderID->getRevisionID(), false );
+				$parserOutput = $this->fetchParserOutputFromParsoid( $this->page, $renderID->getRevisionID(), false );
 
 				if ( !$parserOutput ) {
-					$this->stats->increment( 'html_input_transform.original_html.given.as_renderid.' .
-						'stash_miss_pc_fallback.not_found.miss' );
+					$labels[ 'status' ] = 'miss-fallback_not_found';
+					$counter->setLabels( $labels )->copyToStatsdAt(
+						'html_input_transform.original_html.given.as_renderid.stash_miss_pc_fallback.not_found.miss'
+					)->increment();
 					return null;
 				}
 
-				$cachedRenderID = $this->parsoidOutputAccess->getParsoidRenderID( $parserOutput );
+				$cachedRenderID = ParsoidRenderID::newFromParserOutput( $parserOutput );
 				if ( $cachedRenderID->getKey() !== $renderID->getKey() ) {
-					$this->stats->increment( 'html_input_transform.original_html.given.as_renderid.' .
-						'stash_miss_pc_fallback.not_found.mismatch' );
+					$labels[ 'status' ] = 'mismatch-fallback_not_found';
+					$counter->setLabels( $labels )
+						->copyToStatsdAt(
+							'html_input_transform.original_html.given.as_renderid.' .
+							'stash_miss_pc_fallback.not_found.mismatch'
+						)
+						->increment();
 
 					// It's not the correct rendering.
 					return null;
 				}
-
-				$this->stats->increment( 'html_input_transform.original_html.given.as_renderid.' .
-					'stash_miss_pc_fallback.found.hit' );
+				$labels[ 'status' ] = 'hit-fallback_found';
+				$counter->setLabels( $labels )
+					->copyToStatsdAt(
+						'html_input_transform.original_html.given.as_renderid.' .
+						'stash_miss_pc_fallback.found.hit'
+					)
+					->increment();
 
 				$pb = PageBundleParserOutputConverter::pageBundleFromParserOutput( $parserOutput );
 				return new SelserContext( $pb, $renderID->getRevisionID() );
 			} catch ( HttpException $e ) {
-				$this->stats->increment( 'html_input_transform.original_html.given.as_renderid.' .
-					'stash_miss_pc_fallback.not_found.failed' );
+				$labels[ 'status' ] = 'failed-fallback_not_found';
+				$counter->setLabels( $labels )
+					->copyToStatsdAt(
+						'html_input_transform.original_html.given.as_renderid.' .
+						'stash_miss_pc_fallback.not_found.failed'
+					)
+					->increment();
 
 				// If the revision isn't found, don't trigger a 404. Return null to trigger a 412.
 				return null;
@@ -672,14 +792,12 @@ class HtmlInputTransformHelper {
 	private function throwHttpExceptionForStatus( Status $status ) {
 		// TODO: make this nicer.
 		if ( $status->hasMessage( 'parsoid-resource-limit-exceeded' ) ) {
-			throw new HttpException(
-				'Resource limit exceeeded',
+			throw new LocalizedHttpException( new MessageValue( "rest-parsoid-resource-exceeded" ),
 				413,
 				[ 'reason' => $status->getHTML() ]
 			);
 		} else {
-			throw new HttpException(
-				'Parsoid error',
+			throw new LocalizedHttpException( new MessageValue( "rest-parsoid-error" ),
 				400,
 				[ 'reason' => $status->getHTML() ]
 			);
@@ -687,6 +805,3 @@ class HtmlInputTransformHelper {
 	}
 
 }
-
-/** @deprecated since 1.40, remove in 1.41 */
-class_alias( HtmlInputTransformHelper::class, "MediaWiki\\Rest\\Handler\\HtmlInputTransformHelper" );

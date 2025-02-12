@@ -21,10 +21,12 @@
  * @ingroup Maintenance
  */
 
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\WikiMap\WikiMap;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Copy all jobs from one job queue system to another.
@@ -57,7 +59,7 @@ class CopyJobQueue extends Maintenance {
 		}
 
 		$types = ( $this->getOption( 'type' ) === 'all' )
-			? MediaWikiServices::getInstance()->getJobQueueGroup()->getQueueTypes()
+			? $this->getServiceContainer()->getJobQueueGroup()->getQueueTypes()
 			: [ $this->getOption( 'type' ) ];
 
 		$dbDomain = WikiMap::getCurrentWikiDbDomain()->getId();
@@ -98,5 +100,7 @@ class CopyJobQueue extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = CopyJobQueue::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

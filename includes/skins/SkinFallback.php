@@ -9,16 +9,15 @@
 use MediaWiki\Html\Html;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Output\OutputPage;
 
 /**
  * SkinTemplate class for the fallback skin
  */
 class SkinFallback extends SkinMustache {
+	/** @inheritDoc */
 	public $skinname = 'fallback';
 
-	/**
-	 * @param OutputPage $out
-	 */
 	public function initPage( OutputPage $out ) {
 		parent::initPage( $out );
 		$out->disableClientCache();

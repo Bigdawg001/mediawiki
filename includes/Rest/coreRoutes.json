@@ -6,9 +6,10 @@
 			"RevisionStore",
 			"NameTableStoreFactory",
 			"GroupPermissionsLookup",
-			"DBLoadBalancer",
+			"DBLoadBalancerFactory",
 			"PageStore",
-			"TitleFormatter"
+			"TitleFormatter",
+			"PageRestHelperFactory"
 		]
 	},
 	{
@@ -18,11 +19,11 @@
 			"RevisionStore",
 			"NameTableStoreFactory",
 			"GroupPermissionsLookup",
-			"DBLoadBalancer",
+			"DBLoadBalancerFactory",
 			"MainWANObjectCache",
 			"PageStore",
-			"ActorMigration",
-			"TitleFormatter"
+			"PageRestHelperFactory",
+			"TempUserConfig"
 		]
 	},
 	{
@@ -30,7 +31,7 @@
 		"class": "MediaWiki\\Rest\\Handler\\CompareHandler",
 		"services": [
 			"RevisionLookup",
-			"Parser"
+			"ParserFactory"
 		]
 	},
 	{
@@ -66,6 +67,14 @@
 		"format": "bare"
 	},
 	{
+		"path": "/v1/search",
+		"class": "MediaWiki\\Rest\\Handler\\OpenSearchDescriptionHandler",
+		"services": [
+			"MainConfig",
+			"UrlUtils"
+		]
+	},
+	{
 		"path": "/v1/search/page",
 		"class": "MediaWiki\\Rest\\Handler\\SearchHandler",
 		"services": [
@@ -99,11 +108,12 @@
 		"path": "/v1/page/{title}/links/language",
 		"class": "MediaWiki\\Rest\\Handler\\LanguageLinksHandler",
 		"services": [
-			"DBLoadBalancer",
+			"DBLoadBalancerFactory",
 			"LanguageNameUtils",
 			"TitleFormatter",
 			"TitleParser",
-			"PageStore"
+			"PageStore",
+			"PageRestHelperFactory"
 		]
 	},
 	{
@@ -111,7 +121,6 @@
 		"class": "MediaWiki\\Rest\\Handler\\PageSourceHandler",
 		"services": [
 			"TitleFormatter",
-			"RedirectStore",
 			"PageRestHelperFactory"
 		],
 		"format": "source"
@@ -121,7 +130,6 @@
 		"class": "MediaWiki\\Rest\\Handler\\PageSourceHandler",
 		"services": [
 			"TitleFormatter",
-			"RedirectStore",
 			"PageRestHelperFactory"
 		],
 		"format": "bare"
@@ -130,8 +138,6 @@
 		"path": "/v1/page/{title}/html",
 		"class": "MediaWiki\\Rest\\Handler\\PageHTMLHandler",
 		"services": [
-			"TitleFormatter",
-			"RedirectStore",
 			"PageRestHelperFactory"
 		],
 		"format": "html"
@@ -140,8 +146,6 @@
 		"path": "/v1/page/{title}/with_html",
 		"class": "MediaWiki\\Rest\\Handler\\PageHTMLHandler",
 		"services": [
-			"TitleFormatter",
-			"RedirectStore",
 			"PageRestHelperFactory"
 		],
 		"format": "with_html"
@@ -186,5 +190,101 @@
 			"TitleFormatter",
 			"RevisionStore"
 		]
+	},
+	{
+		"method": "POST",
+		"path": "/v1/transform/{from}/to/html/{title}/{revision}",
+		"class": "MediaWiki\\Rest\\Handler\\TransformHandler",
+		"factory": "MediaWiki\\Rest\\Handler\\TransformHandler::factory",
+		"format": "html",
+		"transformations": {
+			"wikitext": [
+				"html",
+				"lint"
+			],
+			"html": [
+				"wikitext"
+			]
+		}
+	},
+	{
+		"method": "POST",
+		"path": "/v1/transform/{from}/to/wikitext/{title}/{revision}",
+		"class": "MediaWiki\\Rest\\Handler\\TransformHandler",
+		"factory": "MediaWiki\\Rest\\Handler\\TransformHandler::factory",
+		"format": "wikitext",
+		"transformations": {
+			"wikitext": [
+				"html",
+				"lint"
+			],
+			"html": [
+				"wikitext"
+			]
+		}
+	},
+	{
+		"method": "POST",
+		"path": "/v1/transform/{from}/to/html",
+		"class": "MediaWiki\\Rest\\Handler\\TransformHandler",
+		"factory": "MediaWiki\\Rest\\Handler\\TransformHandler::factory",
+		"format": "html",
+		"transformations": {
+			"wikitext": [
+				"html",
+				"lint"
+			],
+			"html": [
+				"wikitext"
+			]
+		}
+	},
+	{
+		"method": "POST",
+		"path": "/v1/transform/{from}/to/wikitext",
+		"class": "MediaWiki\\Rest\\Handler\\TransformHandler",
+		"factory": "MediaWiki\\Rest\\Handler\\TransformHandler::factory",
+		"format": "wikitext",
+		"transformations": {
+			"wikitext": [
+				"html",
+				"lint"
+			],
+			"html": [
+				"wikitext"
+			]
+		}
+	},
+	{
+		"method": "POST",
+		"path": "/v1/transform/{from}/to/html/{title}",
+		"class": "MediaWiki\\Rest\\Handler\\TransformHandler",
+		"factory": "MediaWiki\\Rest\\Handler\\TransformHandler::factory",
+		"format": "html",
+		"transformations": {
+			"wikitext": [
+				"html",
+				"lint"
+			],
+			"html": [
+				"wikitext"
+			]
+		}
+	},
+	{
+		"method": "POST",
+		"path": "/v1/transform/{from}/to/wikitext/{title}",
+		"class": "MediaWiki\\Rest\\Handler\\TransformHandler",
+		"factory": "MediaWiki\\Rest\\Handler\\TransformHandler::factory",
+		"format": "wikitext",
+		"transformations": {
+			"wikitext": [
+				"html",
+				"lint"
+			],
+			"html": [
+				"wikitext"
+			]
+		}
 	}
 ]

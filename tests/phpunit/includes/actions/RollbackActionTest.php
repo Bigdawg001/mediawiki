@@ -3,20 +3,19 @@
 namespace MediaWiki\Tests\Action;
 
 use Article;
-use DerivativeContext;
 use ErrorPageError;
+use MediaWiki\Context\DerivativeContext;
+use MediaWiki\Context\RequestContext;
 use MediaWiki\Request\FauxRequest;
+use MediaWiki\Request\WebRequest;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
 use MediaWikiIntegrationTestCase;
-use RequestContext;
 use RollbackAction;
-use User;
-use WebRequest;
 
 /**
- * @coversDefaultClass RollbackAction
+ * @covers \RollbackAction
  * @group Database
- * @package MediaWiki\Tests\Action
  */
 class RollbackActionTest extends MediaWikiIntegrationTestCase {
 
@@ -74,7 +73,6 @@ class RollbackActionTest extends MediaWikiIntegrationTestCase {
 
 	/**
 	 * @dataProvider provideRollbackParamFail
-	 * @covers ::handleRollbackRequest
 	 */
 	public function testRollbackParamFail( array $requestParams ) {
 		$request = new FauxRequest( $requestParams );
@@ -83,9 +81,6 @@ class RollbackActionTest extends MediaWikiIntegrationTestCase {
 		$rollbackAction->handleRollbackRequest();
 	}
 
-	/**
-	 * @covers ::handleRollbackRequest
-	 */
 	public function testRollbackTokenMismatch() {
 		$request = new FauxRequest( [
 			'from' => $this->vandal->getName(),
@@ -96,10 +91,10 @@ class RollbackActionTest extends MediaWikiIntegrationTestCase {
 		$rollbackAction->handleRollbackRequest();
 	}
 
-	/**
-	 * @covers ::handleRollbackRequest
-	 */
 	public function testRollback() {
+		$editTracker = $this->getServiceContainer()->getUserEditTracker();
+		$editCount = $editTracker->getUserEditCount( $this->sysop );
+
 		$request = new FauxRequest( [
 			'from' => $this->vandal->getName(),
 			'token' => $this->sysop->getEditToken( 'rollback' ),
@@ -118,11 +113,13 @@ class RollbackActionTest extends MediaWikiIntegrationTestCase {
 		$recentChange = $revisionStore->getRecentChange( $latestRev );
 		$this->assertSame( '0', $recentChange->getAttribute( 'rc_bot' ) );
 		$this->assertSame( $this->sysop->getName(), $recentChange->getAttribute( 'rc_user_text' ) );
+
+		// T382592
+		$editTracker->clearUserEditCache( $this->sysop );
+		$this->runDeferredUpdates();
+		$this->assertSame( $editCount + 1, $editTracker->getUserEditCount( $this->sysop ) );
 	}
 
-	/**
-	 * @covers ::handleRollbackRequest
-	 */
 	public function testRollbackMarkBot() {
 		$request = new FauxRequest( [
 			'from' => $this->vandal->getName(),

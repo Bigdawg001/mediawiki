@@ -2,11 +2,12 @@
 
 namespace MediaWiki\Deferred\LinksUpdate;
 
+use InvalidArgumentException;
 use MediaWiki\Linker\LinkTargetLookup;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageReference;
+use MediaWiki\Parser\ParserOutput;
 use MediaWiki\Revision\RevisionRecord;
-use ParserOutput;
 use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\IResultWrapper;
 use Wikimedia\Rdbms\LBFactory;
@@ -138,8 +139,6 @@ abstract class LinksTable {
 
 	/**
 	 * Set the revision associated with the edit.
-	 *
-	 * @param RevisionRecord $revision
 	 */
 	public function setRevision( RevisionRecord $revision ) {
 		$this->revision = $revision;
@@ -148,8 +147,6 @@ abstract class LinksTable {
 	/**
 	 * Notify the object that the operation is a page move, and set the
 	 * original title.
-	 *
-	 * @param PageReference $movedPage
 	 */
 	public function setMoveDetails( PageReference $movedPage ) {
 		$this->movedPage = $movedPage;
@@ -161,8 +158,6 @@ abstract class LinksTable {
 	 *
 	 * To support a future refactor of LinksDeletionUpdate, if this method is
 	 * not called, the subclass should assume that the new state is empty.
-	 *
-	 * @param ParserOutput $parserOutput
 	 */
 	abstract public function setParserOutput( ParserOutput $parserOutput );
 
@@ -261,17 +256,12 @@ abstract class LinksTable {
 		return $this->db;
 	}
 
-	/**
-	 * @return LBFactory
-	 */
 	protected function getLBFactory(): LBFactory {
 		return $this->lbFactory;
 	}
 
 	/**
 	 * Get the page_id of the source page
-	 *
-	 * @return int
 	 */
 	protected function getSourcePageId(): int {
 		return $this->sourcePage->getId();
@@ -280,8 +270,6 @@ abstract class LinksTable {
 	/**
 	 * Get the source page, i.e. the page which is being updated and is the
 	 * source of links.
-	 *
-	 * @return PageIdentity
 	 */
 	protected function getSourcePage(): PageIdentity {
 		return $this->sourcePage;
@@ -309,8 +297,6 @@ abstract class LinksTable {
 	/**
 	 * Assuming the page was moved, get the original page title before the move.
 	 * This will throw an exception if the page wasn't moved.
-	 *
-	 * @return PageReference
 	 */
 	protected function getMovedPage(): PageReference {
 		return $this->movedPage;
@@ -318,8 +304,6 @@ abstract class LinksTable {
 
 	/**
 	 * Get the maximum number of rows to update in a batch.
-	 *
-	 * @return int
 	 */
 	protected function getBatchSize(): int {
 		return $this->batchSize;
@@ -357,8 +341,6 @@ abstract class LinksTable {
 	/**
 	 * Do a select query to fetch the existing rows. This is a helper for
 	 * subclasses.
-	 *
-	 * @return IResultWrapper
 	 */
 	protected function fetchExistingRows(): IResultWrapper {
 		return $this->getDB()->newSelectQueryBuilder()
@@ -458,26 +440,24 @@ abstract class LinksTable {
 
 		$deleteBatches = array_chunk( $this->rowsToDelete, $batchSize );
 		foreach ( $deleteBatches as $chunk ) {
-			$factoredConds = $db->factorConds( $chunk );
-			$db->delete(
-				$table,
-				$factoredConds,
-				__METHOD__
-			);
+			$db->newDeleteQueryBuilder()
+				->deleteFrom( $table )
+				->where( $db->factorConds( $chunk ) )
+				->caller( __METHOD__ )->execute();
 			if ( count( $deleteBatches ) > 1 ) {
-				$this->lbFactory->commitAndWaitForReplication(
-					__METHOD__, $ticket, [ 'domain' => $domainId ]
-				);
+				$this->lbFactory->commitAndWaitForReplication( __METHOD__, $ticket );
 			}
 		}
 
 		$insertBatches = array_chunk( $this->rowsToInsert, $batchSize );
 		foreach ( $insertBatches as $insertBatch ) {
-			$db->insert( $table, $insertBatch, __METHOD__, $this->getInsertOptions() );
+			$db->newInsertQueryBuilder()
+				->options( $this->getInsertOptions() )
+				->insertInto( $table )
+				->rows( $insertBatch )
+				->caller( __METHOD__ )->execute();
 			if ( count( $insertBatches ) > 1 ) {
-				$this->lbFactory->commitAndWaitForReplication(
-					__METHOD__, $ticket, [ 'domain' => $domainId ]
-				);
+				$this->lbFactory->commitAndWaitForReplication( __METHOD__, $ticket );
 			}
 		}
 	}
@@ -532,13 +512,12 @@ abstract class LinksTable {
 				return $this->getNewLinkIDs();
 
 			default:
-				throw new \InvalidArgumentException( __METHOD__ . ": Unknown link type" );
+				throw new InvalidArgumentException( __METHOD__ . ": Unknown link type" );
 		}
 	}
 
 	/**
 	 * Normalization stage of the links table (see T222224)
-	 * @return int
 	 */
 	protected function linksTargetNormalizationStage(): int {
 		return SCHEMA_COMPAT_OLD;

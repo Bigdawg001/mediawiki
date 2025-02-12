@@ -2,7 +2,7 @@
 /**
  * XmlDumpWriter
  *
- * Copyright © 2003, 2005, 2006 Brion Vibber <brion@pobox.com>
+ * Copyright © 2003, 2005, 2006 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
  * This program is free software; you can redistribute it and/or modify
@@ -24,16 +24,21 @@
  */
 
 use MediaWiki\CommentStore\CommentStore;
+use MediaWiki\Content\Content;
+use MediaWiki\Content\TextContent;
+use MediaWiki\Debug\MWDebug;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Revision\RevisionAccessException;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\RevisionStore;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Revision\SuppressedDataException;
 use MediaWiki\Storage\SqlBlobStore;
 use MediaWiki\Title\Title;
+use MediaWiki\Xml\Xml;
 use Wikimedia\Assert\Assert;
 use Wikimedia\IPUtils;
 
@@ -271,6 +276,7 @@ class XmlDumpWriter {
 				},
 				'Failed to get redirect target of page ' . $page->getId()
 			);
+			$redirect = Title::castFromLinkTarget( $redirect );
 			if ( $redirect instanceof Title && $redirect->isValidRedirectTarget() ) {
 				$out .= '    ';
 				$out .= Xml::element( 'redirect', [ 'title' => self::canonicalTitle( $redirect ) ] );
@@ -314,14 +320,12 @@ class XmlDumpWriter {
 	}
 
 	/**
-	 * Invokes the given callback, catching and logging any storage related
-	 * exceptions.
+	 * Invokes the given callback, catching and logging any exceptions.
 	 *
 	 * @param callable $callback
 	 * @param string $warning The warning to output in case of a storage related exception.
 	 *
-	 * @return mixed Returns the method's return value,
-	 *         or null in case of a storage related exception.
+	 * @return mixed Returns the method's return value, or null in case of an exception.
 	 * @throws Exception
 	 */
 	private function invokeLenient( $callback, $warning ) {
@@ -329,14 +333,9 @@ class XmlDumpWriter {
 			return $callback();
 		} catch ( SuppressedDataException $ex ) {
 			return null;
-		} catch ( Exception $ex ) {
-			if ( $ex instanceof MWException || $ex instanceof RuntimeException ||
-				$ex instanceof InvalidArgumentException ) {
-				MWDebug::warning( $warning . ': ' . $ex->getMessage() );
-				return null;
-			} else {
-				throw $ex;
-			}
+		} catch ( MWException | RuntimeException | InvalidArgumentException | ErrorException $ex ) {
+			MWDebug::warning( $warning . ': ' . $ex->getMessage() );
+			return null;
 		}
 	}
 
@@ -348,8 +347,7 @@ class XmlDumpWriter {
 	 * @param null|stdClass[] $slotRows
 	 *
 	 * @return string
-	 * @throws FatalError
-	 * @throws MWException
+	 * @throws RevisionAccessException
 	 */
 	public function writeRevision( $row, $slotRows = null ) {
 		$rev = $this->getRevisionStore()->newRevisionFromRowAndSlots(
@@ -425,7 +423,7 @@ class XmlDumpWriter {
 			/** @var Content $content */
 			$content = $this->invokeLenient(
 				static function () use ( $rev ) {
-					return $rev->getContent( SlotRecord::MAIN, RevisionRecord::RAW );
+					return $rev->getMainContentRaw();
 				},
 				'Failed to load main slot content of revision ' . $rev->getId()
 			);
@@ -522,26 +520,29 @@ class XmlDumpWriter {
 			if ( $isV11 ) {
 				$textAttributes['location'] = $slot->getAddress();
 			}
+			$schema = null;
 
 			if ( $isMain ) {
 				// Output the numerical text ID if possible, for backwards compatibility.
 				// Note that this is currently the ONLY reason we have a BlobStore here at all.
 				// When removing this line, check whether the BlobStore has become unused.
 				try {
-					// NOTE: this will only work for addresses of the form "tt:12345".
+					// NOTE: this will only work for addresses of the form "tt:12345" or "es:DB://cluster1/1234".
 					// If we want to support other kinds of addresses in the future,
 					// we will have to silently ignore failures here.
 					// For now, this fails for "tt:0", which is present in the WMF production
 					// database as of July 2019, due to data corruption.
-					$textId = $this->getBlobStore()->getTextIdFromAddress( $slot->getAddress() );
+					[ $schema, $textId ] = $this->getBlobStore()->splitBlobAddress( $slot->getAddress() );
 				} catch ( InvalidArgumentException $ex ) {
 					MWDebug::warning( 'Bad content address for slot ' . $slot->getRole()
 						. ' of revision ' . $slot->getRevision() . ': ' . $ex->getMessage() );
 					$textId = 0;
 				}
 
-				if ( is_int( $textId ) ) {
+				if ( $schema === 'tt' ) {
 					$textAttributes['id'] = $textId;
+				} elseif ( $schema === 'es' ) {
+					$textAttributes['id'] = bin2hex( $textId );
 				}
 			}
 

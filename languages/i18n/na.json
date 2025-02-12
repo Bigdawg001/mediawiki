@@ -8,13 +8,6 @@
 			"Tok Pisin"
 		]
 	},
-	"sunday": "Tondak",
-	"monday": "Mondak",
-	"tuesday": "Dintak",
-	"wednesday": "Mitwok",
-	"thursday": "Donertak",
-	"friday": "Preidak",
-	"saturday": "Tadurdei",
 	"moredotdotdot": "Iyuw...",
 	"and": "&#32;me",
 	"errorpagetitle": "Dairinaiya",
@@ -47,9 +40,7 @@
 	"newarticle": "(Etsimeduw)",
 	"editing": "Oomo/edar $1",
 	"editingsection": "Oomo/edar $1 (itubwang)",
-	"prefs-skin": "Witsin",
 	"searchresultshead": "Anani ko",
-	"yourlanguage": "Edorer",
 	"group-sysop": "Administrators",
 	"grouppage-sysop": "{{ns:project}}:Administrators",
 	"recentchanges": "Iwiwidit tsimeduw",

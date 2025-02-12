@@ -2,22 +2,22 @@
 
 namespace MediaWiki\Tests\Integration\Context;
 
-use DerivativeContext;
-use HashConfig;
-use IContextSource;
-use Language;
 use MediaWiki\Actions\ActionFactory;
+use MediaWiki\Config\HashConfig;
+use MediaWiki\Context\DerivativeContext;
+use MediaWiki\Context\IContextSource;
+use MediaWiki\Context\RequestContext;
+use MediaWiki\Language\Language;
+use MediaWiki\Output\OutputPage;
 use MediaWiki\Permissions\Authority;
 use MediaWiki\Request\FauxRequest;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
 use MediaWikiIntegrationTestCase;
-use OutputPage;
-use RequestContext;
-use User;
 use WikiPage;
 
 /**
- * @covers DerivativeContext
+ * @covers \MediaWiki\Context\DerivativeContext
  */
 class DerivativeContextTest extends MediaWikiIntegrationTestCase {
 

@@ -11,24 +11,18 @@ use Wikimedia\Rdbms\IMaintainableDatabase;
 
 /**
  * @group Database
- * @covers ActorMigration
- * @covers ActorMigrationBase
+ * @covers \MediaWiki\User\ActorMigration
+ * @covers \MediaWiki\User\ActorMigrationBase
  */
 class ActorMigrationTest extends MediaWikiLangTestCase {
 
+	/** @var int */
 	protected static $amId = 0;
-
-	protected $tablesUsed = [
-		'actor',
-	];
 
 	private const STAGES_BY_NAME = [
 		'old' => SCHEMA_COMPAT_WRITE_OLD | SCHEMA_COMPAT_READ_OLD,
-		'read-old' => SCHEMA_COMPAT_WRITE_OLD_AND_TEMP | SCHEMA_COMPAT_READ_OLD,
-		'read-temp' => SCHEMA_COMPAT_WRITE_OLD_AND_TEMP | SCHEMA_COMPAT_READ_TEMP,
-		'temp' => SCHEMA_COMPAT_WRITE_TEMP | SCHEMA_COMPAT_READ_TEMP,
-		'read-temp2' => SCHEMA_COMPAT_WRITE_TEMP_AND_NEW | SCHEMA_COMPAT_READ_TEMP,
-		'read-new' => SCHEMA_COMPAT_WRITE_TEMP_AND_NEW | SCHEMA_COMPAT_READ_NEW,
+		'read-old' => SCHEMA_COMPAT_WRITE_BOTH | SCHEMA_COMPAT_READ_OLD,
+		'read-new' => SCHEMA_COMPAT_WRITE_BOTH | SCHEMA_COMPAT_READ_NEW,
 		'new' => SCHEMA_COMPAT_WRITE_NEW | SCHEMA_COMPAT_READ_NEW
 	];
 
@@ -38,7 +32,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 				__DIR__ . '/ActorMigrationTest.sql',
 			],
 			'drop' => [],
-			'create' => [ 'actormigration1', 'actormigration2', 'actormigration2_temp', 'actormigration3' ],
+			'create' => [ 'actormigration1', 'actormigration2' ],
 			'alter' => [],
 		];
 	}
@@ -47,20 +41,10 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 		$mwServices = $this->getServiceContainer();
 		return new ActorMigrationBase(
 			[
-				'am2_user' => [
-					'tempTable' => [
-						'table' => 'actormigration2_temp',
-						'pk' => 'am2t_id',
-						'field' => 'am2t_actor',
-						'joinPK' => 'am2_id',
-						'extra' => [],
-					]
+				'am2_xxx' => [
+					'textField' => 'am2_xxx_text',
+					'actorField' => 'am2_xxx_actor'
 				],
-				'am3_xxx' => [
-					'textField' => 'am3_xxx_text',
-					'actorField' => 'am3_xxx_actor'
-				],
-
 			],
 			$stage,
 			$actorStoreFactory ?? $mwServices->getActorStoreFactory()
@@ -103,29 +87,17 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 		return [
 			[ 0, '$stage must include a write mode' ],
 			[ SCHEMA_COMPAT_READ_OLD, '$stage must include a write mode' ],
-			[ SCHEMA_COMPAT_READ_TEMP, '$stage must include a write mode' ],
-			[ SCHEMA_COMPAT_READ_BOTH, '$stage must include a write mode' ],
+			[ SCHEMA_COMPAT_READ_NEW, '$stage must include a write mode' ],
 
 			[ SCHEMA_COMPAT_WRITE_OLD, '$stage must include a read mode' ],
-			[ SCHEMA_COMPAT_WRITE_OLD | SCHEMA_COMPAT_READ_OLD, null ],
-			[
-				SCHEMA_COMPAT_WRITE_OLD | SCHEMA_COMPAT_READ_TEMP,
-				'Cannot read the temp schema without also writing it'
-			],
+			[ SCHEMA_COMPAT_OLD, null ],
 			[ SCHEMA_COMPAT_WRITE_OLD | SCHEMA_COMPAT_READ_BOTH, 'Cannot read multiple schemas' ],
 
-			[ SCHEMA_COMPAT_WRITE_TEMP, '$stage must include a read mode' ],
+			[ SCHEMA_COMPAT_WRITE_NEW, '$stage must include a read mode' ],
 			[
-				SCHEMA_COMPAT_WRITE_TEMP | SCHEMA_COMPAT_READ_OLD,
+				SCHEMA_COMPAT_WRITE_NEW | SCHEMA_COMPAT_READ_OLD,
 				'Cannot read the old schema without also writing it'
 			],
-			[ SCHEMA_COMPAT_WRITE_TEMP | SCHEMA_COMPAT_READ_TEMP, null ],
-			[ SCHEMA_COMPAT_WRITE_TEMP | SCHEMA_COMPAT_READ_BOTH, 'Cannot read multiple schemas' ],
-
-			[ SCHEMA_COMPAT_WRITE_OLD_AND_TEMP, '$stage must include a read mode' ],
-			[ SCHEMA_COMPAT_WRITE_OLD_AND_TEMP | SCHEMA_COMPAT_READ_OLD, null ],
-			[ SCHEMA_COMPAT_WRITE_OLD_AND_TEMP | SCHEMA_COMPAT_READ_TEMP, null ],
-			[ SCHEMA_COMPAT_WRITE_OLD_AND_TEMP | SCHEMA_COMPAT_READ_BOTH, 'Cannot read multiple schemas' ],
 		];
 	}
 
@@ -145,8 +117,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 	public static function provideGetJoin() {
 		$inputs = [
 			'Simple table' => [ 'am1_user' ],
-			'Special name' => [ 'am3_xxx' ],
-			'Temp table' => [ 'am2_user' ],
+			'Special name' => [ 'am2_xxx' ],
 		];
 		$expected = [
 			'Simple table' => [
@@ -163,7 +134,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 					]
 				],
 				[
-					[ 'read-temp', 'temp', 'read-temp2', 'read-new', 'new' ],
+					[ 'read-new', 'new' ],
 					[
 						'tables' => [ 'actor_am1_user' => 'actor' ],
 						'fields' => [
@@ -184,75 +155,26 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 					[
 						'tables' => [],
 						'fields' => [
-							'am3_xxx' => 'am3_xxx',
-							'am3_xxx_text' => 'am3_xxx_text',
-							'am3_xxx_actor' => 'NULL',
+							'am2_xxx' => 'am2_xxx',
+							'am2_xxx_text' => 'am2_xxx_text',
+							'am2_xxx_actor' => 'NULL',
 						],
 						'joins' => [],
 					],
-				],
-				[
-					[ 'read-temp', 'temp', 'read-temp2', 'read-new', 'new' ],
-					[
-						'tables' => [ 'actor_am3_xxx' => 'actor' ],
-						'fields' => [
-							'am3_xxx' => 'actor_am3_xxx.actor_user',
-							'am3_xxx_text' => 'actor_am3_xxx.actor_name',
-							'am3_xxx_actor' => 'am3_xxx_actor',
-						],
-						'joins' => [
-							'actor_am3_xxx' => [ 'JOIN', 'actor_am3_xxx.actor_id = am3_xxx_actor' ],
-						],
-					],
-				],
-			],
-
-			'Temp table' => [
-				[
-					[ 'old', 'read-old' ],
-					[
-						'tables' => [],
-						'fields' => [
-							'am2_user' => 'am2_user',
-							'am2_user_text' => 'am2_user_text',
-							'am2_actor' => 'NULL',
-						],
-						'joins' => [],
-					]
-				],
-				[
-					[ 'read-temp', 'temp', 'read-temp2' ],
-					[
-						'tables' => [
-							'temp_am2_user' => 'actormigration2_temp',
-							'actor_am2_user' => 'actor',
-						],
-						'fields' => [
-							'am2_user' => 'actor_am2_user.actor_user',
-							'am2_user_text' => 'actor_am2_user.actor_name',
-							'am2_actor' => 'temp_am2_user.am2t_actor',
-						],
-						'joins' => [
-							'temp_am2_user' => [ 'JOIN', 'temp_am2_user.am2t_id = am2_id' ],
-							'actor_am2_user' => [ 'JOIN', 'actor_am2_user.actor_id = temp_am2_user.am2t_actor' ],
-						],
-					]
 				],
 				[
 					[ 'read-new', 'new' ],
 					[
-						'tables' => [
-							'actor_am2_user' => 'actor',
-						],
+						'tables' => [ 'actor_am2_xxx' => 'actor' ],
 						'fields' => [
-							'am2_user' => 'actor_am2_user.actor_user',
-							'am2_user_text' => 'actor_am2_user.actor_name',
-							'am2_actor' => 'am2_actor',
+							'am2_xxx' => 'actor_am2_xxx.actor_user',
+							'am2_xxx_text' => 'actor_am2_xxx.actor_name',
+							'am2_xxx_actor' => 'am2_xxx_actor',
 						],
 						'joins' => [
-							'actor_am2_user' => [ 'JOIN', 'actor_am2_user.actor_id = am2_actor' ],
+							'actor_am2_xxx' => [ 'JOIN', 'actor_am2_xxx.actor_id = am2_xxx_actor' ],
 						],
-					]
+					],
 				],
 			],
 		];
@@ -284,7 +206,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 		$mock = $this->createNoOpMock( ActorStore::class, [ 'findActorId' ] );
 
 		$mock->method( 'findActorId' )
-			->willReturnCallback( function ( UserIdentity $user ) {
+			->willReturnCallback( static function ( UserIdentity $user ) {
 				$row = self::findRow( self::ACTORS, 1, $user->getName() );
 				return $row ? $row[2] : null;
 			} );
@@ -322,7 +244,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 		}
 
 		$m = $this->getMigration( $stage, $this->getMockActorStoreFactory() );
-		$result = $m->getWhere( $this->db, $key, $users, $useId );
+		$result = $m->getWhere( $this->getDb(), $key, $users, $useId );
 		$this->assertEquals( $expect, $result );
 	}
 
@@ -340,8 +262,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 
 		$inputs = [
 			'Simple table' => [ 'am1_user', $genericUser, true ],
-			'Special name' => [ 'am3_xxx', $genericUser, true ],
-			'Temp table' => [ 'am2_user', $genericUser, true ],
+			'Special name' => [ 'am2_xxx', $genericUser, true ],
 			'Multiple users' => [ 'am1_user', $complicatedUsers, true ],
 			'Multiple users, no use ID' => [ 'am1_user', $complicatedUsers, false ],
 			'Empty $users' => [ 'am1_user', [], true ],
@@ -359,13 +280,6 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 						'joins' => [],
 					]
 				], [
-					[ 'read-temp', 'temp', 'read-temp2' ],
-					[
-						'tables' => [],
-						'orconds' => [ 'actor' => "am1_actor = 11" ],
-						'joins' => [],
-					],
-				], [
 					[ 'read-new', 'new' ],
 					[
 						'tables' => [],
@@ -380,53 +294,17 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 					[ 'old', 'read-old' ],
 					[
 						'tables' => [],
-						'orconds' => [ 'userid' => "am3_xxx = 1" ],
-						'joins' => [],
-					],
-				], [
-					[ 'read-temp', 'temp', 'read-temp2' ],
-					[
-						'tables' => [],
-						'orconds' => [ 'actor' => "am3_xxx_actor = 11" ],
+						'orconds' => [ 'userid' => "am2_xxx = 1" ],
 						'joins' => [],
 					],
 				], [
 					[ 'read-new', 'new' ],
 					[
 						'tables' => [],
-						'orconds' => [ 'newactor' => "am3_xxx_actor = 11" ],
+						'orconds' => [ 'newactor' => "am2_xxx_actor = 11" ],
 						'joins' => [],
 					],
 				],
-			],
-
-			'Temp table' => [
-				[
-					[ 'old', 'read-old' ],
-					[
-						'tables' => [],
-						'orconds' => [ 'userid' => "am2_user = 1" ],
-						'joins' => [],
-					],
-				], [
-					[ 'read-temp', 'temp', 'read-temp2' ],
-					[
-						'tables' => [
-							'temp_am2_user' => 'actormigration2_temp',
-						],
-						'orconds' => [ 'actor' => "temp_am2_user.am2t_actor = 11" ],
-						'joins' => [
-							'temp_am2_user' => [ 'JOIN', 'temp_am2_user.am2t_id = am2_id' ],
-						],
-					],
-				], [
-					[ 'read-new', 'new' ],
-					[
-						'tables' => [],
-						'orconds' => [ 'newactor' => "am2_actor = 11" ],
-						'joins' => [],
-					]
-				]
 			],
 
 			'Multiple users' => [
@@ -439,13 +317,6 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 							'username' => "am1_user_text IN ('192.168.12.34','192.168.12.35',"
 								. "'2600:1004:B14A:5DDD:3EBE:BBA4:BFBA:F37E') "
 						],
-						'joins' => [],
-					]
-				], [
-					[ 'read-temp', 'temp', 'read-temp2' ],
-					[
-						'tables' => [],
-						'orconds' => [ 'actor' => "am1_actor IN (11,12,34) " ],
 						'joins' => [],
 					]
 				], [
@@ -470,13 +341,6 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 						'joins' => [],
 					],
 				], [
-					[ 'read-temp', 'temp', 'read-temp2' ],
-					[
-						'tables' => [],
-						'orconds' => [ 'actor' => "am1_actor IN (11,12,34) " ],
-						'joins' => [],
-					]
-				], [
 					[ 'read-new', 'new' ],
 					[
 						'tables' => [],
@@ -487,7 +351,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 			],
 
 			'Empty $users' => [ [
-				[ 'old', 'read-old', 'read-temp', 'temp', 'read-temp2', 'read-new', 'new' ],
+				[ 'old', 'read-old', 'read-new', 'new' ],
 				[
 					'tables' => [],
 					'conds' => '1=0',
@@ -497,7 +361,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 			] ],
 
 			'Null $users' => [ [
-				[ 'old', 'read-old', 'read-temp', 'temp', 'read-temp2', 'read-new', 'new' ],
+				[ 'old', 'read-old', 'read-new', 'new' ],
 				[
 					'tables' => [],
 					'conds' => '1=0',
@@ -507,7 +371,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 			] ],
 
 			'False $users' => [ [
-				[ 'old', 'read-old', 'read-temp', 'temp', 'read-temp2', 'read-new', 'new' ],
+				[ 'old', 'read-old', 'read-new', 'new' ],
 				[
 					'tables' => [],
 					'conds' => '1=0',
@@ -530,7 +394,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 		);
 
 		$m = $this->getMigration( $stage );
-		$m->getWhere( $this->db, 'am1_user', 'Foo' );
+		$m->getWhere( $this->getDb(), 'am1_user', 'Foo' );
 	}
 
 	/**
@@ -538,9 +402,8 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 	 * @param string $table
 	 * @param string $key
 	 * @param string $pk
-	 * @param bool $usesTemp
 	 */
-	public function testInsertRoundTrip( $table, $key, $pk, $usesTemp ) {
+	public function testInsertRoundTrip( $table, $key, $pk ) {
 		$u = $this->getTestUser()->getUser();
 		$user = new UserIdentityValue( $u->getId(), $u->getName() );
 
@@ -554,30 +417,8 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 			'read-old' => [
 				'old',
 				'read-old',
-				'read-temp',
-				'temp'
-			],
-			'read-temp' => [
-				'old',
-				'read-old',
-				'read-temp',
-				'temp'
-			],
-			'temp' => [
-				'read-temp',
-				'temp'
-			],
-			'read-temp2' => [
-				'read-temp',
-				'temp',
-				'read-temp2',
-				'read-new',
-				'new'
 			],
 			'read-new' => [
-				'read-temp',
-				'temp',
-				'read-temp2',
 				'read-new',
 				'new'
 			],
@@ -588,17 +429,13 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 		];
 
 		$nameKey = $key . '_text';
-		$actorKey = ( $key === 'am3_xxx' ? $key : substr( $key, 0, -5 ) ) . '_actor';
+		$actorKey = ( $key === 'am2_xxx' ? $key : substr( $key, 0, -5 ) ) . '_actor';
 
 		foreach ( $stages as $writeStageName => $possibleReadStages ) {
 			$writeStage = self::STAGES_BY_NAME[$writeStageName];
 			$w = $this->getMigration( $writeStage );
 
-			if ( $usesTemp ) {
-				[ $fields, $callback ] = $w->getInsertValuesWithTempTable( $this->db, $key, $user );
-			} else {
-				$fields = $w->getInsertValues( $this->db, $key, $user );
-			}
+			$fields = $w->getInsertValues( $this->getDb(), $key, $user );
 
 			if ( $writeStage & SCHEMA_COMPAT_WRITE_OLD ) {
 				$this->assertSame( $user->getId(), $fields[$key],
@@ -609,9 +446,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 				$this->assertArrayNotHasKey( $key, $fields, "old field, stage={$stageNames[$writeStage]}" );
 				$this->assertArrayNotHasKey( $nameKey, $fields, "old field, stage={$stageNames[$writeStage]}" );
 			}
-			if ( ( ( $writeStage & SCHEMA_COMPAT_WRITE_TEMP ) && !$usesTemp )
-				|| ( $writeStage & SCHEMA_COMPAT_WRITE_NEW )
-			) {
+			if ( $writeStage & SCHEMA_COMPAT_WRITE_NEW ) {
 				$this->assertArrayHasKey( $actorKey, $fields,
 					"new field, stage={$stageNames[$writeStage]}" );
 			} else {
@@ -620,24 +455,23 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 			}
 
 			$id = ++self::$amId;
-			$this->db->insert( $table, [ $pk => $id ] + $fields, __METHOD__ );
-			if ( $usesTemp ) {
-				$callback( $id, [] );
-			}
+			$this->getDb()->newInsertQueryBuilder()
+				->insertInto( $table )
+				->row( [ $pk => $id ] + $fields )
+				->caller( __METHOD__ )
+				->execute();
 
 			foreach ( $possibleReadStages as $readStageName ) {
 				$readStage = self::STAGES_BY_NAME[$readStageName];
 				$r = $this->getMigration( $readStage );
 
 				$queryInfo = $r->getJoin( $key );
-				$row = $this->db->selectRow(
-					[ $table ] + $queryInfo['tables'],
-					$queryInfo['fields'],
-					[ $pk => $id ],
-					__METHOD__,
-					[],
-					$queryInfo['joins']
-				);
+				$row = $this->getDb()->newSelectQueryBuilder()
+					->queryInfo( $queryInfo )
+					->from( $table )
+					->where( [ $pk => $id ] )
+					->caller( __METHOD__ )
+					->fetchRow();
 
 				$this->assertSame( $user->getId(), (int)$row->$key,
 					"w={$stageNames[$writeStage]}, r={$stageNames[$readStage]}, id" );
@@ -649,9 +483,8 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 
 	public static function provideInsertRoundTrip() {
 		return [
-			'normal' => [ 'actormigration1', 'am1_user', 'am1_id', false ],
-			'temp table' => [ 'actormigration2', 'am2_user', 'am2_id', true ],
-			'special name' => [ 'actormigration3', 'am3_xxx', 'am3_id', false ],
+			'normal' => [ 'actormigration1', 'am1_user', 'am1_id' ],
+			'special name' => [ 'actormigration2', 'am2_xxx', 'am2_id' ],
 		];
 	}
 
@@ -667,105 +500,35 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 	 * @dataProvider provideStages
 	 * @param int $stage
 	 */
-	public function testInsertWrong( $stage ) {
-		$m = $this->getMigration( $stage );
-		$this->expectException( InvalidArgumentException::class );
-		$this->expectExceptionMessage( "Must use getInsertValuesWithTempTable() for am2_user" );
-		$m->getInsertValues( $this->db, 'am2_user', $this->getTestUser()->getUser() );
-	}
-
-	/**
-	 * @dataProvider provideStages
-	 * @param int $stage
-	 */
-	public function testInsertWithTempTableWrong( $stage ) {
-		$m = $this->getMigration( $stage );
-		$this->expectException( InvalidArgumentException::class );
-		$this->expectExceptionMessage( "Must use getInsertValues() for am1_user" );
-		$m->getInsertValuesWithTempTable( $this->db, 'am1_user', $this->getTestUser()->getUser() );
-	}
-
-	/**
-	 * @dataProvider provideStages
-	 * @param int $stage
-	 */
-	public function testInsertWithTempTableDeprecated( $stage ) {
-		$this->hideDeprecated( 'MediaWiki\User\ActorMigrationBase::getInsertValuesWithTempTable for am1_user' );
-		$m = new ActorMigrationBase(
-			[
-				'am1_user' => [
-					'formerTempTableVersion' => '1.30'
-				]
-			],
-			$stage,
-			$this->getServiceContainer()->getActorStoreFactory()
-		);
-		[ $fields, $callback ]
-			= $m->getInsertValuesWithTempTable( $this->db, 'am1_user', $this->getTestUser()->getUser() );
-		$this->assertIsCallable( $callback );
-	}
-
-	/**
-	 * @dataProvider provideStages
-	 * @param int $stage
-	 */
-	public function testInsertWithTempTableCallbackMissingFields( $stage ) {
-		$m = new ActorMigrationBase(
-			[
-				'foo_user' => [
-					'tempTable' => [
-						'table' => 'foo_temp',
-						'pk' => 'footmp_id',
-						'field' => 'footmp_actor',
-						'joinPK' => 'foo_id',
-						'extra' => [ 'footmp_timestamp' => 'foo_timestamp' ],
-					]
-				]
-			],
-			$stage,
-			$this->getServiceContainer()->getActorStoreFactory()
-		);
-		[ $fields, $callback ]
-			= $m->getInsertValuesWithTempTable( $this->db, 'foo_user', $this->getTestUser()->getUser() );
-		$this->expectException( InvalidArgumentException::class );
-		$this->expectExceptionMessage( '$extra[foo_timestamp] is not provided' );
-		$callback( 1, [] );
-	}
-
-	/**
-	 * @dataProvider provideStages
-	 * @param int $stage
-	 */
 	public function testInsertUserIdentity( $stage ) {
 		$user = $this->getMutableTestUser()->getUser();
 		$userIdentity = new UserIdentityValue( $user->getId(), $user->getName() );
 
 		$m = $this->getMigration( $stage );
-		[ $fields, $callback ] =
-			$m->getInsertValuesWithTempTable( $this->db, 'am2_user', $userIdentity );
+		$fields = $m->getInsertValues( $this->getDb(), 'am1_user', $userIdentity );
 		$id = ++self::$amId;
-		$this->db->insert( 'actormigration2', [ 'am2_id' => $id ] + $fields, __METHOD__ );
-		$callback( $id, [] );
+		$this->getDb()->newInsertQueryBuilder()
+			->insertInto( 'actormigration1' )
+			->row( [ 'am1_id' => $id ] + $fields )
+			->caller( __METHOD__ )
+			->execute();
 
-		$qi = $m->getJoin( 'am2_user' );
-		$row = $this->db->selectRow(
-			[ 'actormigration2' ] + $qi['tables'],
-			$qi['fields'],
-			[ 'am2_id' => $id ],
-			__METHOD__,
-			[],
-			$qi['joins']
-		);
-		$this->assertSame( $user->getId(), (int)$row->am2_user );
-		$this->assertSame( $user->getName(), $row->am2_user_text );
+		$qi = $m->getJoin( 'am1_user' );
+		$row = $this->getDb()->newSelectQueryBuilder()
+			->queryInfo( $qi )
+			->from( 'actormigration1' )
+			->where( [ 'am1_id' => $id ] )
+			->caller( __METHOD__ )
+			->fetchRow();
+		$this->assertSame( $user->getId(), (int)$row->am1_user );
+		$this->assertSame( $user->getName(), $row->am1_user_text );
 		$this->assertSame(
-			( ( $stage & SCHEMA_COMPAT_READ_MASK ) >= SCHEMA_COMPAT_READ_TEMP )
-			? $user->getActorId() : 0,
-			(int)$row->am2_actor
+			( $stage & SCHEMA_COMPAT_READ_NEW ) ? $user->getActorId() : 0,
+			(int)$row->am1_actor
 		);
 
 		$m = $this->getMigration( $stage );
-		$fields = $m->getInsertValues( $this->db, 'dummy_user', $userIdentity );
+		$fields = $m->getInsertValues( $this->getDb(), 'dummy_user', $userIdentity );
 		if ( $stage & SCHEMA_COMPAT_WRITE_OLD ) {
 			$this->assertSame( $user->getId(), $fields['dummy_user'] );
 			$this->assertSame( $user->getName(), $fields['dummy_user_text'] );
@@ -773,7 +536,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 			$this->assertArrayNotHasKey( 'dummy_user', $fields );
 			$this->assertArrayNotHasKey( 'dummy_user_text', $fields );
 		}
-		if ( $stage & SCHEMA_COMPAT_WRITE_TEMP || $stage & SCHEMA_COMPAT_WRITE_NEW ) {
+		if ( $stage & SCHEMA_COMPAT_WRITE_NEW ) {
 			$this->assertSame( $user->getActorId(), $fields['dummy_actor'] );
 		} else {
 			$this->assertArrayNotHasKey( 'dummy_actor', $fields );
@@ -803,11 +566,8 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 		return [
 			'old' => [ 'old', 'foo = 0', 'foo != 0' ],
 			'read-old' => [ 'read-old', 'foo = 0', 'foo != 0' ],
-			'read-temp' => [ 'read-temp', 'foo IS NULL', 'foo IS NOT NULL' ],
-			'temp' => [ 'temp', 'foo IS NULL', 'foo IS NOT NULL' ],
-			'read-temp2' => [ 'temp', 'foo IS NULL', 'foo IS NOT NULL' ],
-			'read-new' => [ 'temp', 'foo IS NULL', 'foo IS NOT NULL' ],
-			'new' => [ 'temp', 'foo IS NULL', 'foo IS NOT NULL' ],
+			'read-new' => [ 'read-new', 'foo IS NULL', 'foo IS NOT NULL' ],
+			'new' => [ 'new', 'foo IS NULL', 'foo IS NOT NULL' ],
 		];
 	}
 
@@ -824,7 +584,7 @@ class ActorMigrationTest extends MediaWikiLangTestCase {
 					'removedVersion' => '1.34',
 				],
 			],
-			SCHEMA_COMPAT_TEMP,
+			SCHEMA_COMPAT_NEW,
 			$this->getServiceContainer()->getActorStoreFactory()
 		) extends ActorMigrationBase {
 			public function checkDeprecationForTest( $key ) {

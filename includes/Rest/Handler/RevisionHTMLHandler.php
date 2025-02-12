@@ -3,7 +3,6 @@
 namespace MediaWiki\Rest\Handler;
 
 use LogicException;
-use MediaWiki\MediaWikiServices;
 use MediaWiki\Rest\Handler\Helper\HtmlOutputRendererHelper;
 use MediaWiki\Rest\Handler\Helper\PageRestHelperFactory;
 use MediaWiki\Rest\Handler\Helper\RevisionContentHelper;
@@ -17,35 +16,29 @@ use Wikimedia\Assert\Assert;
  * A handler that returns Parsoid HTML for the following routes:
  * - /revision/{revision}/html,
  * - /revision/{revision}/with_html
- *
- * Class RevisionHTMLHandler
- * @package MediaWiki\Rest\Handler
  */
 class RevisionHTMLHandler extends SimpleHandler {
 
-	/** @var HtmlOutputRendererHelper */
-	private $htmlHelper;
-
-	/** @var RevisionContentHelper */
-	private $contentHelper;
+	private ?HtmlOutputRendererHelper $htmlHelper = null;
+	private PageRestHelperFactory $helperFactory;
+	private RevisionContentHelper $contentHelper;
 
 	public function __construct( PageRestHelperFactory $helperFactory ) {
+		$this->helperFactory = $helperFactory;
 		$this->contentHelper = $helperFactory->newRevisionContentHelper();
-		$this->htmlHelper = $helperFactory->newHtmlOutputRendererHelper();
 	}
 
 	protected function postValidationSetup() {
-		// TODO: Once Authority supports rate limit (T310476), just inject the Authority.
-		$user = MediaWikiServices::getInstance()->getUserFactory()
-			->newFromUserIdentity( $this->getAuthority()->getUser() );
-
-		$this->contentHelper->init( $user, $this->getValidatedParams() );
+		$authority = $this->getAuthority();
+		$this->contentHelper->init( $authority, $this->getValidatedParams() );
 
 		$page = $this->contentHelper->getPage();
 		$revision = $this->contentHelper->getTargetRevision();
 
 		if ( $page && $revision ) {
-			$this->htmlHelper->init( $page, $this->getValidatedParams(), $user, $revision );
+			$this->htmlHelper = $this->helperFactory->newHtmlOutputRendererHelper(
+				$page, $this->getValidatedParams(), $authority, $revision
+			);
 
 			$request = $this->getRequest();
 			$acceptLanguage = $request->getHeaderLine( 'Accept-Language' ) ?: null;
@@ -118,9 +111,6 @@ class RevisionHTMLHandler extends SimpleHandler {
 		return $this->htmlHelper->getETag( $this->getOutputMode() );
 	}
 
-	/**
-	 * @return string|null
-	 */
 	protected function getLastModified(): ?string {
 		if ( !$this->contentHelper->isAccessible() ) {
 			return null;
@@ -137,10 +127,29 @@ class RevisionHTMLHandler extends SimpleHandler {
 		return false;
 	}
 
+	protected function generateResponseSpec( string $method ): array {
+		$spec = parent::generateResponseSpec( $method );
+
+		// TODO: Consider if we prefer something like:
+		//    text/html; charset=utf-8; profile="https://www.mediawiki.org/wiki/Specs/HTML/2.8.0"
+		//  That would be more specific, but fragile when the profile version changes. It could
+		//  also be inaccurate if the page content was not in fact produced by Parsoid.
+		if ( $this->getOutputMode() == 'html' ) {
+			unset( $spec['200']['content']['application/json'] );
+			$spec['200']['content']['text/html']['schema']['type'] = 'string';
+		}
+
+		return $spec;
+	}
+
+	public function getResponseBodySchemaFileName( string $method ): ?string {
+		return 'includes/Rest/Handler/Schema/ExistingRevisionHtml.json';
+	}
+
 	public function getParamSettings(): array {
 		return array_merge(
 			$this->contentHelper->getParamSettings(),
-			$this->htmlHelper->getParamSettings()
+			HtmlOutputRendererHelper::getParamSettings()
 		);
 	}
 

@@ -19,9 +19,12 @@
  * @ingroup RevisionDelete
  */
 
+use MediaWiki\Api\ApiResult;
 use MediaWiki\Linker\Linker;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Revision\RevisionRecord;
+use MediaWiki\RevisionList\RevisionListBase;
+use MediaWiki\Xml\Xml;
 
 /**
  * Item class for a live revision table row
@@ -52,8 +55,6 @@ class RevDelRevisionItem extends RevDelItem {
 
 	/**
 	 * Get the RevisionRecord for the item
-	 *
-	 * @return RevisionRecord
 	 */
 	protected function getRevisionRecord(): RevisionRecord {
 		return $this->revisionRecord;
@@ -100,32 +101,31 @@ class RevDelRevisionItem extends RevDelItem {
 	public function setBits( $bits ) {
 		$revRecord = $this->getRevisionRecord();
 
-		$dbw = wfGetDB( DB_PRIMARY );
+		$dbw = MediaWikiServices::getInstance()->getConnectionProvider()->getPrimaryDatabase();
 		// Update revision table
-		$dbw->update( 'revision',
-			[ 'rev_deleted' => $bits ],
-			[
+		$dbw->newUpdateQueryBuilder()
+			->update( 'revision' )
+			->set( [ 'rev_deleted' => $bits ] )
+			->where( [
 				'rev_id' => $revRecord->getId(),
 				'rev_page' => $revRecord->getPageId(),
 				'rev_deleted' => $this->getBits() // cas
-			],
-			__METHOD__
-		);
+			] )
+			->caller( __METHOD__ )->execute();
+
 		if ( !$dbw->affectedRows() ) {
 			// Concurrent fail!
 			return false;
 		}
 		// Update recentchanges table
-		$dbw->update( 'recentchanges',
-			[
+		$dbw->newUpdateQueryBuilder()
+			->update( 'recentchanges' )
+			->set( [
 				'rc_deleted' => $bits,
 				'rc_patrolled' => RecentChange::PRC_AUTOPATROLLED
-			],
-			[
-				'rc_this_oldid' => $revRecord->getId(), // condition
-			],
-			__METHOD__
-		);
+			] )
+			->where( [ 'rc_this_oldid' => $revRecord->getId() ] )
+			->caller( __METHOD__ )->execute();
 
 		return true;
 	}

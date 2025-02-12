@@ -21,6 +21,8 @@
  * @author Yfdyh000
  */
 
+$fallback = 'yue-hant, yue-hans';
+
 $namespaceNames = [
 	NS_MEDIA            => '媒體',
 	NS_SPECIAL          => '特別',
@@ -121,6 +123,7 @@ $specialPageAliases = [
 	'FileDuplicateSearch'       => [ '搵重複文件' ],
 	'Filepath'                  => [ '檔案路徑' ],
 	'Import'                    => [ '匯入' ],
+	'Interwiki'                 => [ '其他維基連接' ],
 	'Invalidateemail'           => [ '錯電郵' ],
 	'LinkSearch'                => [ '搵連結' ],
 	'Listadmins'                => [ '管理員列表' ],

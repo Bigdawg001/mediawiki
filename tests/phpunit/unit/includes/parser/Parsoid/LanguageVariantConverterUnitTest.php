@@ -1,10 +1,10 @@
 <?php
 
-namespace MediaWiki\Parser\Parsoid;
+namespace MediaWiki\Tests\Parser\Parsoid;
 
-use Language;
-use LanguageCode;
-use LanguageConverter;
+use MediaWiki\Language\Language;
+use MediaWiki\Language\LanguageCode;
+use MediaWiki\Language\LanguageConverter;
 use MediaWiki\Languages\LanguageConverterFactory;
 use MediaWiki\Languages\LanguageFactory;
 use MediaWiki\Page\PageIdentity;
@@ -12,6 +12,7 @@ use MediaWiki\Page\PageIdentityValue;
 use MediaWiki\Parser\Parsoid\Config\PageConfig;
 use MediaWiki\Parser\Parsoid\Config\PageConfigFactory;
 use MediaWiki\Parser\Parsoid\Config\SiteConfig;
+use MediaWiki\Parser\Parsoid\LanguageVariantConverter;
 use MediaWiki\Title\Title;
 use MediaWiki\Title\TitleFactory;
 use MediaWikiUnitTestCase;
@@ -23,7 +24,7 @@ use Wikimedia\Parsoid\Core\PageBundle;
 use Wikimedia\Parsoid\Parsoid;
 
 /**
- * @covers MediaWiki\Parser\Parsoid\LanguageVariantConverter
+ * @covers \MediaWiki\Parser\Parsoid\LanguageVariantConverter
  */
 class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 
@@ -41,7 +42,6 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 		$sourceLanguageCode = null;
 
 		// Create mocks
-		$parsoidSettings = [];
 		$pageConfigMock = $this->getPageConfigMock();
 		$pageBundleMock = $this->getPageBundleMock( $pageBundleLanguageCode );
 
@@ -53,8 +53,7 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 			null,
 			$titleLanguageCode,
 			$targetLanguageCode,
-			$sourceLanguageCode,
-			$parsoidSettings
+			$sourceLanguageCode
 		);
 
 		if ( !$shouldPageConfigFactoryBeUsed ) {
@@ -79,6 +78,7 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 		?string $pageBundleLanguageCode,
 		?string $titleLanguageCode,
 		?string $contentLanguageOverride,
+		?string $targetLanguageCode,
 		?string $sourceLanguageCode,
 		?string $expectedSourceCode
 	) {
@@ -89,9 +89,8 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 
 		// Set expected language codes
 		$titleLanguageCode ??= 'en';
-		$targetLanguageCode = 'en-us';
+		$targetLanguageCode ??= $titleLanguageCode;
 
-		$parsoidSettings = [];
 		// Create mocks
 		if ( $pageBundleLanguageCode ) {
 			$pageBundleMock = $this->getPageBundleMock( $pageBundleLanguageCode );
@@ -106,9 +105,8 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 			$pageBundleLanguageCode,
 			$contentLanguageOverride,
 			$titleLanguageCode,
-			$targetLanguageCode,
-			$expectedSourceCode,
-			$parsoidSettings
+			$targetLanguageCode, // expected target language
+			$expectedSourceCode
 		);
 
 		$targetLanguage = new Bcp47CodeValue( $targetLanguageCode );
@@ -119,44 +117,50 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 
 	public static function provideSourceLanguage() {
 		yield 'content-language in PageBundle' => [
-			'sr-el', // PageBundle content-language
-			null,    // Title PageLanguage
-			null,    // PageLanguage override
-			'sr-ec', // explicit source
-			'sr-ec'  // expected source
+			'sr', // PageBundle content-language
+			null, // Title PageLanguage
+			null, // PageLanguage override
+			'sr-Cyrl', // target
+			'sr-Cyrl', // explicit source
+			'sr-Cyrl'  // expected source
 		];
 		yield 'content-language but no source language' => [
-			'en',    // PageBundle content-language
-			null,    // Title PageLanguage
-			null,    // PageLanguage override
-			null,    // explicit source
+			'en', // PageBundle content-language
+			null, // Title PageLanguage
+			null, // PageLanguage override
+			'en', // target
+			null, // explicit source
 			null     // expected source
 		];
 		yield 'content-language is variant' => [
 			'en-ca', // PageBundle content-language
-			null,    // Title PageLanguage
-			null,    // PageLanguage override
-			null,    // explicit source
+			null, // Title PageLanguage
+			null, // PageLanguage override
+			'en', // target
+			null, // explicit source
 			'en-ca'  // expected source
 		];
 		yield 'Source variant is given' => [
-			null,    // PageBundle content-language
-			null,    // Title PageLanguage
-			null,    // PageLanguage override
+			null, // PageBundle content-language
+			null, // Title PageLanguage
+			null, // PageLanguage override
+			'en', // target
 			'en-ca', // explicit source
 			'en-ca'  // expected source
 		];
 		yield 'Source variant is a base language' => [
-			null,    // PageBundle content-language
-			null,    // Title PageLanguage
-			null,    // PageLanguage override
-			'en',    // explicit source
+			null, // PageBundle content-language
+			null, // Title PageLanguage
+			null, // PageLanguage override
+			'en', // target
+			'en', // explicit source
 			null     // expected source
 		];
 		yield 'Page language override is variant' => [
-			null,    // PageBundle content-language
-			null,    // PageBundle content-language
+			null, // PageBundle content-language
+			null, // PageBundle content-language
 			'en-ca', // PageLanguage override
+			'en', // target
 			'en-ca', // explicit source
 			'en-ca'  // expected source
 		];
@@ -175,7 +179,6 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 		$sourceLanguageCode = null;
 
 		// Create mocks
-		$parsoidSettings = [];
 
 		$pageBundleMock = $this->getPageBundleMock( $pageBundleLanguageCode );
 		$languageVariantConverter = $this->getLanguageVariantConverter(
@@ -186,8 +189,7 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 			null,
 			$titleLanguageCode,
 			$targetLanguageCode,
-			$sourceLanguageCode,
-			$parsoidSettings
+			$sourceLanguageCode
 		);
 		$languageFactoryMock = $this->getLanguageFactoryMock();
 		$targetLanguage = $languageFactoryMock->getLanguage( $targetLanguageCode );
@@ -217,7 +219,6 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 	 * @param string $titleLanguageCode
 	 * @param string $targetLanguageCode
 	 * @param string|null $sourceLanguageCode
-	 * @param array $parsoidSettings
 	 *
 	 * @return LanguageVariantConverter
 	 */
@@ -229,8 +230,7 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 		?string $contentLanguageOverride,
 		string $titleLanguageCode,
 		string $targetLanguageCode,
-		?string $sourceLanguageCode,
-		array $parsoidSettings
+		?string $sourceLanguageCode
 	): LanguageVariantConverter {
 		// If Content language is set, use language from there,
 		// If PageBundle language code is set, use that
@@ -240,7 +240,6 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 		$pageLanguageCode = preg_replace( '/-.*$/', '', $pageLanguageCode );
 
 		$shouldSiteConfigBeUsed = true;
-		$parsoidSettings = [];
 		$pageIdentityValue = new PageIdentityValue( 1, NS_MAIN, 'hello_world', PageIdentity::LOCAL );
 
 		// Create the necessary mocks
@@ -253,7 +252,7 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 		$pageConfigFactoryMock = $this->getPageConfigFactoryMock(
 			$shouldPageConfigFactoryBeUsed,
 			// Expected arguments to PageConfigFactory mock
-			[ $pageIdentityValue, null, null, null, $this->constraintEquals( $pageLanguage ), $parsoidSettings ],
+			[ $pageIdentityValue, null, null, null, $this->constraintEquals( $pageLanguage ) ],
 			$pageConfigMock
 		);
 		$pageBundleMock = $this->getPageBundleMock( $pageBundleLanguageCode );
@@ -281,7 +280,6 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 			$pageIdentityValue,
 			$pageConfigFactoryMock,
 			$parsoidMock,
-			$parsoidSettings,
 			$siteConfigMock,
 			$titleFactoryMock,
 			$this->getLanguageConverterFactoryMock(),
@@ -339,8 +337,6 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 				->method( 'pb2pb' );
 		}
 
-		$mock->method( 'implementsLanguageConversion' )
-			->willReturn( true );
 		$mock->method( 'implementsLanguageConversionBcp47' )
 			->willReturn( true );
 
@@ -432,7 +428,7 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 
 		$mock = $this->createMock( TitleFactory::class );
 		$mock->expects( $this->once() )
-			->method( 'castFromPageIdentity' )
+			->method( 'newFromPageIdentity' )
 			->willReturn( $titleMock )
 			->with( $pageIdentity );
 
@@ -448,7 +444,7 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 			->willReturnCallback( function ( $code ) {
 				static $seen = [];
 				if ( $code instanceof Bcp47Code ) {
-					$code = LanguageCode::bcp47ToInternal( $code->toBcp47Code() );
+					$code = LanguageCode::bcp47ToInternal( $code );
 				}
 				if ( !isset( $seen[$code] ) ) {
 					$seen[$code] = $this->getLanguageMock( $code );
@@ -456,13 +452,13 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 				return $seen[$code];
 			} );
 		$mock->method( 'getParentLanguage' )
-			 ->willReturnCallback( static function ( $code ) use ( $mock ) {
+			->willReturnCallback( static function ( $code ) use ( $mock ) {
 				if ( $code instanceof Bcp47Code ) {
-					$code = LanguageCode::bcp47ToInternal( $code->toBcp47Code() );
+					$code = LanguageCode::bcp47ToInternal( $code );
 				}
 				$code = preg_replace( '/-.*$/', '', $code );
 				return $mock->getLanguage( $code );
-			 } );
+			} );
 
 		return $mock;
 	}
@@ -518,6 +514,10 @@ class LanguageVariantConverterUnitTest extends MediaWikiUnitTestCase {
 		$languageConverter->method( 'convertTo' )
 			->willReturnCallback( static function ( $text, $code ) {
 				return $text;
+			} );
+		$languageConverter->method( 'hasVariant' )
+			->willReturnCallback( static function ( $code ) {
+				return true;
 			} );
 		$languageConverterFactoryMock->method( 'getLanguageConverter' )
 			->willReturn( $languageConverter );

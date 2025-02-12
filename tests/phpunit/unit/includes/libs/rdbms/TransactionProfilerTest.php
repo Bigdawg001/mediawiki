@@ -1,12 +1,13 @@
 <?php
 
+use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 use Wikimedia\Rdbms\TransactionProfiler;
 
 /**
  * @covers \Wikimedia\Rdbms\TransactionProfiler
  */
-class TransactionProfilerTest extends PHPUnit\Framework\TestCase {
+class TransactionProfilerTest extends TestCase {
 
 	use MediaWikiCoversValidator;
 
@@ -20,7 +21,7 @@ class TransactionProfilerTest extends PHPUnit\Framework\TestCase {
 		$tp->setLogger( $logger );
 		$tp->setExpectation( 'maxAffected', 100, __METHOD__ );
 
-		$tp->transactionWritingIn( 'srv1', 'db1', '123' );
+		$tp->transactionWritingIn( 'srv1', 'db1', '123', $now );
 		$tp->recordQueryCompletion( "SQL 1", $now - 3, true, 200, '1' );
 		$tp->recordQueryCompletion( "SQL 2", $now - 3, true, 200, '1' );
 		$tp->transactionWritingOut( 'srv1', 'db1', '123', 1, 400 );
@@ -37,7 +38,7 @@ class TransactionProfilerTest extends PHPUnit\Framework\TestCase {
 		$tp->setLogger( $logger );
 		$tp->setExpectation( 'readQueryTime', 5, __METHOD__ );
 
-		$tp->transactionWritingIn( 'srv1', 'db1', '123' );
+		$tp->transactionWritingIn( 'srv1', 'db1', '123', $now );
 		$tp->recordQueryCompletion( "SQL 1", $now - 10, false, 1, '1' );
 		$tp->recordQueryCompletion( "SQL 2", $now - 10, false, 1, '1' );
 		$tp->transactionWritingOut( 'srv1', 'db1', '123', 0, 0 );
@@ -54,7 +55,7 @@ class TransactionProfilerTest extends PHPUnit\Framework\TestCase {
 		$tp->setLogger( $logger );
 		$tp->setExpectation( 'writeQueryTime', 5, __METHOD__ );
 
-		$tp->transactionWritingIn( 'srv1', 'db1', '123' );
+		$tp->transactionWritingIn( 'srv1', 'db1', '123', $now );
 		$tp->recordQueryCompletion( "SQL 1", $now - 10, true, 1, '1' );
 		$tp->recordQueryCompletion( "SQL 2", $now - 10, true, 1, '1' );
 		$tp->transactionWritingOut( 'srv1', 'db1', '123', 20, 1 );
@@ -70,7 +71,7 @@ class TransactionProfilerTest extends PHPUnit\Framework\TestCase {
 		$tp->setLogger( $logger );
 		$tp->setExpectation( 'maxAffected', 100, __METHOD__ );
 
-		$tp->transactionWritingIn( 'srv1', 'db1', '123' );
+		$tp->transactionWritingIn( 'srv1', 'db1', '123', $now );
 		$tp->transactionWritingOut( 'srv1', 'db1', '123', 1, 200 );
 	}
 
@@ -85,7 +86,7 @@ class TransactionProfilerTest extends PHPUnit\Framework\TestCase {
 		$tp->setLogger( $logger );
 		$tp->setExpectation( 'writeQueryTime', 5, __METHOD__ );
 
-		$tp->transactionWritingIn( 'srv1', 'db1', '123' );
+		$tp->transactionWritingIn( 'srv1', 'db1', '123', $now );
 		$tp->transactionWritingOut( 'srv1', 'db1', '123', 10, 1 );
 	}
 
@@ -155,7 +156,7 @@ class TransactionProfilerTest extends PHPUnit\Framework\TestCase {
 		$tp->recordQueryCompletion( "SQL 3", $now - 0.01, false, 0, '1' );
 		$tp->recordQueryCompletion( "SQL 4", $now - 0.01, false, 0, '1' );
 
-		$tp->transactionWritingIn( 'srv1', 'db1', '123' );
+		$tp->transactionWritingIn( 'srv1', 'db1', '123', $now );
 		$tp->recordQueryCompletion( "SQL 1w", $now - 0.01, true, 2, '1' );
 		$tp->recordQueryCompletion( "SQL 2w", $now - 0.01, true, 5, '1' );
 		$tp->recordQueryCompletion( "SQL 3w", $now - 0.01, true, 3, '1' );
@@ -165,7 +166,7 @@ class TransactionProfilerTest extends PHPUnit\Framework\TestCase {
 
 	public function testSilence() {
 		$logger = $this->createMock( LoggerInterface::class );
-		$logger->expects( $this->exactly( 0 ) )->method( 'warning' );
+		$logger->expects( $this->never() )->method( 'warning' );
 
 		$now = 1668108368.0;
 		$tp = new TransactionProfiler();
@@ -179,7 +180,7 @@ class TransactionProfilerTest extends PHPUnit\Framework\TestCase {
 		$scope = $tp->silenceForScope();
 
 		$tp->recordConnection( 'srv1', 'enwiki', true );
-		$tp->transactionWritingIn( 'srv1', 'db1', '123' );
+		$tp->transactionWritingIn( 'srv1', 'db1', '123', $now );
 		$tp->recordConnection( 'srv2', 'enwiki', false );
 		$tp->recordConnection( 'srv3', 'enwiki', false );
 		$tp->recordQueryCompletion( "SQL 1", $now - 10, true, 1, '1' );
@@ -205,7 +206,7 @@ class TransactionProfilerTest extends PHPUnit\Framework\TestCase {
 
 		$scope = $tp->silenceForScope();
 		$tp->recordConnection( 'srv1', 'enwiki', true );
-		$tp->transactionWritingIn( 'srv1', 'db1', '123' );
+		$tp->transactionWritingIn( 'srv1', 'db1', '123', $now );
 		$tp->recordConnection( 'srv2', 'enwiki', false );
 		$tp->recordConnection( 'srv3', 'enwiki', false );
 		$tp->recordQueryCompletion( "SQL 1", $now - 10, true, 1, '1' );
@@ -221,7 +222,7 @@ class TransactionProfilerTest extends PHPUnit\Framework\TestCase {
 	public function testPartialSilence() {
 		$logger = $this->createMock( LoggerInterface::class );
 		// 1 entry for slow write
-		$logger->expects( $this->exactly( 1 ) )->method( 'warning' );
+		$logger->expects( $this->once() )->method( 'warning' );
 
 		$now = 1668108368.0;
 		$tp = new TransactionProfiler();
@@ -239,5 +240,24 @@ class TransactionProfilerTest extends PHPUnit\Framework\TestCase {
 		$tp->recordQueryCompletion( "SQL 1", $now - 10, true, 1, '1' );
 
 		unset( $scope );
+	}
+
+	/** @dataProvider provideGetExpectation */
+	public function testGetExpectation( $expectations, $event, $expectedReturnValue ) {
+		$tp = new TransactionProfiler();
+		$tp->setExpectations( $expectations, __METHOD__ );
+		$this->assertSame( $expectedReturnValue, $tp->getExpectation( $event ) );
+	}
+
+	public static function provideGetExpectation() {
+		return [
+			'Provided event name is unset' => [ [], 'writes', INF ],
+			'Provided event name is set' => [ [ 'writes' => 3, 'conns' => 1 ], 'writes', 3 ],
+		];
+	}
+
+	public function testGetExpectationOnInvalidEventName() {
+		$this->expectException( InvalidArgumentException::class );
+		$this->testGetExpectation( [], 'abc', 1234 );
 	}
 }

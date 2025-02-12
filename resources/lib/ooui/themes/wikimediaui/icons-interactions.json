@@ -12,10 +12,10 @@
 			"global": true
 		},
 		"destructive": {
-			"color": "#d33"
+			"color": "#d73333"
 		},
 		"error": {
-			"color": "#d33"
+			"color": "#d73333"
 		},
 		"warning": {
 			"color": "#edab00"
@@ -56,6 +56,9 @@
 		},
 		"ellipsis": {
 			"file": "images/icons/ellipsis.svg"
+		},
+		"verticalEllipsis": {
+			"file": "images/icons/verticalEllipsis.svg"
 		},
 		"feedback": {
 			"file": {
@@ -135,6 +138,9 @@
 		},
 		"pageSettings": {
 			"file": "images/icons/pageSettings.svg"
+		},
+		"power": {
+			"file": "images/icons/power.svg"
 		},
 		"printer": {
 			"file": "images/icons/printer.svg"

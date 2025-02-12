@@ -3,11 +3,7 @@
 namespace MediaWiki\Page;
 
 use BadMethodCallException;
-use BagOStuff;
 use ChangeTags;
-use Content;
-use DeferrableUpdate;
-use DeferredUpdates;
 use DeletePageJob;
 use Exception;
 use JobQueueGroup;
@@ -16,29 +12,34 @@ use ManualLogEntry;
 use MediaWiki\Cache\BacklinkCacheFactory;
 use MediaWiki\CommentStore\CommentStore;
 use MediaWiki\Config\ServiceOptions;
+use MediaWiki\Content\Content;
+use MediaWiki\Deferred\DeferrableUpdate;
+use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\Deferred\LinksUpdate\LinksDeletionUpdate;
 use MediaWiki\Deferred\LinksUpdate\LinksUpdate;
+use MediaWiki\Deferred\SiteStatsUpdate;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\Language\RawMessage;
-use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Message\Message;
 use MediaWiki\Permissions\Authority;
 use MediaWiki\Permissions\PermissionStatus;
 use MediaWiki\ResourceLoader\WikiModule;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\RevisionStore;
 use MediaWiki\Revision\SlotRecord;
+use MediaWiki\Search\SearchUpdate;
+use MediaWiki\Status\Status;
+use MediaWiki\Title\NamespaceInfo;
+use MediaWiki\Title\Title;
 use MediaWiki\User\UserFactory;
-use Message;
-use NamespaceInfo;
-use SearchUpdate;
-use SiteStatsUpdate;
-use Status;
 use StatusValue;
 use Wikimedia\IPUtils;
 use Wikimedia\Message\ITextFormatter;
 use Wikimedia\Message\MessageValue;
+use Wikimedia\ObjectCache\BagOStuff;
+use Wikimedia\Rdbms\IDBAccessObject;
 use Wikimedia\Rdbms\LBFactory;
 use Wikimedia\RequestTimeout\TimeoutException;
 use WikiPage;
@@ -63,43 +64,8 @@ class DeletePage {
 	public const PAGE_BASE = 'base';
 	public const PAGE_TALK = 'talk';
 
-	/** @var HookRunner */
-	private $hookRunner;
-	/** @var RevisionStore */
-	private $revisionStore;
-	/** @var LBFactory */
-	private $lbFactory;
-	/** @var JobQueueGroup */
-	private $jobQueueGroup;
-	/** @var CommentStore */
-	private $commentStore;
-	/** @var ServiceOptions */
-	private $options;
-	/** @var BagOStuff */
-	private $recentDeletesCache;
-	/** @var string */
-	private $localWikiID;
-	/** @var string */
-	private $webRequestID;
-	/** @var UserFactory */
-	private $userFactory;
-	/** @var BacklinkCacheFactory */
-	private $backlinkCacheFactory;
-	/** @var WikiPageFactory */
-	private $wikiPageFactory;
-	/** @var NamespaceInfo */
-	private $namespaceInfo;
-	/** @var ITextFormatter */
-	private $contLangMsgTextFormatter;
-
 	/** @var bool */
 	private $isDeletePageUnitTest = false;
-
-	/** @var WikiPage */
-	private $page;
-	/** @var Authority */
-	private $deleter;
-
 	/** @var bool */
 	private $suppress = false;
 	/** @var string[] */
@@ -129,24 +95,26 @@ class DeletePage {
 	/** @var bool Whether a deletion was attempted */
 	private $attemptedDeletion = false;
 
+	private HookRunner $hookRunner;
+	private RevisionStore $revisionStore;
+	private LBFactory $lbFactory;
+	private JobQueueGroup $jobQueueGroup;
+	private CommentStore $commentStore;
+	private ServiceOptions $options;
+	private BagOStuff $recentDeletesCache;
+	private string $localWikiID;
+	private string $webRequestID;
+	private WikiPageFactory $wikiPageFactory;
+	private UserFactory $userFactory;
+	private BacklinkCacheFactory $backlinkCacheFactory;
+	private NamespaceInfo $namespaceInfo;
+	private ITextFormatter $contLangMsgTextFormatter;
+	private RedirectStore $redirectStore;
+	private WikiPage $page;
+	private Authority $deleter;
+
 	/**
 	 * @internal Create via the PageDeleteFactory service.
-	 * @param HookContainer $hookContainer
-	 * @param RevisionStore $revisionStore
-	 * @param LBFactory $lbFactory
-	 * @param JobQueueGroup $jobQueueGroup
-	 * @param CommentStore $commentStore
-	 * @param ServiceOptions $serviceOptions
-	 * @param BagOStuff $recentDeletesCache
-	 * @param string $localWikiID
-	 * @param string $webRequestID
-	 * @param WikiPageFactory $wikiPageFactory
-	 * @param UserFactory $userFactory
-	 * @param BacklinkCacheFactory $backlinkCacheFactory
-	 * @param NamespaceInfo $namespaceInfo
-	 * @param ITextFormatter $contLangMsgTextFormatter
-	 * @param ProperPageIdentity $page
-	 * @param Authority $deleter
 	 */
 	public function __construct(
 		HookContainer $hookContainer,
@@ -163,6 +131,7 @@ class DeletePage {
 		BacklinkCacheFactory $backlinkCacheFactory,
 		NamespaceInfo $namespaceInfo,
 		ITextFormatter $contLangMsgTextFormatter,
+		RedirectStore $redirectStore,
 		ProperPageIdentity $page,
 		Authority $deleter
 	) {
@@ -184,6 +153,7 @@ class DeletePage {
 
 		$this->page = $wikiPageFactory->newFromTitle( $page );
 		$this->deleter = $deleter;
+		$this->redirectStore = $redirectStore;
 	}
 
 	/**
@@ -251,8 +221,6 @@ class DeletePage {
 	/**
 	 * Tests whether it's probably possible to delete the associated talk page. This checks the replica,
 	 * so it may not see the latest master change, and is useful e.g. for building the UI.
-	 *
-	 * @return StatusValue
 	 */
 	public function canProbablyDeleteAssociatedTalk(): StatusValue {
 		if ( $this->namespaceInfo->isTalk( $this->page->getNamespace() ) ) {
@@ -302,7 +270,7 @@ class DeletePage {
 	 */
 	public function setIsDeletePageUnitTest( bool $test ): void {
 		if ( !defined( 'MW_PHPUNIT_TEST' ) ) {
-			throw new BadMethodCallException( __METHOD__ . ' can only be used in tests!' );
+			throw new LogicException( __METHOD__ . ' can only be used in tests!' );
 		}
 		$this->isDeletePageUnitTest = $test;
 	}
@@ -367,9 +335,6 @@ class DeletePage {
 		return $this->deleteUnsafe( $reason );
 	}
 
-	/**
-	 * @return PermissionStatus
-	 */
 	private function authorizeDeletion(): PermissionStatus {
 		$status = PermissionStatus::newEmpty();
 		$this->deleter->authorizeWrite( 'delete', $this->page, $status );
@@ -388,9 +353,6 @@ class DeletePage {
 		return $status;
 	}
 
-	/**
-	 * @return bool
-	 */
 	private function isBigDeletion(): bool {
 		$revLimit = $this->options->get( MainConfigNames::DeleteRevisionsLimit );
 		if ( !$revLimit ) {
@@ -523,13 +485,15 @@ class DeletePage {
 	 * @param string $pageRole
 	 * @param string $reason
 	 * @param string|null $webRequestId
+	 * @param mixed|null $ticket Result of ILBFactory::getEmptyTransactionTicket() or null
 	 * @return Status
 	 */
 	public function deleteInternal(
 		WikiPage $page,
 		string $pageRole,
 		string $reason,
-		?string $webRequestId = null
+		?string $webRequestId = null,
+		$ticket = null
 	): Status {
 		$title = $page->getTitle();
 		$status = Status::newGood();
@@ -537,10 +501,10 @@ class DeletePage {
 		$dbw = $this->lbFactory->getPrimaryDatabase();
 		$dbw->startAtomic( __METHOD__ );
 
-		$page->loadPageData( WikiPage::READ_LATEST );
+		$page->loadPageData( IDBAccessObject::READ_LATEST );
 		$id = $page->getId();
 		// T98706: lock the page from various other updates but avoid using
-		// WikiPage::READ_LOCKING as that will carry over the FOR UPDATE to
+		// IDBAccessObject::READ_LOCKING as that will carry over the FOR UPDATE to
 		// the revisions queries (which also JOIN on user). Only lock the page
 		// row and CAS check on page_latest to see if the trx snapshot matches.
 		$lockedLatest = $page->lockAndGetLatest();
@@ -574,28 +538,13 @@ class DeletePage {
 
 		// Archive revisions.  In immediate mode, archive all revisions.  Otherwise, archive
 		// one batch of revisions and defer archival of any others to the job queue.
-		$explictTrxLogged = false;
 		while ( true ) {
 			$done = $this->archiveRevisions( $page, $id );
 			if ( $done || !$this->forceImmediate ) {
 				break;
 			}
 			$dbw->endAtomic( __METHOD__ );
-			if ( $dbw->explicitTrxActive() ) {
-				// Explicit transactions may never happen here in practice.  Log to be sure.
-				if ( !$explictTrxLogged ) {
-					$explictTrxLogged = true;
-					LoggerFactory::getInstance( 'wfDebug' )->debug(
-						'explicit transaction active in ' . __METHOD__ . ' while deleting {title}', [
-						'title' => $title->getText(),
-					] );
-				}
-				continue;
-			}
-			if ( $dbw->trxLevel() ) {
-				$dbw->commit( __METHOD__ );
-			}
-			$this->lbFactory->waitForReplication();
+			$this->lbFactory->commitAndWaitForReplication( __METHOD__, $ticket );
 			$dbw->startAtomic( __METHOD__ );
 		}
 
@@ -629,23 +578,30 @@ class DeletePage {
 		// in the job queue to avoid simultaneous deletion operations would add overhead.
 		// Number of archived revisions cannot be known beforehand, because edits can be made
 		// while deletion operations are being processed, changing the number of archivals.
-		$archivedRevisionCount = $dbw->selectRowCount(
-			'archive',
-			'*',
-			[
+		$archivedRevisionCount = $dbw->newSelectQueryBuilder()
+			->select( '*' )
+			->from( 'archive' )
+			->where( [
 				'ar_namespace' => $title->getNamespace(),
 				'ar_title' => $title->getDBkey(),
 				'ar_page_id' => $id
-			], __METHOD__
-		);
+			] )
+			->caller( __METHOD__ )->fetchRowCount();
 
+		// Look up the redirect target before deleting the page to avoid inconsistent state (T348881).
+		// The cloning business below is specifically to allow hook handlers to check the redirect
+		// status before the deletion (see I715046dc8157047aff4d5bd03ea6b5a47aee58bb).
+		$page->getRedirectTarget();
 		// Clone the title and wikiPage, so we have the information we need when
 		// we log and run the ArticleDeleteComplete hook.
 		$logTitle = clone $title;
 		$wikiPageBeforeDelete = clone $page;
 
 		// Now that it's safely backed up, delete it
-		$dbw->delete( 'page', [ 'page_id' => $id ], __METHOD__ );
+		$dbw->newDeleteQueryBuilder()
+			->deleteFrom( 'page' )
+			->where( [ 'page_id' => $id ] )
+			->caller( __METHOD__ )->execute();
 
 		// Log the deletion, if the page was suppressed, put it in the suppression log instead
 		$logtype = $this->suppress ? 'suppress' : 'delete';
@@ -674,6 +630,12 @@ class DeletePage {
 
 		$this->doDeleteUpdates( $page, $revisionRecord );
 
+		// Reset the page object and the Title object
+		$page->loadFromRow( false, IDBAccessObject::READ_LATEST );
+
+		// Make sure there are no cached title instances that refer to the same page.
+		Title::clearCaches();
+
 		$legacyDeleter = $this->userFactory->newFromAuthority( $this->deleter );
 		$this->hookRunner->onArticleDeleteComplete(
 			$wikiPageBeforeDelete,
@@ -694,6 +656,9 @@ class DeletePage {
 			$archivedRevisionCount
 		);
 		$this->successfulDeletionsIDs[$pageRole] = $logid;
+
+		// Clear any cached redirect status for the now-deleted page.
+		$this->redirectStore->clearCache( $page );
 
 		// Show log excerpt on 404 pages rather than just a link
 		$key = $this->recentDeletesCache->makeKey( 'page-recent-delete', md5( $logTitle->getPrefixedText() ) );
@@ -752,14 +717,13 @@ class DeletePage {
 		$deleteBatchSize = $this->options->get( MainConfigNames::DeleteRevisionsBatchSize );
 		// Get as many of the page revisions as we are allowed to.  The +1 lets us recognize the
 		// unusual case where there were exactly $deleteBatchSize revisions remaining.
-		$res = $dbw->select(
-			$revQuery['tables'],
-			$revQuery['fields'],
-			[ 'rev_page' => $id ],
-			__METHOD__,
-			[ 'ORDER BY' => 'rev_timestamp ASC, rev_id ASC', 'LIMIT' => $deleteBatchSize + 1 ],
-			$revQuery['joins']
-		);
+		$res = $dbw->newSelectQueryBuilder()
+			->queryInfo( $revQuery )
+			->where( [ 'rev_page' => $id ] )
+			->orderBy( [ 'rev_timestamp', 'rev_id' ] )
+			->limit( $deleteBatchSize + 1 )
+			->caller( __METHOD__ )
+			->fetchResultSet();
 
 		// Build their equivalent archive rows
 		$rowsInsert = [];
@@ -802,15 +766,21 @@ class DeletePage {
 
 		if ( count( $revids ) > 0 ) {
 			// Copy them into the archive table
-			$dbw->insert( 'archive', $rowsInsert, __METHOD__ );
+			$dbw->newInsertQueryBuilder()
+				->insertInto( 'archive' )
+				->rows( $rowsInsert )
+				->caller( __METHOD__ )->execute();
 
-			$dbw->delete( 'revision', [ 'rev_id' => $revids ], __METHOD__ );
-			if ( $this->commentStore->getTempTableMigrationStage( 'rev_comment' ) & SCHEMA_COMPAT_WRITE_OLD ) {
-				$dbw->delete( 'revision_comment_temp', [ 'revcomment_rev' => $revids ], __METHOD__ );
-			}
+			$dbw->newDeleteQueryBuilder()
+				->deleteFrom( 'revision' )
+				->where( [ 'rev_id' => $revids ] )
+				->caller( __METHOD__ )->execute();
 			// Also delete records from ip_changes as applicable.
 			if ( count( $ipRevIds ) > 0 ) {
-				$dbw->delete( 'ip_changes', [ 'ipc_rev_id' => $ipRevIds ], __METHOD__ );
+				$dbw->newDeleteQueryBuilder()
+					->deleteFrom( 'ip_changes' )
+					->where( [ 'ipc_rev_id' => $ipRevIds ] )
+					->caller( __METHOD__ )->execute();
 			}
 		}
 
@@ -818,7 +788,6 @@ class DeletePage {
 	}
 
 	/**
-	 * @private Public for BC only
 	 * Do some database updates after deletion
 	 *
 	 * @param WikiPage $page
@@ -826,7 +795,7 @@ class DeletePage {
 	 *   deletion, used when determining the required updates. This may be needed because
 	 *   $page->getRevisionRecord() may already return null when the page proper was deleted.
 	 */
-	public function doDeleteUpdates( WikiPage $page, RevisionRecord $revRecord ): void {
+	private function doDeleteUpdates( WikiPage $page, RevisionRecord $revRecord ): void {
 		try {
 			$countable = $page->isCountable();
 		} catch ( TimeoutException $e ) {
@@ -838,17 +807,14 @@ class DeletePage {
 		}
 
 		// Update site status
-		if ( !$this->isDeletePageUnitTest ) {
-			// TODO Remove conditional once DeferredUpdates is servicified (T265749)
-			DeferredUpdates::addUpdate( SiteStatsUpdate::factory(
-				[ 'edits' => 1, 'articles' => $countable ? -1 : 0, 'pages' => -1 ]
-			) );
+		DeferredUpdates::addUpdate( SiteStatsUpdate::factory(
+			[ 'edits' => 1, 'articles' => $countable ? -1 : 0, 'pages' => -1 ]
+		) );
 
-			// Delete pagelinks, update secondary indexes, etc
-			$updates = $this->getDeletionUpdates( $page, $revRecord );
-			foreach ( $updates as $update ) {
-				DeferredUpdates::addUpdate( $update );
-			}
+		// Delete pagelinks, update secondary indexes, etc
+		$updates = $this->getDeletionUpdates( $page, $revRecord );
+		foreach ( $updates as $update ) {
+			DeferredUpdates::addUpdate( $update );
 		}
 
 		// Reparse any pages transcluding this page
@@ -884,17 +850,13 @@ class DeletePage {
 		);
 
 		// Reset the page object and the Title object
-		$page->loadFromRow( false, WikiPage::READ_LATEST );
+		$page->loadFromRow( false, IDBAccessObject::READ_LATEST );
 
-		if ( !$this->isDeletePageUnitTest ) {
-			// TODO Remove conditional once DeferredUpdates is servicified (T265749)
-			// Search engine
-			DeferredUpdates::addUpdate( new SearchUpdate( $page->getId(), $page->getTitle() ) );
-		}
+		// Search engine
+		DeferredUpdates::addUpdate( new SearchUpdate( $page->getId(), $page->getTitle() ) );
 	}
 
 	/**
-	 * @private Public for BC only
 	 * Returns a list of updates to be performed when the page is deleted. The
 	 * updates should remove any information about this page from secondary data
 	 * stores such as links tables.
@@ -903,7 +865,11 @@ class DeletePage {
 	 * @param RevisionRecord $rev The revision being deleted.
 	 * @return DeferrableUpdate[]
 	 */
-	public function getDeletionUpdates( WikiPage $page, RevisionRecord $rev ): array {
+	private function getDeletionUpdates( WikiPage $page, RevisionRecord $rev ): array {
+		if ( $this->isDeletePageUnitTest ) {
+			// Hack: LinksDeletionUpdate reads from the global state in the constructor
+			return [];
+		}
 		$slotContent = array_map( static function ( SlotRecord $slot ) {
 			return $slot->getContent();
 		}, $rev->getSlots()->getSlots() );

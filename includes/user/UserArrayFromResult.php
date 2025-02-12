@@ -1,7 +1,5 @@
 <?php
 /**
- * Class to walk into a list of User objects.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -20,9 +18,15 @@
  * @file
  */
 
+namespace MediaWiki\User;
+
+use stdClass;
 use Wikimedia\Rdbms\IResultWrapper;
 
-class UserArrayFromResult extends UserArray implements Countable {
+/**
+ * @internal Call and type against UserArray instead.
+ */
+class UserArrayFromResult extends UserArray {
 	/** @var IResultWrapper */
 	public $res;
 
@@ -53,9 +57,6 @@ class UserArrayFromResult extends UserArray implements Countable {
 		}
 	}
 
-	/**
-	 * @return int
-	 */
 	public function count(): int {
 		return $this->res->numRows();
 	}
@@ -80,10 +81,10 @@ class UserArrayFromResult extends UserArray implements Countable {
 		$this->setCurrent( $this->res->current() );
 	}
 
-	/**
-	 * @return bool
-	 */
 	public function valid(): bool {
 		return $this->current !== false;
 	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( UserArrayFromResult::class, 'UserArrayFromResult' );

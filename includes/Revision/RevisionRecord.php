@@ -22,9 +22,9 @@
 
 namespace MediaWiki\Revision;
 
-use Content;
 use InvalidArgumentException;
 use MediaWiki\CommentStore\CommentStoreComment;
+use MediaWiki\Content\Content;
 use MediaWiki\DAO\WikiAwareEntity;
 use MediaWiki\DAO\WikiAwareEntityTrait;
 use MediaWiki\Linker\LinkTarget;
@@ -32,8 +32,10 @@ use MediaWiki\Page\LegacyArticleIdAccess;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Permissions\Authority;
 use MediaWiki\Title\Title;
+use MediaWiki\Title\TitleValue;
 use MediaWiki\User\UserIdentity;
 use Wikimedia\NonSerializable\NonSerializableTrait;
+use WikiPage;
 
 /**
  * Page revision base class.
@@ -103,6 +105,19 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	public function __construct( PageIdentity $page, RevisionSlots $slots, $wikiId = self::LOCAL ) {
 		$this->assertWikiIdParam( $wikiId );
 
+		// Make sure $page is immutable, see T380536. This is a nasty hack.
+		if ( !$page->canExist() ) {
+			// NOTE: We continue to support non-proper Titles for fake
+			// revisions used during parsing (T381982).
+			// TODO: Emit a deprecation warning for non-proper pages once
+			// we have a good alternative (T382341).
+		} elseif ( $page instanceof Title ) {
+			// Hack. Eventually, all PageIdentities should be immutable and "proper".
+			$page = $page->toPageIdentity();
+		} elseif ( $page instanceof WikiPage ) {
+			$page = $page->getTitle()->toPageIdentity();
+		}
+
 		$this->mPage = $page;
 		$this->mSlots = $slots;
 		$this->wikiId = $wikiId;
@@ -139,6 +154,18 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	}
 
 	/**
+	 * Returns the Content of the main slot of this revision.
+	 *
+	 * @see getContent()
+	 *
+	 * @return Content|null The content of the main slot, or null on error
+	 * @throws RevisionAccessException
+	 */
+	public function getMainContentRaw(): ?Content {
+		return $this->getContent( SlotRecord::MAIN, self::RAW );
+	}
+
+	/**
 	 * Returns the Content of the given slot of this revision.
 	 * Call getSlotNames() to get a list of available slots.
 	 *
@@ -152,14 +179,25 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 * @param Authority|null $performer user on whose behalf to check
 	 *
 	 * @return Content|null The content of the given slot, or null on error
+	 * @throws RevisionAccessException
 	 */
-	public function getContent( $role, $audience = self::FOR_PUBLIC, Authority $performer = null ): ?Content {
+	public function getContent( $role, $audience = self::FOR_PUBLIC, ?Authority $performer = null ): ?Content {
 		try {
 			$content = $this->getSlot( $role, $audience, $performer )->getContent();
 		} catch ( BadRevisionException | SuppressedDataException $e ) {
 			return null;
 		}
 		return $content->copy();
+	}
+
+	/**
+	 * Returns the content model of the main slot of this revision.
+	 *
+	 * @return string The content model
+	 * @throws RevisionAccessException
+	 */
+	public function getMainContentModel(): string {
+		return $this->getSlot( SlotRecord::MAIN, self::RAW )->getModel();
 	}
 
 	/**
@@ -174,7 +212,7 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 * @throws BadRevisionException if the content is missing or corrupted
 	 * @throws RevisionAccessException
 	 */
-	public function getContentOrThrow( $role, $audience = self::FOR_PUBLIC, Authority $performer = null ): Content {
+	public function getContentOrThrow( $role, $audience = self::FOR_PUBLIC, ?Authority $performer = null ): Content {
 		if ( !$this->audienceCan( self::DELETED_TEXT, $audience, $performer ) ) {
 			throw new SuppressedDataException(
 				'Access to the content has been suppressed for this audience' );
@@ -196,7 +234,7 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 * @return SlotRecord The slot meta-data. If access to the slot's content is forbidden,
 	 *         calling getContent() on the SlotRecord will throw an exception.
 	 */
-	public function getSlot( $role, $audience = self::FOR_PUBLIC, Authority $performer = null ): SlotRecord {
+	public function getSlot( $role, $audience = self::FOR_PUBLIC, ?Authority $performer = null ): SlotRecord {
 		$slot = $this->mSlots->getSlot( $role );
 
 		if ( !$this->audienceCan( self::DELETED_TEXT, $audience, $performer ) ) {
@@ -253,8 +291,6 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 *
 	 * To find all slots modified by this revision against its immediate parent
 	 * revision, use RevisionSlotsUpdate::newFromRevisionSlots().
-	 *
-	 * @return RevisionSlots
 	 */
 	public function getOriginalSlots(): RevisionSlots {
 		return new RevisionSlots( $this->mSlots->getOriginalSlots() );
@@ -268,8 +304,6 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 * This is the case for rollbacks: slots of a rollback revision are inherited from
 	 * the rollback target, and are different from the slots in the parent revision,
 	 * which was rolled back.
-	 *
-	 * @return RevisionSlots
 	 */
 	public function getInheritedSlots(): RevisionSlots {
 		return new RevisionSlots( $this->mSlots->getInheritedSlots() );
@@ -372,10 +406,7 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 * @return LinkTarget
 	 */
 	public function getPageAsLinkTarget() {
-		// TODO: Should be TitleValue::newFromPage( $this->mPage ),
-		// but Title is used too much still, so let's keep propagating it
-		// @phan-suppress-next-line PhanTypeMismatchReturnNullable castFrom does not return null here
-		return Title::castFromPageIdentity( $this->mPage );
+		return TitleValue::newFromPage( $this->mPage );
 	}
 
 	/**
@@ -406,7 +437,7 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 * @param Authority|null $performer user on whose behalf to check
 	 * @return UserIdentity|null
 	 */
-	public function getUser( $audience = self::FOR_PUBLIC, Authority $performer = null ) {
+	public function getUser( $audience = self::FOR_PUBLIC, ?Authority $performer = null ) {
 		if ( !$this->audienceCan( self::DELETED_USER, $audience, $performer ) ) {
 			return null;
 		} else {
@@ -430,7 +461,7 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 *
 	 * @return CommentStoreComment|null
 	 */
-	public function getComment( $audience = self::FOR_PUBLIC, Authority $performer = null ) {
+	public function getComment( $audience = self::FOR_PUBLIC, ?Authority $performer = null ) {
 		if ( !$this->audienceCan( self::DELETED_COMMENT, $audience, $performer ) ) {
 			return null;
 		} else {
@@ -496,7 +527,7 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 *
 	 * @return bool
 	 */
-	public function audienceCan( $field, $audience, Authority $performer = null ) {
+	public function audienceCan( $field, $audience, ?Authority $performer = null ) {
 		if ( $audience == self::FOR_PUBLIC && $this->isDeleted( $field ) ) {
 			return false;
 		} elseif ( $audience == self::FOR_THIS_USER ) {
@@ -546,7 +577,7 @@ abstract class RevisionRecord implements WikiAwareEntity {
 	 *                          instead of just plain user rights
 	 * @return bool
 	 */
-	public static function userCanBitfield( $bitfield, $field, Authority $performer, PageIdentity $page = null ) {
+	public static function userCanBitfield( $bitfield, $field, Authority $performer, ?PageIdentity $page = null ) {
 		if ( $bitfield & $field ) { // aspect is deleted
 			if ( $bitfield & self::DELETED_RESTRICTED ) {
 				$permissions = [ 'suppressrevision', 'viewsuppressed' ];

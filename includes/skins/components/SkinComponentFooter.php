@@ -4,28 +4,26 @@ namespace MediaWiki\Skin;
 
 use Action;
 use Article;
-use Config;
 use CreditsAction;
+use MediaWiki\Config\Config;
+use MediaWiki\HookContainer\ProtectedHookAccessorTrait;
 use MediaWiki\Html\Html;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Title\Title;
 
 class SkinComponentFooter implements SkinComponent {
+	use ProtectedHookAccessorTrait;
+
 	/** @var SkinComponentRegistryContext */
 	private $skinContext;
 
-	/**
-	 * @param SkinComponentRegistryContext $skinContext
-	 */
 	public function __construct( SkinComponentRegistryContext $skinContext ) {
 		$this->skinContext = $skinContext;
 	}
 
 	/**
 	 * Run SkinAddFooterLinks hook on menu data to insert additional menu items specifically in footer.
-	 *
-	 * @return array
 	 */
 	private function getTemplateDataFooter(): array {
 		$data = [
@@ -34,10 +32,10 @@ class SkinComponentFooter implements SkinComponent {
 			),
 			'places' => $this->getSiteFooterLinks(),
 		];
+		$skin = $this->skinContext->getContextSource()->getSkin();
 		foreach ( $data as $key => $existingItems ) {
 			$newItems = [];
-			$this->skinContext->runHook( 'onSkinAddFooterLinks', [ $key, &$newItems ] );
-			// @phan-suppress-next-line PhanEmptyForeach False positive as hooks modify
+			$this->getHookRunner()->onSkinAddFooterLinks( $skin, $key, $newItems );
 			foreach ( $newItems as $index => $linkHTML ) {
 				$data[ $key ][ $index ] = [
 					'id' => 'footer-' . $key . '-' . $index,
@@ -98,7 +96,8 @@ class SkinComponentFooter implements SkinComponent {
 		$skinContext = $this->skinContext;
 		$out = $skinContext->getOutput();
 		$ctx = $skinContext->getContextSource();
-		$title = $out->getTitle();
+		// This needs to be the relevant Title rather than just the raw Title for e.g. special pages that render content
+		$title = $skinContext->getRelevantTitle();
 		$titleExists = $title && $title->exists();
 		$config = $skinContext->getConfig();
 		$maxCredits = $config->get( MainConfigNames::MaxCredits );
@@ -145,7 +144,7 @@ class SkinComponentFooter implements SkinComponent {
 	private function formatFooterInfoData( array $data ): array {
 		$formattedData = [];
 		foreach ( $data as $key => $item ) {
-			if ( !empty( $item ) ) {
+			if ( $item ) {
 				$formattedData[ $key ] = [
 					'id' => 'footer-info-' . $key,
 					'html' => $item
@@ -169,7 +168,6 @@ class SkinComponentFooter implements SkinComponent {
 			'disclaimers' => [ 'disclaimers', 'disclaimerpage' ]
 		];
 		$localizer = $this->skinContext->getMessageLocalizer();
-		$title = null;
 
 		foreach ( $siteLinks as $key => $siteLink ) {
 			// Check if the link description has been disabled in the default language.
@@ -178,13 +176,14 @@ class SkinComponentFooter implements SkinComponent {
 				// Display the link for the user, described in their language (which may or may not be the same as the
 				// default language), but make the link target be the one site-wide page.
 				$title = Title::newFromText( $localizer->msg( $siteLink[1] )->inContentLanguage()->text() );
+				if ( $title !== null ) {
+					$siteLinksData[$key] = [
+						'id' => "footer-places-$key",
+						'text' => $localizer->msg( $siteLink[0] )->text(),
+						'href' => $title->fixSpecialName()->getLinkURL()
+					];
+				}
 			}
-
-			$siteLinksData[$key] = [
-				'id' => "footer-places-$key",
-				'text' => $localizer->msg( $siteLink[0] )->text(),
-				'href' => $title === null ? '' : $title->fixSpecialName()->getLinkURL()
-			];
 		}
 		return $siteLinksData;
 	}
@@ -206,20 +205,40 @@ class SkinComponentFooter implements SkinComponent {
 		} else { // Assuming array
 			$url = $icon['url'] ?? null;
 			unset( $icon['url'] );
+
+			$sources = '';
+			if ( isset( $icon['sources'] ) ) {
+				foreach ( $icon['sources'] as $source ) {
+					$sources .= Html::element( 'source', $source );
+				}
+				unset( $icon['sources'] );
+			}
+
 			if ( isset( $icon['src'] ) && $withImage === 'withImage' ) {
 				// Lazy-load footer icons, since they're not part of the printed view.
 				$icon['loading'] = 'lazy';
 				// do this the lazy way, just pass icon data as an attribute array
 				$html = Html::element( 'img', $icon );
+				if ( $sources ) {
+					$html = Html::openElement( 'picture' ) . $sources . $html . Html::closeElement( 'picture' );
+				}
 			} else {
 				$html = htmlspecialchars( $icon['alt'] ?? '' );
 			}
 			if ( $url ) {
-				$html = Html::rawElement( 'a', [
-					'href' => $url,
-					'target' => $config->get( MainConfigNames::ExternalLinkTarget ),
-				],
-				$html );
+				$html = Html::rawElement(
+					'a',
+					[
+						'href' => $url,
+						// Using a fake Codex link button, as this is the long-expected UX; our apologies.
+						'class' => [
+							'cdx-button', 'cdx-button--fake-button',
+							'cdx-button--size-large', 'cdx-button--fake-button--enabled'
+						],
+						'target' => $config->get( MainConfigNames::ExternalLinkTarget ),
+					],
+					$html
+				);
 			}
 		}
 		return $html;
@@ -279,15 +298,20 @@ class SkinComponentFooter implements SkinComponent {
 	private function getFooterIcons(): array {
 		$dataIcons = [];
 		$skinContext = $this->skinContext;
+		$config = $skinContext->getConfig();
 		// If footer icons are enabled append to the end of the rows
-		$footerIcons = $skinContext->getFooterIcons();
+		$footerIcons = self::getFooterIconsData(
+			$config
+		);
 
 		if ( count( $footerIcons ) > 0 ) {
 			$icons = [];
 			foreach ( $footerIcons as $blockName => $blockIcons ) {
 				$html = '';
 				foreach ( $blockIcons as $icon ) {
-					$html .= $skinContext->makeFooterIcon( $icon );
+					$html .= self::makeFooterIconHTML(
+						$config, $icon
+					);
 				}
 				// For historic reasons this mimics the `icononly` option
 				// for BaseTemplate::getFooterIcons. Empty rows should not be output.
@@ -315,7 +339,7 @@ class SkinComponentFooter implements SkinComponent {
 			}
 		}
 
-		return $dataIcons->getTemplateData();
+		return $dataIcons ? $dataIcons->getTemplateData() : [];
 	}
 
 	/**
@@ -338,7 +362,7 @@ class SkinComponentFooter implements SkinComponent {
 			unset( $item['html-before-portal'] );
 			unset( $item['label'] );
 			unset( $item['class'] );
-			foreach ( $item['array-items'] as $index => $arrayItem ) {
+			foreach ( $item['array-items'] ?? [] as $index => $arrayItem ) {
 				unset( $item['array-items'][$index]['html-item'] );
 			}
 			$formattedData[$key] = $item;

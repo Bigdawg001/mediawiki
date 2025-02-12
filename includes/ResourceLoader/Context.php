@@ -22,19 +22,19 @@
 
 namespace MediaWiki\ResourceLoader;
 
-use Config;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
 use MediaWiki\Page\PageReferenceValue;
 use MediaWiki\Request\FauxRequest;
+use MediaWiki\Request\WebRequest;
+use MediaWiki\User\User;
 use MediaWiki\User\UserIdentity;
 use MediaWiki\User\UserRigorOptions;
-use Message;
 use MessageLocalizer;
-use MessageSpecifier;
 use Psr\Log\LoggerInterface;
-use User;
-use WebRequest;
+use Wikimedia\Message\MessageParam;
+use Wikimedia\Message\MessageSpecifier;
 
 /**
  * Context object that contains information about the state of a specific
@@ -80,6 +80,8 @@ class Context implements MessageLocalizer {
 	protected $version;
 	/** @var bool */
 	protected $raw;
+	/** @var bool */
+	protected $sourcemap;
 	/** @var string|null */
 	protected $image;
 	/** @var string|null */
@@ -101,8 +103,12 @@ class Context implements MessageLocalizer {
 	/**
 	 * @param ResourceLoader $resourceLoader
 	 * @param WebRequest $request
+	 * @param string[]|null $validSkins List of valid skin names. If not passed,
+	 *   any skin name is considered valid. Invalid skins are replaced by the default.
 	 */
-	public function __construct( ResourceLoader $resourceLoader, WebRequest $request ) {
+	public function __construct(
+		ResourceLoader $resourceLoader, WebRequest $request, $validSkins = null
+	) {
 		$this->resourceLoader = $resourceLoader;
 		$this->request = $request;
 		$this->logger = $resourceLoader->getLogger();
@@ -120,22 +126,23 @@ class Context implements MessageLocalizer {
 		$this->only = $request->getRawVal( 'only' );
 		$this->version = $request->getRawVal( 'version' );
 		$this->raw = $request->getFuzzyBool( 'raw' );
+		$this->sourcemap = $request->getFuzzyBool( 'sourcemap' );
 
 		// Image requests
 		$this->image = $request->getRawVal( 'image' );
 		$this->variant = $request->getRawVal( 'variant' );
 		$this->format = $request->getRawVal( 'format' );
 
-		$this->skin = $request->getRawVal( 'skin' );
-		$skinFactory = MediaWikiServices::getInstance()->getSkinFactory();
-		$skinnames = $skinFactory->getInstalledSkins();
-
-		if ( !$this->skin || !isset( $skinnames[$this->skin] ) ) {
-			// The 'skin' parameter is required. (Not yet enforced.)
+		$skin = $request->getRawVal( 'skin' );
+		if (
+			$skin === null
+			|| ( is_array( $validSkins ) && !in_array( $skin, $validSkins ) )
+		) {
 			// For requests without a known skin specified,
-			// use MediaWiki's 'fallback' skin for skin-specific decisions.
-			$this->skin = self::DEFAULT_SKIN;
+			// use MediaWiki's 'fallback' skin for any skin-specific decisions.
+			$skin = self::DEFAULT_SKIN;
 		}
+		$this->skin = $skin;
 	}
 
 	/**
@@ -145,10 +152,9 @@ class Context implements MessageLocalizer {
 	 */
 	public static function debugFromString( ?string $debug ): int {
 		// The canonical way to enable debug mode is via debug=true
-		// This continues to map to v1 until v2 is ready (T85805).
-		if ( $debug === 'true' || $debug === '1' ) {
+		if ( $debug === '1' ) {
 			$ret = self::DEBUG_LEGACY;
-		} elseif ( $debug === '2' ) {
+		} elseif ( $debug === 'true' || $debug === '2' ) {
 			$ret = self::DEBUG_MAIN;
 		} else {
 			$ret = self::DEBUG_OFF;
@@ -163,8 +169,6 @@ class Context implements MessageLocalizer {
 	 *
 	 * Use cases:
 	 * - Unit tests (deprecated, create empty instance directly or use RLTestCase).
-	 *
-	 * @return Context
 	 */
 	public static function newDummyContext(): Context {
 		// This currently creates a non-empty instance of ResourceLoader (all modules registered),
@@ -180,17 +184,6 @@ class Context implements MessageLocalizer {
 
 	public function getResourceLoader(): ResourceLoader {
 		return $this->resourceLoader;
-	}
-
-	/**
-	 * @deprecated since 1.34 Use Module::getConfig instead inside module
-	 *   methods. Use ResourceLoader::getConfig elsewhere.
-	 * @return Config
-	 * @codeCoverageIgnore
-	 */
-	public function getConfig() {
-		wfDeprecated( __METHOD__, '1.34' );
-		return $this->getResourceLoader()->getConfig();
 	}
 
 	public function getRequest(): WebRequest {
@@ -215,8 +208,7 @@ class Context implements MessageLocalizer {
 		if ( $this->language === null ) {
 			// Must be a valid language code after this point (T64849)
 			// Only support uselang values that follow built-in conventions (T102058)
-			$lang = $this->getRequest()->getRawVal( 'lang', '' );
-			'@phan-var string $lang'; // getRawVal does not return null here
+			$lang = $this->getRequest()->getRawVal( 'lang' ) ?? '';
 			// Stricter version of RequestContext::sanitizeLangCode()
 			$validBuiltinCode = MediaWikiServices::getInstance()->getLanguageNameUtils()
 				->isValidBuiltInCode( $lang );
@@ -248,9 +240,6 @@ class Context implements MessageLocalizer {
 		return $this->skin;
 	}
 
-	/**
-	 * @return string|null
-	 */
 	public function getUser(): ?string {
 		return $this->user;
 	}
@@ -261,7 +250,9 @@ class Context implements MessageLocalizer {
 	 * @since 1.27
 	 * @param string|string[]|MessageSpecifier $key Message key, or array of keys,
 	 *   or a MessageSpecifier.
-	 * @param mixed ...$params
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param MessageParam|MessageSpecifier|string|int|float|list<MessageParam|MessageSpecifier|string|int|float> ...$params
+	 *   See Message::params()
 	 * @return Message
 	 */
 	public function msg( $key, ...$params ): Message {
@@ -309,13 +300,13 @@ class Context implements MessageLocalizer {
 	public function getUserObj(): User {
 		if ( $this->userObj === null ) {
 			$username = $this->getUser();
+			$userFactory = MediaWikiServices::getInstance()->getUserFactory();
 			if ( $username ) {
 				// Use provided username if valid, fallback to anonymous user
-				$this->userObj = User::newFromName( $username ) ?: new User;
-			} else {
-				// Anonymous user
-				$this->userObj = new User;
+				$this->userObj = $userFactory->newFromName( $username, UserRigorOptions::RIGOR_VALID );
 			}
+			// Anonymous user
+			$this->userObj ??= $userFactory->newAnonymous();
 		}
 
 		return $this->userObj;
@@ -325,9 +316,6 @@ class Context implements MessageLocalizer {
 		return $this->debug;
 	}
 
-	/**
-	 * @return string|null
-	 */
 	public function getOnly(): ?string {
 		return $this->only;
 	}
@@ -346,22 +334,21 @@ class Context implements MessageLocalizer {
 	}
 
 	/**
-	 * @return string|null
+	 * @since 1.41
+	 * @return bool
 	 */
+	public function isSourceMap(): bool {
+		return $this->sourcemap;
+	}
+
 	public function getImage(): ?string {
 		return $this->image;
 	}
 
-	/**
-	 * @return string|null
-	 */
 	public function getVariant(): ?string {
 		return $this->variant;
 	}
 
-	/**
-	 * @return string|null
-	 */
 	public function getFormat(): ?string {
 		return $this->format;
 	}
@@ -437,8 +424,6 @@ class Context implements MessageLocalizer {
 	 * the cache and decrease its usefulness.
 	 *
 	 * E.g. Used by RequestFileCache to form a cache key for storing the response output.
-	 *
-	 * @return string
 	 */
 	public function getHash(): string {
 		if ( $this->hash === null ) {
@@ -516,6 +501,3 @@ class Context implements MessageLocalizer {
 		return $json;
 	}
 }
-
-/** @deprecated since 1.39 */
-class_alias( Context::class, 'ResourceLoaderContext' );

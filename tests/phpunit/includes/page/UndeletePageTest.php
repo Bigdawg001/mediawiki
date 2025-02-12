@@ -1,9 +1,20 @@
 <?php
 
+use MediaWiki\CommentStore\CommentStoreComment;
+use MediaWiki\Page\Event\PageUpdatedEvent;
+use MediaWiki\Page\PageIdentityValue;
+use MediaWiki\Page\ProperPageIdentity;
 use MediaWiki\Page\UndeletePage;
 use MediaWiki\Revision\SlotRecord;
+use MediaWiki\Tests\ExpectCallbackTrait;
+use MediaWiki\Tests\Language\LocalizationUpdateSpyTrait;
+use MediaWiki\Tests\recentchanges\ChangeTrackingUpdateSpyTrait;
+use MediaWiki\Tests\ResourceLoader\ResourceLoaderUpdateSpyTrait;
+use MediaWiki\Tests\Search\SearchUpdateSpyTrait;
+use MediaWiki\Tests\User\TempUser\TempUserTestTrait;
 use MediaWiki\Title\Title;
 use MediaWiki\User\UserIdentityValue;
+use PHPUnit\Framework\Assert;
 use Wikimedia\IPUtils;
 
 /**
@@ -11,6 +22,14 @@ use Wikimedia\IPUtils;
  * @coversDefaultClass \MediaWiki\Page\UndeletePage
  */
 class UndeletePageTest extends MediaWikiIntegrationTestCase {
+
+	use TempUserTestTrait;
+	use ChangeTrackingUpdateSpyTrait;
+	use SearchUpdateSpyTrait;
+	use LocalizationUpdateSpyTrait;
+	use ResourceLoaderUpdateSpyTrait;
+	use ExpectCallbackTrait;
+
 	/**
 	 * @var array
 	 */
@@ -22,32 +41,8 @@ class UndeletePageTest extends MediaWikiIntegrationTestCase {
 	 */
 	private $ipEditor;
 
-	protected function addCoreDBData() {
-		// Blanked out to keep auto-increment values stable.
-	}
-
 	protected function setUp(): void {
 		parent::setUp();
-
-		$this->tablesUsed = array_merge(
-			$this->tablesUsed,
-			[
-				'page',
-				'revision',
-				'revision_comment_temp',
-				'ip_changes',
-				'text',
-				'archive',
-				'recentchanges',
-				'logging',
-				'page_props',
-				'comment',
-				'slots',
-				'content',
-				'content_models',
-				'slot_roles',
-			]
-		);
 
 		$this->ipEditor = '2001:DB8:0:0:0:0:0:1';
 		$this->setupPage( 'UndeletePageTest_thePage', NS_MAIN, ' ' );
@@ -55,15 +50,21 @@ class UndeletePageTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
+	 * Test update propagation.
+	 * Includes regression test for T381225
 	 * @param string $titleText
 	 * @param int $ns
-	 * @param string $content
+	 * @param string|Content $content
 	 */
-	private function setupPage( string $titleText, int $ns, string $content ): void {
+	private function setupPage( string $titleText, int $ns, $content ): void {
+		if ( is_string( $content ) ) {
+			$content = new WikitextContent( $content );
+		}
+
+		$this->disableAutoCreateTempUser();
 		$title = Title::makeTitle( $ns, $titleText );
 		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title );
 		$performer = static::getTestUser()->getUser();
-		$content = ContentHandler::makeContent( $content, $page->getTitle(), CONTENT_MODEL_WIKITEXT );
 		$updater = $page->newPageUpdater( UserIdentityValue::newAnonymous( $this->ipEditor ) )
 			->setContent( SlotRecord::MAIN, $content );
 
@@ -79,35 +80,43 @@ class UndeletePageTest extends MediaWikiIntegrationTestCase {
 	/**
 	 * @covers ::undeleteUnsafe
 	 * @covers ::undeleteRevisions
+	 * @covers \MediaWiki\Revision\RevisionStoreFactory::getRevisionStoreForUndelete
+	 * @covers \MediaWiki\User\ActorStoreFactory::getActorStoreForUndelete
 	 */
 	public function testUndeleteRevisions() {
 		// TODO: MCR: Test undeletion with multiple slots. Check that slots remain untouched.
 		$revisionStore = $this->getServiceContainer()->getRevisionStore();
 
 		// First make sure old revisions are archived
-		$dbr = wfGetDB( DB_REPLICA );
-		$arQuery = $revisionStore->getArchiveQueryInfo();
+		$dbr = $this->getDb();
 
 		foreach ( [ 0, 1 ] as $key ) {
-			$row = $dbr->selectRow(
-				$arQuery['tables'],
-				$arQuery['fields'],
-				[ 'ar_rev_id' => $this->pages[$key]['revId'] ],
-				__METHOD__,
-				[],
-				$arQuery['joins']
-			);
+			$row = $revisionStore->newArchiveSelectQueryBuilder( $dbr )
+				->joinComment()
+				->where( [ 'ar_rev_id' => $this->pages[$key]['revId'] ] )
+				->caller( __METHOD__ )->fetchRow();
 			$this->assertEquals( $this->ipEditor, $row->ar_user_text );
 
 			// Should not be in revision
-			$row = $dbr->selectRow( 'revision', '1', [ 'rev_id' => $this->pages[$key]['revId'] ] );
+			$row = $dbr->newSelectQueryBuilder()
+				->select( '1' )
+				->from( 'revision' )
+				->where( [ 'rev_id' => $this->pages[$key]['revId'] ] )
+				->fetchRow();
 			$this->assertFalse( $row );
 
 			// Should not be in ip_changes
-			$row = $dbr->selectRow( 'ip_changes', '1', [ 'ipc_rev_id' => $this->pages[$key]['revId'] ] );
+			$row = $dbr->newSelectQueryBuilder()
+				->select( '1' )
+				->from( 'ip_changes' )
+				->where( [ 'ipc_rev_id' => $this->pages[$key]['revId'] ] )
+				->fetchRow();
 			$this->assertFalse( $row );
 		}
 
+		// Enable autocreation of temporary users to test that undeletion of revisions performed by IP addresses works
+		// when temporary accounts are enabled.
+		$this->enableAutoCreateTempUser();
 		// Restore the page
 		$undeletePage = $this->getServiceContainer()->getUndeletePageFactory()->newUndeletePage(
 			$this->pages[0]['page'],
@@ -117,24 +126,110 @@ class UndeletePageTest extends MediaWikiIntegrationTestCase {
 		$status = $undeletePage->setUndeleteAssociatedTalk( true )->undeleteUnsafe( '' );
 		$this->assertEquals( 2, $status->value[UndeletePage::REVISIONS_RESTORED] );
 
-		$revQuery = $revisionStore->getQueryInfo();
 		// check subject page and talk page are both back in the revision table
 		foreach ( [ 0, 1 ] as $key ) {
-			$row = $dbr->selectRow(
-				$revQuery['tables'],
-				$revQuery['fields'],
-				[ 'rev_id' => $this->pages[$key]['revId'] ],
-				__METHOD__,
-				[],
-				$revQuery['joins']
-			);
+			$row = $revisionStore->newSelectQueryBuilder( $dbr )
+				->where( [ 'rev_id' => $this->pages[$key]['revId'] ] )
+				->caller( __METHOD__ )->fetchRow();
+
 			$this->assertNotFalse( $row, 'row exists in revision table' );
 			$this->assertEquals( $this->ipEditor, $row->rev_user_text );
 
 			// Should be back in ip_changes
-			$row = $dbr->selectRow( 'ip_changes', [ 'ipc_hex' ], [ 'ipc_rev_id' => $this->pages[$key]['revId'] ] );
+			$row = $dbr->newSelectQueryBuilder()
+				->select( [ 'ipc_hex' ] )
+				->from( 'ip_changes' )
+				->where( [ 'ipc_rev_id' => $this->pages[$key]['revId'] ] )
+				->fetchRow();
 			$this->assertNotFalse( $row, 'row exists in ip_changes table' );
 			$this->assertEquals( IPUtils::toHex( $this->ipEditor ), $row->ipc_hex );
 		}
 	}
+
+	/**
+	 * Regression test for T381225
+	 * @covers \MediaWiki\Page\UndeletePage::undeleteUnsafe
+	 */
+	public function testEventEmission() {
+		$page = PageIdentityValue::localIdentity( 0, NS_MEDIAWIKI, __METHOD__ );
+		$this->setupPage( $page->getDBkey(), $page->getNamespace(), 'Lorem Ipsum' );
+
+		$sysop = $this->getTestSysop()->getUser();
+
+		// clear the queue
+		$this->runJobs();
+
+		$this->expectDomainEvent(
+			PageUpdatedEvent::TYPE, 1,
+			static function ( PageUpdatedEvent $event ) use ( $sysop ) {
+				Assert::assertTrue(
+					$event->hasCause( PageUpdatedEvent::CAUSE_UNDELETE ),
+					PageUpdatedEvent::CAUSE_UNDELETE
+				);
+
+				Assert::assertTrue( $event->isSilent(), 'isSilent' );
+				Assert::assertTrue( $event->isAutomated(), 'isAutomated' );
+				Assert::assertTrue( $event->isContentChange(), 'isContentChange' );
+				Assert::assertFalse( $event->getAuthor()->isRegistered(), 'getAuthor' );
+				Assert::assertSame( $event->getPerformer(), $sysop, 'getPerformer' );
+			}
+		);
+
+		// Now undelete the page
+		$undeletePage = $this->getServiceContainer()->getUndeletePageFactory()->newUndeletePage(
+			$page,
+			$sysop
+		);
+
+		$undeletePage->undeleteUnsafe( 'just a test' );
+	}
+
+	public static function provideUpdatePropagation() {
+		static $counter = 1;
+		$name = __METHOD__ . $counter++;
+
+		yield 'article' => [ PageIdentityValue::localIdentity( 0, NS_MAIN, $name ) ];
+		yield 'user talk' => [ PageIdentityValue::localIdentity( 0, NS_USER_TALK, $name ) ];
+		yield 'message' => [ PageIdentityValue::localIdentity( 0, NS_MEDIAWIKI, $name ) ];
+		yield 'script' => [
+			PageIdentityValue::localIdentity( 0, NS_USER, "$name/common.js" ),
+			new JavaScriptContent( 'console.log("hi")' ),
+		];
+	}
+
+	/**
+	 * Regression test for T381225
+	 *
+	 * @dataProvider provideUpdatePropagation
+	 * @covers \MediaWiki\Page\UndeletePage::undeleteUnsafe
+	 */
+	public function testUpdatePropagation( ProperPageIdentity $page, ?Content $content = null ) {
+		$content ??= new WikitextContent( 'hi' );
+		$this->setupPage( $page->getDBkey(), $page->getNamespace(), $content );
+		$this->runJobs();
+
+		$performer = $this->getTestSysop()->getUser();
+
+		// Should generate an RC entry for undeletion,
+		// but not a regular page edit.
+		$this->expectChangeTrackingUpdates( 0, 1, 0, 0 );
+
+		$this->expectSearchUpdates( 1 );
+		$this->expectLocalizationUpdate( $page->getNamespace() === NS_MEDIAWIKI ? 1 : 0 );
+		$this->expectResourceLoaderUpdates(
+			$content->getModel() === CONTENT_MODEL_JAVASCRIPT ? 1 : 0
+		);
+
+		// Now undelete the page
+		$undeletePage = $this->getServiceContainer()->getUndeletePageFactory()->newUndeletePage(
+			$page,
+			$performer
+		);
+
+		$undeletePage->undeleteUnsafe( 'just a test' );
+
+		// NOTE: assertions are applied by the spies installed earlier.
+		$this->runDeferredUpdates();
+	}
+
 }

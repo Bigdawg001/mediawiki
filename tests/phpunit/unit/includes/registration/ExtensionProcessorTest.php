@@ -3,21 +3,22 @@
 namespace MediaWiki\Tests\Registration;
 
 use Exception;
-use ExtensionProcessor;
-use ExtensionRegistry;
-use FormatJson;
 use InvalidArgumentException;
+use MediaWiki\Json\FormatJson;
+use MediaWiki\Registration\ExtensionProcessor;
+use MediaWiki\Registration\ExtensionRegistry;
 use MediaWikiUnitTestCase;
 use RuntimeException;
 use UnexpectedValueException;
 use Wikimedia\TestingAccessWrapper;
 
 /**
- * @covers ExtensionProcessor
+ * @covers \MediaWiki\Registration\ExtensionProcessor
  */
 class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 
-	private $extensionPath, $dirname;
+	private string $extensionPath;
+	private string $dirname;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -54,6 +55,7 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 			'AnAttribute' => [ 'omg' ],
 			'AutoloadClasses' => [ 'FooBar' => 'includes/FooBar.php' ],
 			'AutoloadNamespaces' => [ '\Foo\Bar\\' => 'includes/foo/bar/' ],
+			'ForeignResourcesDir' => 'lib',
 			'SpecialPages' => [ 'Foo' => 'SpecialFoo' ],
 			'callback' => 'FooBar::onRegistration',
 		], 1 );
@@ -67,6 +69,10 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 		$this->assertArrayHasKey( 'autoloaderPaths', $extracted );
 		$this->assertArrayHasKey( 'autoloaderClasses', $extracted );
 		$this->assertArrayHasKey( 'autoloaderNS', $extracted );
+		$this->assertSame(
+			[ 'FooBar' => dirname( $this->extensionPath ) . '/lib' ],
+			$attributes['ForeignResourcesDir']
+		);
 		$this->assertSame(
 			[ 'FooBar' => 'FooBar::onRegistration' ],
 			$extracted['callbacks']
@@ -130,7 +136,6 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 	}
 
 	public function testExtractSkins() {
-		$this->expectDeprecation();
 		$processor = new ExtensionProcessor();
 		$processor->extractInfo( $this->extensionPath, self::$default + [
 			'ValidSkinNames' => [
@@ -147,14 +152,6 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 						[]
 					]
 				],
-				'test-vector-core-relative' => [
-					'class' => 'SkinTestVector',
-					'args' => [
-						[
-							'templateDirectory' => 'skins/Vector/templates',
-						]
-					]
-				],
 				'test-vector-skin-relative' => [
 					'class' => 'SkinTestVector',
 					'args' => [
@@ -163,13 +160,13 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 						]
 					]
 				],
+				'test-vector-string' => 'TestVector',
 			]
 		], 1 );
 		$extracted = $processor->getExtractedInfo();
 		$validSkins = $extracted['globals']['wgValidSkinNames'];
 
 		$this->assertArrayHasKey( 'test-vector', $validSkins );
-		$this->assertArrayHasKey( 'test-vector-core-relative', $validSkins );
 		$this->assertArrayHasKey( 'test-vector-empty-args', $validSkins );
 		$this->assertArrayHasKey( 'test-vector-skin-relative', $validSkins );
 		$this->assertSame(
@@ -178,15 +175,11 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 			'A sensible default is provided.'
 		);
 		$this->assertSame(
-			'skins/Vector/templates',
-			$validSkins['test-vector-core-relative']['args'][0]['templateDirectory'],
-			'unmodified'
-		);
-		$this->assertSame(
 			$this->dirname . '/templates',
 			$validSkins['test-vector-skin-relative']['args'][0]['templateDirectory'],
 			'modified'
 		);
+		$this->assertSame( 'TestVector', $validSkins['test-vector-string'] );
 	}
 
 	public function testExtractNamespaces() {
@@ -255,6 +248,58 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 		// A has subpages, X does not
 		$this->assertTrue( $extracted['globals']['wgNamespacesWithSubpages'][332200] );
 		$this->assertArrayNotHasKey( 123456, $extracted['globals']['wgNamespacesWithSubpages'] );
+	}
+
+	public function testRateLimits() {
+		$processor = new ExtensionProcessor();
+		$processor->extractInfo(
+			'',
+			[
+				'name' => 'Foo',
+				'RateLimits' => [
+					'test1' => [
+						"user" => [ 1, 7200 ]
+					],
+					'test2' => [
+						"user" => [ 2, 7200 ]
+					],
+				],
+				'AvailableRights' => [
+					'test2',
+				]
+			] + self::$default,
+			2
+		);
+
+		$processor->extractInfo(
+			'Bar',
+			[
+				'name' => 'Bar',
+				'RateLimits' => [
+					'test3' => [
+						"user" => [ 1, 7200 ]
+					],
+				],
+			] + self::$default,
+			2
+		);
+
+		$extracted = $processor->getExtractedInfo();
+
+		$this->assertArrayHasKey( 'wgRateLimits', $extracted['globals'] );
+		$this->assertArrayHasKey( 'wgImplicitRights', $extracted['globals'] );
+		$this->assertArrayHasKey( 'wgAvailableRights', $extracted['globals'] );
+
+		$this->assertArrayHasKey( 'test1', $extracted['globals']['wgRateLimits'] );
+		$this->assertArrayHasKey( 'test2', $extracted['globals']['wgRateLimits'] );
+		$this->assertArrayHasKey( 'test3', $extracted['globals']['wgRateLimits'] );
+
+		$this->assertContains( 'test2', $extracted['globals']['wgAvailableRights'] );
+		$this->assertNotContains( 'test1', $extracted['globals']['wgAvailableRights'] );
+
+		$this->assertContains( 'test1', $extracted['globals']['wgImplicitRights'] );
+		$this->assertContains( 'test3', $extracted['globals']['wgImplicitRights'] );
+		$this->assertNotContains( 'test2', $extracted['globals']['wgImplicitRights'] );
 	}
 
 	public function provideMixedStyleHooks() {
@@ -551,6 +596,48 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 		$processor->getExtractedInfo();
 	}
 
+	public function provideDomainEventDomainEventSubscribers() {
+		// Format:
+		// Current DomainEventSubscribers attribute
+		// Content in extension.json
+		// Expected DomainEventSubscribers attribute
+		return [
+			[
+				[
+					[ 'events' => [ 'FooDone' ], 'factory' => 'PriorCallback' ]
+				],
+				[
+					'DomainEventSubscribers' => [
+						[
+							'events' => [ 'FooDone', 'BarDone', ],
+							'class' => 'FooClass',
+							'services' => [],
+						],
+					]
+				] + self::$default,
+				[
+					[ 'events' => [ 'FooDone' ], 'factory' => 'PriorCallback' ],
+					[
+						'events' => [ 'FooDone', 'BarDone', ],
+						'class' => 'FooClass',
+						'services' => [],
+						'extensionPath' => $this->getExtensionPath()
+					]
+				]
+			],
+		];
+	}
+
+	/**
+	 * @dataProvider provideDomainEventDomainEventSubscribers
+	 */
+	public function testDomainEventDomainEventSubscribers( $pre, $info, $expected ) {
+		$processor = new MockExtensionProcessor( [ 'attributes' => [ 'DomainEventSubscribers' => $pre ] ] );
+		$processor->extractInfo( $this->extensionPath, $info, 1 );
+		$extracted = $processor->getExtractedInfo();
+		$this->assertEquals( $expected, $extracted['attributes']['DomainEventSubscribers'] );
+	}
+
 	public function testExtractConfig1() {
 		$processor = new ExtensionProcessor();
 		$info = [
@@ -679,16 +766,28 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider provideExtractExtensionMessagesFiles
-	 */
-	public function testExtractExtensionMessagesFiles( $input, $expected ) {
-		$processor = new ExtensionProcessor();
-		$processor->extractInfo( $this->extensionPath, $input + self::$default, 1 );
-		$out = $processor->getExtractedInfo();
-		foreach ( $expected as $key => $value ) {
-			$this->assertEquals( $value, $out['globals'][$key] );
-		}
+	public static function provideExtractRestModuleFiles() {
+		$dir = dirname( self::getExtensionPath() );
+		return [
+			[
+				[ 'RestModuleFiles' => [ 'FooBar.json' ] ],
+				[ 'wgRestAPIAdditionalRouteFiles' => [ $dir . '/FooBar.json' ] ]
+			],
+			[
+				[
+					'RestModuleFiles' => [
+						'FooBar.json',
+						'Xyzzy.json',
+					],
+				],
+				[
+					'wgRestAPIAdditionalRouteFiles' => [
+						$dir . '/FooBar.json',
+						$dir . '/Xyzzy.json',
+					],
+				],
+			],
+		];
 	}
 
 	public static function provideExtractMessagesDirs() {
@@ -706,9 +805,11 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 	}
 
 	/**
+	 * @dataProvider provideExtractExtensionMessagesFiles
+	 * @dataProvider provideExtractRestModuleFiles
 	 * @dataProvider provideExtractMessagesDirs
 	 */
-	public function testExtractMessagesDirs( $input, $expected ) {
+	public function testExtractFilesAndDirs( $input, $expected ) {
 		$processor = new ExtensionProcessor();
 		$processor->extractInfo( $this->extensionPath, $input + self::$default, 1 );
 		$out = $processor->getExtractedInfo();
@@ -729,15 +830,11 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 	 */
 	public function testExtractResourceLoaderModules(
 		$input,
-		array $expectedGlobals,
 		array $expectedAttribs = []
 	) {
 		$processor = new ExtensionProcessor();
 		$processor->extractInfo( $this->extensionPath, $input + self::$default, 1 );
 		$out = $processor->getExtractedInfo();
-		foreach ( $expectedGlobals as $key => $value ) {
-			$this->assertEquals( $value, $out['globals'][$key] );
-		}
 		foreach ( $expectedAttribs as $key => $value ) {
 			$this->assertEquals( $value, $out['attributes'][$key] );
 		}
@@ -746,8 +843,7 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 	public static function provideExtractResourceLoaderModules() {
 		$dir = dirname( self::getExtensionPath() );
 		return [
-			// Generic module with localBasePath/remoteExtPath specified
-			[
+			'Generic module with localBasePath/remoteExtPath specified' => [
 				// Input
 				[
 					'ResourceModules' => [
@@ -759,7 +855,6 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 					],
 				],
 				// Expected
-				[],
 				[
 					'ResourceModules' => [
 						'test.foo' => [
@@ -770,8 +865,7 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 					],
 				],
 			],
-			// ResourceFileModulePaths specified:
-			[
+			'ResourceFileModulePaths specified' => [
 				// Input
 				[
 					'ResourceFileModulePaths' => [
@@ -803,7 +897,6 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 					],
 				],
 				// Expected
-				[],
 				[
 					'ResourceModules' => [
 						'test.foo' => [
@@ -831,8 +924,7 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 					],
 				],
 			],
-			// ResourceModuleSkinStyles with file module paths
-			[
+			'ResourceModuleSkinStyles with file module paths' => [
 				// Input
 				[
 					'ResourceFileModulePaths' => [
@@ -846,7 +938,6 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 					],
 				],
 				// Expected
-				[],
 				[
 					'ResourceModuleSkinStyles' => [
 						'foobar' => [
@@ -857,8 +948,7 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 					],
 				],
 			],
-			// ResourceModuleSkinStyles with file module paths and an override
-			[
+			'ResourceModuleSkinStyles with file module paths and an override' => [
 				// Input
 				[
 					'ResourceFileModulePaths' => [
@@ -873,7 +963,6 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 					],
 				],
 				// Expected
-				[],
 				[
 					'ResourceModuleSkinStyles' => [
 						'foobar' => [
@@ -894,14 +983,12 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 					],
 				],
 				// Expected
-				[],
 				[
 					'QUnitTestModules' => [
 						'test.FooBar' => [
 							'localBasePath' => $dir,
 							'remoteExtPath' => 'Foo',
 							'scripts' => 'bar.js',
-							'targets' => [ 'test' ],
 						],
 					],
 				],
@@ -1145,17 +1232,6 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 		);
 	}
 
-	public function testGetExtraAutoloaderPaths() {
-		$this->hideDeprecated( 'ExtensionProcessor::getExtraAutoloaderPaths' );
-		$processor = new ExtensionProcessor();
-		$this->assertSame(
-			[ "{$this->dirname}/vendor/autoload.php" ],
-			$processor->getExtraAutoloaderPaths( $this->dirname, [
-				'load_composer_autoloader' => true,
-			] )
-		);
-	}
-
 	public function testGetExtractedAutoloadInfo() {
 		$processor = new ExtensionProcessor();
 
@@ -1227,6 +1303,24 @@ class ExtensionProcessorTest extends MediaWikiUnitTestCase {
 
 		$this->assertEquals( [], $missing,
 			"The following global settings are not documented in docs/extension.schema.json" );
+	}
+
+	/**
+	 * Verify that extension.schema.v1.json is unchanged
+	 *
+	 * Frozen since MediaWiki 1.43; see T258668 for details.
+	 *
+	 * @coversNothing
+	 */
+	public function testVersion1SchemaIsFrozen() {
+		global $IP;
+
+		$schemaFileHash = md5_file( "$IP/docs/extension.schema.v1.json", false );
+
+		$this->assertSame(
+			'51b7eb8503c163fb1381110bc995cdd5',
+			$schemaFileHash,
+			"Manifest_version 1 is frozen and should not be changed or given new features" );
 	}
 
 	public function testGetCoreAttribsMerging() {

@@ -31,8 +31,11 @@ use Psr\Log\LogLevel;
  * @since 1.27
  */
 class TestLogger extends \Psr\Log\AbstractLogger {
+	/** @var bool */
 	private $collect;
+	/** @var bool */
 	private $collectContext;
+	/** @var array */
 	private $buffer = [];
 	/** @var callable|null */
 	private $filter;
@@ -88,7 +91,7 @@ class TestLogger extends \Psr\Log\AbstractLogger {
 		$this->buffer = [];
 	}
 
-	public function log( $level, $message, array $context = [] ) {
+	public function log( $level, $message, array $context = [] ): void {
 		$message = trim( $message );
 
 		if ( $this->filter ) {

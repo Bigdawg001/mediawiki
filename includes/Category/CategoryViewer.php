@@ -23,24 +23,24 @@
 namespace MediaWiki\Category;
 
 use Collation;
-use ContextSource;
-use DeprecationHelper;
 use HtmlArmor;
-use IContextSource;
-use ILanguageConverter;
 use ImageGalleryBase;
 use ImageGalleryClassNotFoundException;
-use LinkCache;
+use InvalidArgumentException;
+use MediaWiki\Cache\LinkCache;
+use MediaWiki\Context\ContextSource;
+use MediaWiki\Context\IContextSource;
+use MediaWiki\Debug\DeprecationHelper;
 use MediaWiki\HookContainer\ProtectedHookAccessorTrait;
 use MediaWiki\Html\Html;
+use MediaWiki\Language\ILanguageConverter;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageReference;
 use MediaWiki\Title\Title;
-use MWException;
-use TitleValue;
+use MediaWiki\Title\TitleValue;
 use Wikimedia\Rdbms\SelectQueryBuilder;
 
 class CategoryViewer extends ContextSource {
@@ -104,6 +104,8 @@ class CategoryViewer extends ContextSource {
 	/** @var ILanguageConverter */
 	private $languageConverter;
 
+	private int $migrationStage;
+
 	/**
 	 * @since 1.19 $context is a second, required parameter
 	 * @param PageIdentity $page
@@ -122,8 +124,7 @@ class CategoryViewer extends ContextSource {
 			'title',
 			'1.37',
 			function (): Title {
-				// @phan-suppress-next-line PhanTypeMismatchReturnNullable castFrom does not return null here
-				return Title::castFromPageIdentity( $this->page );
+				return Title::newFromPageIdentity( $this->page );
 			},
 			function ( PageIdentity $page ) {
 				$this->page = $page;
@@ -137,6 +138,7 @@ class CategoryViewer extends ContextSource {
 		$this->from = $from;
 		$this->until = $until;
 		$this->limit = $context->getConfig()->get( MainConfigNames::CategoryPagingLimit );
+		$this->migrationStage = $context->getConfig()->get( MainConfigNames::CategoryLinksSchemaMigrationStage );
 		$this->cat = Category::newFromTitle( $page );
 		$this->query = $query;
 		$this->collation = MediaWikiServices::getInstance()->getCollationFactory()->getCategoryCollation();
@@ -152,7 +154,7 @@ class CategoryViewer extends ContextSource {
 	 */
 	public function getHTML() {
 		$this->showGallery = $this->getConfig()->get( MainConfigNames::CategoryMagicGallery )
-			&& !$this->getOutput()->mNoGallery;
+			&& !$this->getOutput()->getNoGallery();
 
 		$this->clearCategoryState();
 		$this->doCategoryQuery();
@@ -260,8 +262,8 @@ class CategoryViewer extends ContextSource {
 	): string {
 		$link = null;
 		$legacyTitle = MediaWikiServices::getInstance()->getTitleFactory()
-			->castFromPageReference( $page );
-		// @phan-suppress-next-line PhanTypeMismatchArgument castFrom does not return null here
+			->newFromPageReference( $page );
+		// @phan-suppress-next-line PhanTypeMismatchArgument Type mismatch on pass-by-ref args
 		$this->getHookRunner()->onCategoryViewer__generateLink( $type, $legacyTitle, $html, $link );
 		if ( $link === null ) {
 			$linkRenderer = MediaWikiServices::getInstance()->getLinkRenderer();
@@ -317,14 +319,12 @@ class CategoryViewer extends ContextSource {
 		PageReference $page, string $sortkey, int $pageLength, bool $isRedirect = false
 	): void {
 		$title = MediaWikiServices::getInstance()->getTitleFactory()
-			->castFromPageReference( $page );
+			->newFromPageReference( $page );
 		if ( $this->showGallery ) {
 			$flip = $this->flip['file'];
 			if ( $flip ) {
-				// @phan-suppress-next-line PhanTypeMismatchArgumentNullable castFrom does not return null here
 				$this->gallery->insert( $title, '', '', '', [], ImageGalleryBase::LOADING_LAZY );
 			} else {
-				// @phan-suppress-next-line PhanTypeMismatchArgumentNullable castFrom does not return null here
 				$this->gallery->add( $title, '', '', '', [], ImageGalleryBase::LOADING_LAZY );
 			}
 		} else {
@@ -370,7 +370,7 @@ class CategoryViewer extends ContextSource {
 	}
 
 	protected function doCategoryQuery() {
-		$dbr = wfGetDB( DB_REPLICA, 'category' );
+		$dbr = MediaWikiServices::getInstance()->getConnectionProvider()->getReplicaDatabase();
 
 		$this->nextPage = [
 			'page' => null,
@@ -391,11 +391,17 @@ class CategoryViewer extends ContextSource {
 			# set in $wgCategoryCollation, pagination might go totally haywire.
 			$extraConds = [ 'cl_type' => $type ];
 			if ( isset( $this->from[$type] ) ) {
-				$extraConds[] = 'cl_sortkey >= '
-					. $dbr->addQuotes( $this->collation->getSortKey( $this->from[$type] ) );
+				$extraConds[] = $dbr->expr(
+					'cl_sortkey',
+					'>=',
+					$this->collation->getSortKey( $this->from[$type] )
+				);
 			} elseif ( isset( $this->until[$type] ) ) {
-				$extraConds[] = 'cl_sortkey < '
-					. $dbr->addQuotes( $this->collation->getSortKey( $this->until[$type] ) );
+				$extraConds[] = $dbr->expr(
+					'cl_sortkey',
+					'<',
+					$this->collation->getSortKey( $this->until[$type] )
+				);
 				$this->flip[$type] = true;
 			}
 
@@ -410,13 +416,10 @@ class CategoryViewer extends ContextSource {
 						'cat_pages',
 						'cat_files',
 						'cl_sortkey_prefix',
-						'cl_collation'
 					]
 				) )
 				->from( 'page' )
-				->where( [ 'cl_to' => $this->page->getDBkey() ] )
-				->andWhere( $extraConds )
-				->useIndex( [ 'categorylinks' => 'cl_sortkey' ] );
+				->andWhere( $extraConds );
 
 			if ( $this->flip[$type] ) {
 				$queryBuilder->orderBy( 'cl_sortkey', SelectQueryBuilder::SORT_DESC );
@@ -430,10 +433,22 @@ class CategoryViewer extends ContextSource {
 					'cat_title = page_title',
 					'page_namespace' => NS_CATEGORY
 				] )
-				->limit( $this->limit + 1 )
-				->caller( __METHOD__ );
+				->limit( $this->limit + 1 );
+			if ( $this->migrationStage & SCHEMA_COMPAT_READ_OLD ) {
+				$queryBuilder->where( [ 'cl_to' => $this->page->getDBkey() ] )
+					->field( 'cl_collation' )
+					->useIndex( [ 'categorylinks' => 'cl_sortkey' ] );
+			} else {
+				$queryBuilder->join( 'linktarget', null, 'cl_target_id = lt_id' )
+					->where( [ 'lt_title' => $this->page->getDBkey(), 'lt_namespace' => NS_CATEGORY ] );
 
-			$res = $queryBuilder->fetchResultSet();
+				$queryBuilder->join( 'collation', null, 'cl_collation_id = collation_id' )
+					->field( 'collation_name', 'cl_collation' );
+
+				$queryBuilder->useIndex( [ 'categorylinks' => 'cl_sortkey_id' ] );
+			}
+
+			$res = $queryBuilder->caller( __METHOD__ )->fetchResultSet();
 
 			$this->getHookRunner()->onCategoryViewer__doCategoryQuery( $type, $res );
 			$linkCache = MediaWikiServices::getInstance()->getLinkCache();
@@ -547,7 +562,9 @@ class CategoryViewer extends ContextSource {
 	protected function getImageSection() {
 		$name = $this->getOutput()->getUnprefixedDisplayTitle();
 		$r = '';
-		$rescnt = $this->showGallery ? $this->gallery->count() : count( $this->imgsNoGallery );
+		$rescnt = $this->showGallery ?
+			$this->gallery->count() :
+			count( $this->imgsNoGallery ?? [] );
 		$dbcnt = $this->cat->getFileCount();
 		// This function should be called even if the result isn't used, it has side-effects
 		$countmsg = $this->getCountMessage( $rescnt, $dbcnt, 'file' );
@@ -638,7 +655,7 @@ class CategoryViewer extends ContextSource {
 		}
 
 		$pageLang = MediaWikiServices::getInstance()->getTitleFactory()
-			->castFromPageIdentity( $this->page )
+			->newFromPageIdentity( $this->page )
 			->getPageLanguage();
 		$attribs = [ 'lang' => $pageLang->getHtmlCode(), 'dir' => $pageLang->getDir(),
 			'class' => 'mw-content-' . $pageLang->getDir() ];
@@ -758,7 +775,6 @@ class CategoryViewer extends ContextSource {
 	 *
 	 * @param PageReference $page The title (usually $this->title)
 	 * @param string $section Which section
-	 * @throws MWException
 	 * @return LinkTarget
 	 */
 	private function addFragmentToTitle( PageReference $page, string $section ): LinkTarget {
@@ -773,7 +789,7 @@ class CategoryViewer extends ContextSource {
 				$fragment = 'mw-category-media';
 				break;
 			default:
-				throw new MWException( __METHOD__ .
+				throw new InvalidArgumentException( __METHOD__ .
 					" Invalid section $section." );
 		}
 
@@ -836,4 +852,5 @@ class CategoryViewer extends ContextSource {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( CategoryViewer::class, 'CategoryViewer' );

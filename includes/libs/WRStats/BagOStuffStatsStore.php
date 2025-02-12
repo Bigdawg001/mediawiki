@@ -2,7 +2,7 @@
 
 namespace Wikimedia\WRStats;
 
-use BagOStuff;
+use Wikimedia\ObjectCache\BagOStuff;
 
 /**
  * An adaptor allowing WRStats to store data in MediaWiki's BagOStuff
@@ -14,9 +14,6 @@ class BagOStuffStatsStore implements StatsStore {
 	/** @var BagOStuff */
 	private $cache;
 
-	/**
-	 * @param BagOStuff $cache
-	 */
 	public function __construct( BagOStuff $cache ) {
 		$this->cache = $cache;
 	}

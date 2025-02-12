@@ -82,21 +82,30 @@ class FilePath {
 		return "{$this->remoteBasePath}/{$this->path}";
 	}
 
-	/** @return string|null */
 	public function getLocalBasePath(): ?string {
 		return $this->localBasePath;
 	}
 
-	/** @return string|null */
 	public function getRemoteBasePath(): ?string {
 		return $this->remoteBasePath;
 	}
 
-	/** @return string */
 	public function getPath(): string {
 		return $this->path;
 	}
-}
 
-/** @deprecated since 1.39 */
-class_alias( FilePath::class, 'ResourceLoaderFilePath' );
+	/**
+	 * Set the base path if it has not already been set.
+	 *
+	 * @param string $localBasePath
+	 * @param string $remoteBasePath
+	 */
+	public function initBasePaths( string $localBasePath, string $remoteBasePath ) {
+		if ( $this->localBasePath === null ) {
+			$this->localBasePath = $localBasePath;
+		}
+		if ( $this->remoteBasePath === null ) {
+			$this->remoteBasePath = $remoteBasePath;
+		}
+	}
+}

@@ -20,8 +20,7 @@
 
 namespace MediaWiki\Language;
 
-use InvalidArgumentException;
-use Message;
+use MediaWiki\Message\Message;
 
 /**
  * Variant of the Message class.
@@ -48,14 +47,8 @@ class RawMessage extends Message {
 	 *
 	 * @param string $text Message to use.
 	 * @param array $params Parameters for the message.
-	 *
-	 * @throws InvalidArgumentException
 	 */
-	public function __construct( $text, $params = [] ) {
-		if ( !is_string( $text ) ) {
-			throw new InvalidArgumentException( '$text must be a string' );
-		}
-
+	public function __construct( string $text, $params = [] ) {
 		parent::__construct( $text, $params );
 
 		// The key is the message.
@@ -74,6 +67,42 @@ class RawMessage extends Message {
 		return $this->message;
 	}
 
+	public function getTextOfRawMessage() {
+		return $this->key;
+	}
+
+	public function getParamsOfRawMessage() {
+		return $this->parameters;
+	}
+
+	/**
+	 * To conform to the MessageSpecifier interface, always return 'rawmessage',
+	 * which is a real message key that can be used with MessageValue and other classes.
+	 */
+	public function getKey(): string {
+		return 'rawmessage';
+	}
+
+	/**
+	 * To conform to the MessageSpecifier interface, return parameters that are valid with the
+	 * 'rawmessage' message, and can be used with MessageValue and other classes.
+	 * @return string[]
+	 */
+	public function getParams(): array {
+		// If the provided text is equivalent to 'rawmessage', return the provided params.
+		if ( $this->key === '$1' ) {
+			return $this->parameters;
+		}
+		// If there are no provided params, return the provided text as the single param.
+		if ( !$this->parameters ) {
+			return [ $this->key ];
+		}
+		// As a last resort, substitute the provided params into the single param accepted by
+		// 'rawmessage'. This may access global state.
+		return [ $this->plain() ];
+	}
+
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( RawMessage::class, 'RawMessage' );

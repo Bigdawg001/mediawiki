@@ -3,7 +3,6 @@
 namespace MediaWiki\Tests\Rest\Handler;
 
 use MediaWiki\MainConfigNames;
-use MediaWiki\MainConfigSchema;
 use MediaWiki\Rest\Handler\Helper\ParsoidFormatHelper;
 use MediaWiki\Rest\Handler\TransformHandler;
 use MediaWiki\Rest\RequestData;
@@ -37,7 +36,6 @@ class TransformHandlerTest extends MediaWikiIntegrationTestCase {
 		$request = new RequestData( [
 			'pathParams' => [
 				'from' => ParsoidFormatHelper::FORMAT_WIKITEXT,
-				'format' => ParsoidFormatHelper::FORMAT_HTML,
 			],
 			'bodyContents' => json_encode( [
 				'wikitext' => '== h2 ==',
@@ -49,13 +47,13 @@ class TransformHandlerTest extends MediaWikiIntegrationTestCase {
 			'>h2</h2>',
 			200,
 			[ 'content-type' => $htmlContentType ],
+			[ 'format' => ParsoidFormatHelper::FORMAT_HTML ]
 		];
 
 		// Convert HTML to wikitext ////////////////////////////////////////////////////////////////
 		$request = new RequestData( [
 				'pathParams' => [
 					'from' => ParsoidFormatHelper::FORMAT_HTML,
-					'format' => ParsoidFormatHelper::FORMAT_WIKITEXT,
 				],
 				'bodyContents' => json_encode( [
 					'html' => '<pre>hi ho</pre>',
@@ -67,13 +65,13 @@ class TransformHandlerTest extends MediaWikiIntegrationTestCase {
 			'hi ho',
 			200,
 			[ 'content-type' => "text/plain; charset=utf-8; profile=\"$wikitextProfileUri\"" ],
+			[ 'format' => ParsoidFormatHelper::FORMAT_WIKITEXT ]
 		];
 
 		// Perform language variant conversion //////////////////////////////////////////////////////
 		$request = new RequestData( [
 				'pathParams' => [
 					'from' => ParsoidFormatHelper::FORMAT_PAGEBUNDLE,
-					'format' => ParsoidFormatHelper::FORMAT_PAGEBUNDLE,
 				],
 				'bodyContents' => json_encode( [
 					// NOTE: input for pb2pb is expected in the 'original' structure for some reason
@@ -106,11 +104,12 @@ class TransformHandlerTest extends MediaWikiIntegrationTestCase {
 				'>esttay anguagelay onversioncay<',
 				// NOTE: quotes are escaped because this is embedded in JSON
 				'<meta http-equiv=\"content-language\" content=\"en-x-piglatin\"/>'
-			] ,
+			],
 			200,
 			// NOTE: Parsoid returns a content-language header in the page bundle,
 			// but that header is not applied to the HTTP response, which is JSON.
 			[ 'content-type' => $pbContentType ],
+			[ 'format' => ParsoidFormatHelper::FORMAT_PAGEBUNDLE ]
 		];
 	}
 
@@ -122,22 +121,23 @@ class TransformHandlerTest extends MediaWikiIntegrationTestCase {
 		RequestInterface $request,
 		$expectedText,
 		$expectedStatus = 200,
-		$expectedHeaders = []
+		$expectedHeaders = [],
+		$config = []
 	) {
-		$this->overrideConfigValue( 'UsePigLatinVariant', true );
-		$parsoidSettings = MainConfigSchema::getDefaultValue( MainConfigNames::ParsoidSettings );
+		$this->overrideConfigValue( MainConfigNames::UsePigLatinVariant, true );
 
+		$revisionLookup = $this->getServiceContainer()->getRevisionLookup();
 		$dataAccess = $this->getServiceContainer()->getParsoidDataAccess();
 		$siteConfig = $this->getServiceContainer()->getParsoidSiteConfig();
 		$pageConfigFactory = $this->getServiceContainer()->getParsoidPageConfigFactory();
 
 		$handler = new TransformHandler(
-			$parsoidSettings,
+			$revisionLookup,
 			$siteConfig,
 			$pageConfigFactory,
 			$dataAccess
 		);
-		$response = $this->executeHandler( $handler, $request );
+		$response = $this->executeHandler( $handler, $request, $config );
 		$response->getBody()->rewind();
 		$data = $response->getBody()->getContents();
 

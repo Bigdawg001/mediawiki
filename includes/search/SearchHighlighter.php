@@ -23,6 +23,8 @@
 
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Parser\Sanitizer;
+use MediaWiki\Registration\ExtensionRegistry;
 
 /**
  * Highlight bits of wikitext
@@ -36,6 +38,7 @@ class SearchHighlighter {
 	public const DEFAULT_CONTEXT_LINES = 2;
 	public const DEFAULT_CONTEXT_CHARS = 75;
 
+	/** @var bool */
 	protected $mCleanWikitext = true;
 
 	/**
@@ -81,7 +84,7 @@ class SearchHighlighter {
 
 		// @todo FIXME: This should prolly be a hook or something
 		// instead of hardcoding the name of the Cite extension
-		if ( \ExtensionRegistry::getInstance()->isLoaded( 'Cite' ) ) {
+		if ( ExtensionRegistry::getInstance()->isLoaded( 'Cite' ) ) {
 			$spat .= '|(<ref>)'; // references via cite extension
 			$endPatterns[4] = '/(<ref>)|(<\/ref>)/';
 		}
@@ -132,11 +135,11 @@ class SearchHighlighter {
 								break;
 							} else {
 								// end of nested element
-								$level -= 1;
+								$level--;
 							}
 						} else {
 							// nested
-							$level += 1;
+							$level++;
 						}
 						$offset = $endMatches[0][1] + strlen( $endMatches[0][0] );
 					}
@@ -193,7 +196,7 @@ class SearchHighlighter {
 		$first = 0;
 		$firstText = '';
 		foreach ( $textExt as $index => $line ) {
-			if ( strlen( $line ) > 0 && $line[0] != ';' && $line[0] != ':' ) {
+			if ( $line !== '' && $line[0] != ';' && $line[0] != ':' ) {
 				$firstText = $this->extract( $line, 0, $contextchars * $contextlines );
 				$first = $index;
 				break;
@@ -538,9 +541,9 @@ class SearchHighlighter {
 
 		$terms = implode( '|', $terms );
 		$max = intval( $contextchars ) + 1;
-		$pat1 = "/(.*)($terms)(.{0,$max})/i";
+		$pat1 = "/(.*)($terms)(.{0,$max})/ui";
 
-		$extract = "";
+		$extract = '';
 		$contLang = MediaWikiServices::getInstance()->getContentLanguage();
 		foreach ( $lines as $line ) {
 			if ( $contextlines == 0 ) {
@@ -563,8 +566,8 @@ class SearchHighlighter {
 			$found = $m[2];
 
 			$line = htmlspecialchars( $pre . $found . $post );
-			$pat2 = '/(' . $terms . ")/i";
-			$line = preg_replace( $pat2, "<span class='searchmatch'>\\1</span>", $line );
+			$pat2 = '/(' . $terms . ')/ui';
+			$line = preg_replace( $pat2, '<span class="searchmatch">\1</span>', $line );
 
 			$extract .= "{$line}\n";
 		}

@@ -54,9 +54,6 @@ class SkinComponentListItem implements SkinComponent {
 		$this->defaultLinkOptions = $defaultLinkOptions;
 	}
 
-	/**
-	 * @return MessageLocalizer
-	 */
 	private function getMessageLocalizer(): MessageLocalizer {
 		return $this->localizer;
 	}
@@ -122,7 +119,9 @@ class SkinComponentListItem implements SkinComponent {
 		// In case this is still set from SkinTemplate, we don't want it to appear in
 		// the HTML output (normally removed in SkinTemplate::buildContentActionUrls())
 		unset( $item['redundant'] );
-
+		$iconData = [
+			'icon' => $item['icon'] ?? null,
+		];
 		$linksArray = [];
 		if ( isset( $this->item['links'] ) ) {
 			$links = [];
@@ -131,14 +130,14 @@ class SkinComponentListItem implements SkinComponent {
 				// Note: links will have identical label unless 'msg' is set on $link
 				$linkComponent = new SkinComponentLink(
 					$key,
-					$link,
+					$link + $iconData,
 					$this->getMessageLocalizer(),
 					$options + $linkOptions
 				);
 				$linkTemplateData = $linkComponent->getTemplateData();
 				$links[] = $linkTemplateData['html'];
 				unset( $linkTemplateData['html'] );
-				if ( !empty( $linkTemplateData ) ) {
+				if ( $linkTemplateData ) {
 					$linksArray[] = $linkTemplateData;
 				}
 			}
@@ -172,7 +171,7 @@ class SkinComponentListItem implements SkinComponent {
 			$html = $data['html'];
 			unset( $data['html'] );
 			// in the case of some links e.g. footer these may be HTML only so make sure not to add an empty object.
-			if ( !empty( $data ) ) {
+			if ( $data ) {
 				$linksArray[] = $data;
 			}
 		}

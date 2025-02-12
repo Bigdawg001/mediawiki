@@ -5,17 +5,15 @@ namespace MediaWiki\Search\SearchWidgets;
 use HtmlArmor;
 use MediaWiki\Html\Html;
 use MediaWiki\Linker\LinkRenderer;
+use MediaWiki\Specials\SpecialSearch;
 use SearchResult;
-use SpecialSearch;
 
 /**
  * Renders an enhanced interwiki result
  */
 class InterwikiSearchResultWidget implements SearchResultWidget {
-	/** @var SpecialSearch */
-	protected $specialSearch;
-	/** @var LinkRenderer */
-	protected $linkRenderer;
+	protected SpecialSearch $specialSearch;
+	protected LinkRenderer $linkRenderer;
 
 	public function __construct( SpecialSearch $specialSearch, LinkRenderer $linkRenderer ) {
 		$this->specialSearch = $specialSearch;

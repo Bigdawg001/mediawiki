@@ -21,12 +21,12 @@ declare( strict_types=1 );
 
 namespace Wikimedia\Stats;
 
-use IBufferingStatsdDataFactory;
 use InvalidArgumentException;
 use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use TypeError;
 use Wikimedia\Stats\Emitters\EmitterInterface;
-use Wikimedia\Stats\Exceptions\IllegalOperationException;
+use Wikimedia\Stats\Emitters\NullEmitter;
 use Wikimedia\Stats\Exceptions\InvalidConfigurationException;
 use Wikimedia\Stats\Metrics\BaseMetric;
 use Wikimedia\Stats\Metrics\CounterMetric;
@@ -35,9 +35,7 @@ use Wikimedia\Stats\Metrics\NullMetric;
 use Wikimedia\Stats\Metrics\TimingMetric;
 
 /**
- * StatsFactory Implementation
- *
- * This is the primary interface for validating metrics definitions
+ * This is the primary interface for validating metrics definitions,
  * caching defined metrics, and returning metric instances from cache
  * if previously defined.
  *
@@ -46,78 +44,42 @@ use Wikimedia\Stats\Metrics\TimingMetric;
  */
 class StatsFactory {
 
-	/** @var string */
-	private string $component;
-
-	/** @var string[] */
-	private array $staticLabelKeys = [];
-
-	/** @var string[] */
-	private array $staticLabelValues = [];
-
-	/** @var StatsCache */
+	private string $component = '';
 	private StatsCache $cache;
-
-	/** @var EmitterInterface */
 	private EmitterInterface $emitter;
-
-	/** @var LoggerInterface */
 	private LoggerInterface $logger;
 
-	/** @var IBufferingStatsdDataFactory|null */
 	private ?IBufferingStatsdDataFactory $statsdDataFactory = null;
 
 	/**
 	 * StatsFactory builds, configures, and caches Metrics.
-	 *
-	 * @param string $component
-	 * @param StatsCache $cache
-	 * @param EmitterInterface $emitter
-	 * @param LoggerInterface $logger
 	 */
 	public function __construct(
-		string $component,
 		StatsCache $cache,
 		EmitterInterface $emitter,
-		LoggerInterface $logger
+		LoggerInterface $logger,
+		?string $component = null
 	) {
-		$this->component = StatsUtils::normalizeString( $component );
+		if ( $component !== null ) {
+			$this->component = StatsUtils::normalizeString( $component );
+		}
 		$this->cache = $cache;
 		$this->emitter = $emitter;
 		$this->logger = $logger;
-		$this->validateInstanceConfig();
 	}
 
 	/**
-	 * Throw exception on invalid instance configuration.
+	 * Returns a new StatsFactory instance prefixed by component.
 	 *
-	 * @return void
+	 * @param string $component
+	 * @return StatsFactory
 	 */
-	private function validateInstanceConfig(): void {
-		if ( $this->component == '' ) {
-			throw new InvalidArgumentException( 'Stats: component cannot be empty.' );
-		}
+	public function withComponent( string $component ): StatsFactory {
+		$statsFactory = new StatsFactory( $this->cache, $this->emitter, $this->logger, $component );
+		return $statsFactory->withStatsdDataFactory( $this->statsdDataFactory );
 	}
 
-	/**
-	 * Adds a label key-value pair to all metrics created by this StatsFactory instance.
-	 *
-	 * @param string $key
-	 * @param string $value
-	 * @return $this
-	 */
-	public function withStaticLabel( string $key, string $value ): StatsFactory {
-		if ( count( $this->cache->getAllMetrics() ) > 0 ) {
-			throw new IllegalOperationException( 'Stats: cannot set static labels when metrics are in the cache.' );
-		}
-		$key = StatsUtils::normalizeString( $key );
-		StatsUtils::validateLabelKey( $key );
-		$this->staticLabelKeys[] = $key;
-		$this->staticLabelValues[] = StatsUtils::normalizeString( $value );
-		return $this;
-	}
-
-	public function withStatsdDataFactory( IBufferingStatsdDataFactory $statsdDataFactory ): StatsFactory {
+	public function withStatsdDataFactory( ?IBufferingStatsdDataFactory $statsdDataFactory ): StatsFactory {
 		$this->statsdDataFactory = $statsdDataFactory;
 		return $this;
 	}
@@ -162,8 +124,29 @@ class StatsFactory {
 	 * Send all buffered metrics to the target and destroy the cache.
 	 */
 	public function flush(): void {
+		$this->trackUsage();
 		$this->emitter->send();
 		$this->cache->clear();
+	}
+
+	/**
+	 * Get a total of the number of samples in cache.
+	 */
+	public function getCacheCount(): int {
+		$accumulator = 0;
+		foreach ( $this->cache->getAllMetrics() as $metric ) {
+			$accumulator += $metric->getSampleCount();
+		}
+		return $accumulator;
+	}
+
+	/**
+	 * Create a metric totaling all samples in the cache.
+	 */
+	private function trackUsage(): void {
+		$this->getCounter( 'stats_buffered_total' )
+			->copyToStatsdAt( 'stats.statslib.buffered' )
+			->incrementBy( $this->getCacheCount() );
 	}
 
 	/**
@@ -187,14 +170,41 @@ class StatsFactory {
 		}
 		if ( $metric === null ) {
 			$baseMetric = new BaseMetric( $this->component, $name );
-			$metric = new $className(
-				$baseMetric
-					->withStatsdDataFactory( $this->statsdDataFactory )
-					->withStaticLabels( $this->staticLabelKeys, $this->staticLabelValues ),
-				$this->logger
-			);
+			$metric = new $className( $baseMetric->withStatsdDataFactory( $this->statsdDataFactory ), $this->logger );
 			$this->cache->set( $this->component, $name, $metric );
 		}
 		return $metric->fresh();
+	}
+
+	/**
+	 * Returns an instance of StatsFactory as a NULL value object
+	 * as a default for consumer code to fall back to. This can also
+	 * be used in tests environment where we don't need the full
+	 * UDP emitter object.
+	 *
+	 * @since 1.42
+	 *
+	 * @return self
+	 */
+	public static function newNull(): self {
+		return new self( new StatsCache(), new NullEmitter(), new NullLogger() );
+	}
+
+	/**
+	 * Returns an instance of UnitTestingHelper.
+	 *
+	 * Example:
+	 * ```php
+	 * $unitTestingHelper = StatsFactory::newUnitTestingHelper();
+	 * $statsFactory = $unitTestingHelper->getStatsFactory()
+	 * MyClass( $statsFactory )->execute();
+	 * $this->assertEquals( 1, $unitTestingHelper->count( 'example_executions_total{fooLabel="bar"}' ) );
+	 * ```
+	 *
+	 * @since 1.44
+	 * @return UnitTestingHelper
+	 */
+	public static function newUnitTestingHelper() {
+		return new UnitTestingHelper();
 	}
 }

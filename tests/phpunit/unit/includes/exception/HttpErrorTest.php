@@ -1,9 +1,11 @@
 <?php
 
+use MediaWiki\Message\Message;
+
 /**
  * @todo tests for HttpError::report
  *
- * @covers HttpError
+ * @covers \HttpError
  */
 class HttpErrorTest extends MediaWikiUnitTestCase {
 
@@ -33,14 +35,14 @@ class HttpErrorTest extends MediaWikiUnitTestCase {
 		// Avoid parsing logic in real Message class which includes text transformations
 		// that require MediaWikiServices
 		$content = $this->createMock( Message::class );
-		$content->method( 'escaped' )->willReturn( 'suspicious-userlogout' );
+		$content->method( 'escaped' )->willReturn( 'blahblah' );
 		$header = $this->createMock( Message::class );
 		$header->method( 'escaped' )->willReturn( 'loginerror' );
 
 		return [
 			[
 				[
-					'head html' => '<head><title>Server Error 123</title></head>',
+					'head html' => '<head><title>Server Error 123</title>',
 					'body html' => '<body><h1>Server Error 123</h1>'
 						. '<p>a server error!</p></body>'
 				],
@@ -49,16 +51,16 @@ class HttpErrorTest extends MediaWikiUnitTestCase {
 			],
 			[
 				[
-					'head html' => '<head><title>loginerror</title></head>',
+					'head html' => '<head><title>loginerror</title>',
 					'body html' => '<body><h1>loginerror</h1>'
-					. '<p>suspicious-userlogout</p></body>'
+					. '<p>blahblah</p></body>'
 				],
 				$content,
 				$header
 			],
 			[
 				[
-					'head html' => '<html><head><title>Internal Server Error</title></head>',
+					'head html' => '<html><head><title>Internal Server Error</title>',
 					'body html' => '<body><h1>Internal Server Error</h1>'
 						. '<p>a server error!</p></body></html>'
 				],

@@ -20,8 +20,8 @@
 
 namespace MediaWiki\Linker;
 
-use Config;
 use InvalidArgumentException;
+use MediaWiki\Config\Config;
 use MediaWiki\MainConfigNames;
 
 /**
@@ -37,25 +37,46 @@ class LinksMigration {
 	/** @var LinkTargetLookup */
 	private $linkTargetLookup;
 
+	/** @var array[] */
 	public static $mapping = [
 		'templatelinks' => [
-			'config' => MainConfigNames::TemplateLinksSchemaMigrationStage,
+			'config' => -1,
 			'page_id' => 'tl_from',
+			// Used by the updater only
 			'ns' => 'tl_namespace',
+			// Used by the updater only
 			'title' => 'tl_title',
 			'target_id' => 'tl_target_id',
-			'deprecated_configs' => [ SCHEMA_COMPAT_OLD ],
+			'deprecated_configs' => [],
+		],
+		'pagelinks' => [
+			'config' => MainConfigNames::PageLinksSchemaMigrationStage,
+			'page_id' => 'pl_from',
+			'ns' => 'pl_namespace',
+			'title' => 'pl_title',
+			'target_id' => 'pl_target_id',
+			'deprecated_configs' => [
+				SCHEMA_COMPAT_WRITE_OLD,
+				SCHEMA_COMPAT_READ_OLD
+			],
+		],
+		'categorylinks' => [
+			'config' => MainConfigNames::CategoryLinksSchemaMigrationStage,
+			'page_id' => 'cl_from',
+			'ns' => 14,
+			'title' => 'cl_to',
+			'target_id' => 'cl_target_id',
+			'deprecated_configs' => [],
 		],
 	];
 
+	/** @var string[] */
 	public static $prefixToTableMapping = [
-		'tl' => 'templatelinks'
+		'tl' => 'templatelinks',
+		'pl' => 'pagelinks',
+		'cl' => 'categorylinks',
 	];
 
-	/**
-	 * @param Config $config
-	 * @param LinkTargetLookup $linktargetLookup
-	 */
 	public function __construct( Config $config, LinkTargetLookup $linktargetLookup ) {
 		$this->config = $config;
 		$this->linkTargetLookup = $linktargetLookup;
@@ -70,7 +91,7 @@ class LinksMigration {
 	 */
 	public function getLinksConditions( string $table, LinkTarget $linkTarget ): array {
 		$this->assertMapping( $table );
-		if ( $this->config->get( self::$mapping[$table]['config'] ) & SCHEMA_COMPAT_READ_NEW ) {
+		if ( $this->isMigrationReadNew( $table ) ) {
 			$targetId = $this->linkTargetLookup->getLinkTargetId( $linkTarget );
 			// Not found, it shouldn't pick anything
 			if ( !$targetId ) {
@@ -97,7 +118,7 @@ class LinksMigration {
 	 */
 	public function getQueryInfo( string $table, string $joinTable = 'linktarget', string $joinType = 'JOIN' ) {
 		$this->assertMapping( $table );
-		if ( $this->config->get( self::$mapping[$table]['config'] ) & SCHEMA_COMPAT_READ_NEW ) {
+		if ( $this->isMigrationReadNew( $table ) ) {
 			$targetId = self::$mapping[$table]['target_id'];
 			if ( $joinTable === 'linktarget' ) {
 				$tables = [ $table, 'linktarget' ];
@@ -131,11 +152,16 @@ class LinksMigration {
 	public function getTitleFields( $table ) {
 		$this->assertMapping( $table );
 
-		if ( $this->config->get( self::$mapping[$table]['config'] ) & SCHEMA_COMPAT_READ_NEW ) {
+		if ( $this->isMigrationReadNew( $table ) ) {
 			return [ 'lt_namespace', 'lt_title' ];
 		} else {
 			return [ self::$mapping[$table]['ns'], self::$mapping[$table]['title'] ];
 		}
+	}
+
+	private function isMigrationReadNew( string $table ): bool {
+		return self::$mapping[$table]['config'] === -1 ||
+			$this->config->get( self::$mapping[$table]['config'] ) & SCHEMA_COMPAT_READ_NEW;
 	}
 
 	private function assertMapping( string $table ) {
@@ -145,11 +171,16 @@ class LinksMigration {
 			);
 		}
 
-		$config = $this->config->get( self::$mapping[$table]['config'] );
-		if ( in_array( $config, self::$mapping[$table]['deprecated_configs'] ) ) {
-			throw new InvalidArgumentException(
-				"LinksMigration config $config on $table table is not supported anymore"
-			);
+		if ( self::$mapping[$table]['config'] !== -1 && self::$mapping[$table]['deprecated_configs'] ) {
+			$config = $this->config->get( self::$mapping[$table]['config'] );
+			foreach ( self::$mapping[$table]['deprecated_configs'] as $deprecatedConfig ) {
+				if ( $config & $deprecatedConfig ) {
+					throw new InvalidArgumentException(
+						"LinksMigration config $config on $table table is not supported anymore"
+					);
+				}
+			}
+
 		}
 	}
 }

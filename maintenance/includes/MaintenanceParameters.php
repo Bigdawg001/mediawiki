@@ -77,7 +77,7 @@ class MaintenanceParameters {
 	private $errors = [];
 
 	/** @var string */
-	private $usagePrefix = 'php';
+	private $usagePrefix = 'php maintenance/run.php';
 
 	/**
 	 * Returns a reference to a member field.
@@ -234,7 +234,7 @@ class MaintenanceParameters {
 
 	/**
 	 * Sets whether to allow unknown options to be passed to the script.
-	 * Per default, unknown options cause an error.
+	 * By default, unknown options cause an error.
 	 * @param bool $allow Should we allow?
 	 */
 	public function setAllowUnregisteredOptions( bool $allow ) {
@@ -243,7 +243,6 @@ class MaintenanceParameters {
 
 	/**
 	 * Set a short description of what the script does.
-	 * @param string $text
 	 */
 	public function setDescription( string $text ) {
 		$this->mDescription = $text;
@@ -300,7 +299,7 @@ class MaintenanceParameters {
 	 *
 	 * @param int $argIndex The integer value (from zero) for the arg
 	 *
-	 * @return ?string the name of the argument, or null if no name is defined for that argument
+	 * @return string|null The name of the argument, or null if the argument does not exist.
 	 */
 	public function getArgName( int $argIndex ): ?string {
 		return $this->mArgDefs[ $argIndex ]['name'] ?? null;
@@ -345,8 +344,6 @@ class MaintenanceParameters {
 
 	/**
 	 * Merge options declarations from $other into this instance.
-	 *
-	 * @param MaintenanceParameters $other
 	 */
 	public function mergeOptions( MaintenanceParameters $other ) {
 		$this->mOptDefs = $other->mOptDefs + $this->mOptDefs;
@@ -406,15 +403,16 @@ class MaintenanceParameters {
 				# Short options
 				$argLength = strlen( $arg );
 				for ( $p = 1; $p < $argLength; $p++ ) {
-					$option = $arg[$p];
-					if ( !isset( $this->mOptDefs[$option] ) && isset( $this->mShortOptionMap[$option] ) ) {
-						$option = $this->mShortOptionMap[$option];
+					$givenShort = $arg[$p];
+					$option = $givenShort;
+					if ( !isset( $this->mOptDefs[$givenShort] ) && isset( $this->mShortOptionMap[$givenShort] ) ) {
+						$option = $this->mShortOptionMap[$givenShort];
 					}
 
 					if ( isset( $this->mOptDefs[$option]['withArg'] ) && $this->mOptDefs[$option]['withArg'] ) {
 						$param = next( $argv );
 						if ( $param === false ) {
-							$this->error( "Option --$option needs a value after it!" );
+							$this->error( "Option -$givenShort needs a value after it!" );
 						}
 						$this->setOptionValue( $options, $option, $param );
 					} else {
@@ -476,8 +474,6 @@ class MaintenanceParameters {
 
 	/**
 	 * Whether any errors have been recorded so far.
-	 *
-	 * @return bool
 	 */
 	public function hasErrors(): bool {
 		return (bool)$this->errors;
@@ -485,8 +481,6 @@ class MaintenanceParameters {
 
 	/**
 	 * Set the script name, for use in the help message
-	 *
-	 * @param string $name
 	 */
 	public function setName( string $name ) {
 		$this->mName = $name;
@@ -494,8 +488,6 @@ class MaintenanceParameters {
 
 	/**
 	 * Get the script name, as shown in the help message
-	 *
-	 * @return string
 	 */
 	public function getName(): string {
 		return $this->mName;
@@ -561,8 +553,6 @@ class MaintenanceParameters {
 
 	/**
 	 * Get help text.
-	 *
-	 * @return string
 	 */
 	public function getHelp(): string {
 		$screenWidth = 80; // TODO: Calculate this!
@@ -655,17 +645,20 @@ class MaintenanceParameters {
 		$output[] = "$heading:\n";
 
 		foreach ( $items as $name => $info ) {
+			$out = $name;
+
 			if ( $info['shortName'] !== false ) {
-				$name .= ' (-' . $info['shortName'] . ')';
+				$out .= ' (-' . $info['shortName'] . ')';
 			}
+
 			if ( $info['withArg'] ) {
 				$vname = strtoupper( $name );
-				$name .= " <$vname>";
+				$out .= " <$vname>";
 			}
 
 			$output[] =
 				wordwrap(
-					"$tab--$name: " . strtr( $info['desc'], [ "\n" => "\n$tab$tab" ] ),
+					"$tab--$out: " . strtr( $info['desc'], [ "\n" => "\n$tab$tab" ] ),
 					$descWidth,
 					"\n$tab$tab"
 				) . "\n";
@@ -686,7 +679,6 @@ class MaintenanceParameters {
 
 	/**
 	 * Returns any option values
-	 * @return array
 	 */
 	public function getOptions(): array {
 		return $this->mOptions;
@@ -701,18 +693,10 @@ class MaintenanceParameters {
 		return $this->optionsSequence;
 	}
 
-	/**
-	 * @param string $usagePrefix
-	 */
 	public function setUsagePrefix( string $usagePrefix ) {
 		$this->usagePrefix = $usagePrefix;
 	}
 
-	/**
-	 * @param array $argInfo
-	 *
-	 * @return string
-	 */
 	private function getArgRepresentation( array $argInfo ): string {
 		if ( $argInfo['require'] ) {
 			$rep = '<' . $argInfo['name'] . '>';

@@ -13,10 +13,15 @@ use Wikimedia\RemexHtml\TreeBuilder\TreeBuilder;
 use Wikimedia\RemexHtml\TreeBuilder\TreeMutationTracer;
 
 class RemexDriver extends TidyDriverBase {
+	/** @var bool */
 	private $treeMutationTrace;
+	/** @var bool */
 	private $serializerTrace;
+	/** @var bool */
 	private $mungerTrace;
+	/** @var bool */
 	private $pwrap;
+	/** @var bool */
 	private $enableLegacyMediaDOM;
 
 	/** @internal */
@@ -25,9 +30,6 @@ class RemexDriver extends TidyDriverBase {
 		MainConfigNames::ParserEnableLegacyMediaDOM,
 	];
 
-	/**
-	 * @param ServiceOptions $options
-	 */
 	public function __construct( ServiceOptions $options ) {
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
 		$config = $options->get( MainConfigNames::TidyConfig );

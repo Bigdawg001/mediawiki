@@ -3,7 +3,7 @@
 use MediaWiki\Tests\Unit\DummyServicesTrait;
 
 /**
- * @covers SkinFactory
+ * @covers \SkinFactory
  */
 class SkinFactoryTest extends \MediaWikiUnitTestCase {
 	use DummyServicesTrait;
@@ -101,7 +101,7 @@ class SkinFactoryTest extends \MediaWikiUnitTestCase {
 			},
 			true
 		);
-		$this->assertEquals( [ 'foo'  => 'Skin 1' ], $factory->getSkinNames() );
+		$this->assertEquals( [ 'foo'  => 'Skin 1' ], $factory->getInstalledSkins() );
 		$this->assertSame( $s1, $factory->makeSkin( 'foo' ) );
 		$this->assertSame( [], $factory->getAllowedSkins(), 'skipped' );
 
@@ -112,12 +112,14 @@ class SkinFactoryTest extends \MediaWikiUnitTestCase {
 				return $s2;
 			}
 		);
-		$this->assertEquals( [ 'foo'  => 'Skin 2' ], $factory->getSkinNames() );
+		$this->assertEquals( [ 'foo'  => 'Skin 2' ], $factory->getInstalledSkins() );
 		$this->assertSame( $s2, $factory->makeSkin( 'foo' ) );
 		$this->assertSame( [ 'foo'  => 'Skin 2' ], $factory->getAllowedSkins(), 'not skipped' );
 	}
 
 	public function testGetSkinNames() {
+		$this->expectDeprecationAndContinue( '/Use of SkinFactory::getSkinNames was deprecated in MediaWiki 1\.37/' );
+
 		$factory = $this->createSkinFactory();
 		$factory->register( 'skin1', 'Skin1', [] );
 		$factory->register( 'skin2', 'Skin2', [] );

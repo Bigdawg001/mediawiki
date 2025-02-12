@@ -3,10 +3,10 @@
 namespace MediaWiki\Tests\Maintenance;
 
 use BaseDump;
+use MediaWiki\Maintenance\TextPassDumper;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWikiLangTestCase;
-use TextPassDumper;
 use WikiExporter;
 use XmlDumpWriter;
 
@@ -20,7 +20,7 @@ use XmlDumpWriter;
  *
  * @group Database
  * @group Dump
- * @covers TextPassDumper
+ * @covers \MediaWiki\Maintenance\TextPassDumper
  */
 class TextPassDumperDatabaseTest extends DumpTestCase {
 
@@ -29,7 +29,7 @@ class TextPassDumperDatabaseTest extends DumpTestCase {
 	public function addDBData() {
 		parent::addDBData();
 
-		$this->addTestPages();
+		$this->addTestPages( $this->getTestSysop()->getUser() );
 	}
 
 	public function schemaVersionProvider() {
@@ -49,7 +49,7 @@ class TextPassDumperDatabaseTest extends DumpTestCase {
 		$dumper = new TextPassDumper( [ "--stub=file:" . $nameStub,
 			"--output=file:" . $nameFull, '--schema-version', $schemaVersion ] );
 		$dumper->reporting = false;
-		$dumper->setDB( $this->db );
+		$dumper->setDB( $this->getDb() );
 
 		// Performing the dump
 		$dumper->dump( WikiExporter::FULL, WikiExporter::TEXT );
@@ -109,7 +109,7 @@ class TextPassDumperDatabaseTest extends DumpTestCase {
 
 		$dumper->prefetch = $prefetchMock;
 		$dumper->reporting = false;
-		$dumper->setDB( $this->db );
+		$dumper->setDB( $this->getDb() );
 
 		// Performing the dump
 		$dumper->dump( WikiExporter::FULL, WikiExporter::TEXT );
@@ -197,10 +197,10 @@ class TextPassDumperDatabaseTest extends DumpTestCase {
 			$dumper = new TextPassDumper();
 			$dumper->loadWithArgv( [ "--stub=file:" . $nameStub,
 				"--output=" . $checkpointFormat . ":" . $nameOutputDir . "/full",
-				"--maxtime=1" /*This is in minutes. Fixup is below*/,
+				"--maxtime=1", // This is in minutes. Fixup is below
 				"--buffersize=32768", // The default of 32 iterations fill up 32 KiB about twice
 				"--checkpointfile=checkpoint-%s-%s.xml.gz" ] );
-			$dumper->setDB( $this->db );
+			$dumper->setDB( $this->getDb() );
 			$dumper->maxTimeAllowed = $checkpointAfter; // Patching maxTime from 1 minute
 			$dumper->stderr = $stderr;
 
@@ -430,18 +430,18 @@ class TextPassDumperDatabaseTest extends DumpTestCase {
 	 *   of iteration > 1 have no corresponding representation in the database.
 	 *
 	 * @return string Absolute filename of the stub
-	 * @throws \FatalError
-	 * @throws \MWException
 	 */
 	private function setUpStub( $templateName, $schemaVersion, $outFile = null, $iterations = 1 ) {
-		if ( $outFile === null ) {
-			$outFile = $this->getNewTempFile();
-		}
+		$outFile ??= $this->getNewTempFile();
 
 		$templatePath = $this->getDumpTemplatePath( $templateName, $schemaVersion );
 
 		$asserter = $this->getDumpAsserter( $schemaVersion );
 		$this->setAllRevisionsVarMappings( $asserter );
+
+		// Make revision point to a non-existent address, to test refreshing
+		// content address
+		$asserter->setVarMapping( 'rev4_1_main_location', 'tt:11111111' );
 
 		$writer = new XmlDumpWriter( XmlDumpWriter::WRITE_STUB, $schemaVersion );
 		$content = $writer->openStream();
@@ -483,7 +483,7 @@ class TextPassDumperDatabaseTest extends DumpTestCase {
  * cannot bring this test case's tests into the above main test case.)
  *
  * @group Dump
- * @covers TextPassDumper
+ * @covers \MediaWiki\Maintenance\TextPassDumper
  */
 class TextPassDumperDatabaselessTest extends MediaWikiLangTestCase {
 	/**
@@ -503,7 +503,7 @@ class TextPassDumperDatabaselessTest extends MediaWikiLangTestCase {
 	 *
 	 * @dataProvider bufferSizeProvider
 	 */
-	public function bufferSizeProvider() {
+	public static function bufferSizeProvider() {
 		// expected, bufferSize to initialize with, message
 		return [
 			[ 512 * 1024, 512 * 1024, "Setting 512 KiB is not effective" ],

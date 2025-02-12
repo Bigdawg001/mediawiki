@@ -23,18 +23,16 @@
 
 namespace MediaWiki\Feed;
 
-use DerivativeContext;
-use LogFormatter;
+use MediaWiki\Content\TextContent;
+use MediaWiki\Context\DerivativeContext;
+use MediaWiki\Context\RequestContext;
 use MediaWiki\Html\Html;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Output\OutputPage;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Title\Title;
-use OutputPage;
-use RequestContext;
-use TextContent;
-use User;
 use UtfNormal;
 
 /**
@@ -90,7 +88,8 @@ class FeedUtils {
 		$actiontext = '';
 		if ( $row->rc_type == RC_LOG ) {
 			$rcRow = (array)$row; // newFromRow() only accepts arrays for RC rows
-			$actiontext = LogFormatter::newFromRow( $rcRow )->getActionText();
+			$actiontext = MediaWikiServices::getInstance()->getLogFormatterFactory()
+				->newFromRow( $rcRow )->getActionText();
 		}
 		if ( $row->rc_deleted & RevisionRecord::DELETED_COMMENT ) {
 			$formattedComment = wfMessage( 'rev-deleted-comment' )->escaped();
@@ -121,7 +120,7 @@ class FeedUtils {
 	 *
 	 */
 	public static function formatDiffRow( $title, $oldid, $newid, $timestamp,
-										 $comment, $actiontext = ''
+		$comment, $actiontext = ''
 	) {
 		$formattedComment = MediaWikiServices::getInstance()->getCommentFormatter()
 			->format( $comment );
@@ -141,8 +140,8 @@ class FeedUtils {
 	 * @param string $actiontext Text of the action; in case of log event
 	 * @return string
 	 */
-	public static function formatDiffRow2( $title, $oldid, $newid, $timestamp,
-										  $formattedComment, $actiontext = ''
+	public static function formatDiffRow2(
+		$title, $oldid, $newid, $timestamp, $formattedComment, $actiontext = ''
 	) {
 		$feedDiffCutoff = MediaWikiServices::getInstance()->getMainConfig()->get( MainConfigNames::FeedDiffCutoff );
 
@@ -156,10 +155,10 @@ class FeedUtils {
 		// NOTE: Check permissions for anonymous users, not current user.
 		//       No "privileged" version should end up in the cache.
 		//       Most feed readers will not log in anyway.
-		$anon = new User();
 		$services = MediaWikiServices::getInstance();
+		$anon = $services->getUserFactory()->newAnonymous();
 		$permManager = $services->getPermissionManager();
-		$accErrors = $permManager->getPermissionErrors(
+		$userCan = $permManager->userCan(
 			'read',
 			$anon,
 			$title
@@ -167,7 +166,7 @@ class FeedUtils {
 
 		// Can't diff special pages, unreadable pages or pages with no new revision
 		// to compare against: just return the text.
-		if ( $title->getNamespace() < 0 || $accErrors || !$newid ) {
+		if ( $title->getNamespace() < 0 || !$userCan || !$newid ) {
 			return $completeText;
 		}
 
@@ -320,4 +319,5 @@ class FeedUtils {
 
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( FeedUtils::class, 'FeedUtils' );

@@ -1,7 +1,5 @@
 <?php
 /**
- * Implements Special:Whatlinkshere
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -20,16 +18,27 @@
  * @file
  */
 
+namespace MediaWiki\Specials;
+
 use MediaWiki\Cache\LinkBatchFactory;
 use MediaWiki\Content\IContentHandlerFactory;
-use MediaWiki\Html\FormOptions;
+use MediaWiki\Html\Html;
+use MediaWiki\HTMLForm\HTMLForm;
 use MediaWiki\Linker\LinksMigration;
+use MediaWiki\Linker\LinkTarget;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Message\Message;
 use MediaWiki\Navigation\PagerNavigationBuilder;
+use MediaWiki\Page\PageIdentity;
+use MediaWiki\SpecialPage\FormSpecialPage;
+use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\Title\Title;
 use MediaWiki\Title\TitleFactory;
-use Wikimedia\Rdbms\IDatabase;
-use Wikimedia\Rdbms\ILoadBalancer;
+use MediaWiki\Xml\Xml;
+use SearchEngineFactory;
+use stdClass;
+use Wikimedia\Rdbms\IConnectionProvider;
+use Wikimedia\Rdbms\IReadableDatabase;
 use Wikimedia\Rdbms\SelectQueryBuilder;
 
 /**
@@ -38,37 +47,28 @@ use Wikimedia\Rdbms\SelectQueryBuilder;
  * @ingroup SpecialPage
  */
 class SpecialWhatLinksHere extends FormSpecialPage {
-	/** @var FormOptions */
-	protected $opts;
-
 	/** @var Title */
 	protected $target;
 
-	/** @var ILoadBalancer */
-	private $loadBalancer;
+	/**
+	 * Submitted parameters as processed by `HTMLForm`,
+	 * including those for any fields added in the
+	 * `SpecialPageBeforeFormDisplay` hook; unset until
+	 * the form is processed (or if no form was submitted).
+	 */
+	private array $formData;
+	private IConnectionProvider $dbProvider;
+	private LinkBatchFactory $linkBatchFactory;
+	private IContentHandlerFactory $contentHandlerFactory;
+	private SearchEngineFactory $searchEngineFactory;
+	private NamespaceInfo $namespaceInfo;
+	private TitleFactory $titleFactory;
+	private LinksMigration $linksMigration;
 
-	/** @var LinkBatchFactory */
-	private $linkBatchFactory;
-
-	/** @var IContentHandlerFactory */
-	private $contentHandlerFactory;
-
-	/** @var SearchEngineFactory */
-	private $searchEngineFactory;
-
-	/** @var NamespaceInfo */
-	private $namespaceInfo;
-
-	/** @var TitleFactory */
-	private $titleFactory;
-
-	/** @var LinksMigration */
-	private $linksMigration;
-
-	protected $limits = [ 20, 50, 100, 250, 500 ];
+	private const LIMITS = [ 20, 50, 100, 250, 500 ];
 
 	/**
-	 * @param ILoadBalancer $loadBalancer
+	 * @param IConnectionProvider $dbProvider
 	 * @param LinkBatchFactory $linkBatchFactory
 	 * @param IContentHandlerFactory $contentHandlerFactory
 	 * @param SearchEngineFactory $searchEngineFactory
@@ -77,7 +77,7 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 	 * @param LinksMigration $linksMigration
 	 */
 	public function __construct(
-		ILoadBalancer $loadBalancer,
+		IConnectionProvider $dbProvider,
 		LinkBatchFactory $linkBatchFactory,
 		IContentHandlerFactory $contentHandlerFactory,
 		SearchEngineFactory $searchEngineFactory,
@@ -87,7 +87,7 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 	) {
 		parent::__construct( 'Whatlinkshere' );
 		$this->mIncludable = true;
-		$this->loadBalancer = $loadBalancer;
+		$this->dbProvider = $dbProvider;
 		$this->linkBatchFactory = $linkBatchFactory;
 		$this->contentHandlerFactory = $contentHandlerFactory;
 		$this->searchEngineFactory = $searchEngineFactory;
@@ -112,37 +112,20 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 	 * We want the result displayed after the form, so we use this instead of onSubmit()
 	 */
 	public function onSuccess() {
-		$opts = new FormOptions();
-
-		$opts->add( 'namespace', '', FormOptions::INTNULL );
-		$opts->add( 'limit', $this->getConfig()->get( MainConfigNames::QueryPageDefaultLimit ) );
-		$opts->add( 'offset', '' );
-		$opts->add( 'from', 0 );
-		$opts->add( 'dir', 'next' );
-		$opts->add( 'hideredirs', false );
-		$opts->add( 'hidetrans', false );
-		$opts->add( 'hidelinks', false );
-		$opts->add( 'hideimages', false );
-		$opts->add( 'invert', false );
-
-		$opts->fetchValuesFromRequest( $this->getRequest() );
-		$opts->validateIntBounds( 'limit', 0, 5000 );
-
-		// Bind to member variable
-		$this->opts = $opts;
-
 		$this->getSkin()->setRelevantTitle( $this->target );
 
 		$out = $this->getOutput();
-		$out->setPageTitle( $this->msg( 'whatlinkshere-title', $this->target->getPrefixedText() ) );
+		$out->setPageTitleMsg(
+			$this->msg( 'whatlinkshere-title' )->plaintextParams( $this->target->getPrefixedText() )
+		);
 		$out->addBacklinkSubtitle( $this->target );
 
-		[ $offsetNamespace, $offsetPageID, $dir ] = $this->parseOffsetAndDir( $opts );
+		[ $offsetNamespace, $offsetPageID, $dir ] = $this->parseOffsetAndDir();
 
 		$this->showIndirectLinks(
 			0,
 			$this->target,
-			$opts->getValue( 'limit' ),
+			$this->formData['limit'],
 			$offsetNamespace,
 			$offsetPageID,
 			$dir
@@ -157,22 +140,20 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 	 * * offset=123&dir=next/prev (legacy), where page ID 123 is the last excluded one
 	 * * offset=0|123&dir=next/prev (current), where namespace 0 page ID 123 is the last excluded one
 	 *
-	 * @param FormOptions $opts
 	 * @return array
 	 */
-	private function parseOffsetAndDir( FormOptions $opts ): array {
-		$from = $opts->getValue( 'from' );
-		$opts->reset( 'from' );
+	private function parseOffsetAndDir(): array {
+		$from = (int)$this->formData['from'];
 
 		if ( $from ) {
 			$dir = 'next';
 			$offsetNamespace = null;
 			$offsetPageID = $from - 1;
 		} else {
-			$dir = $opts->getValue( 'dir' );
+			$dir = $this->formData['dir'] ?? 'next';
 			[ $offsetNamespaceString, $offsetPageIDString ] = explode(
 				'|',
-				$opts->getValue( 'offset' ) . '|'
+				$this->formData['offset'] . '|'
 			);
 			if ( !$offsetPageIDString ) {
 				$offsetPageIDString = $offsetNamespaceString;
@@ -196,22 +177,23 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 
 	/**
 	 * @param int $level Recursion level
-	 * @param Title $target Target title
+	 * @param LinkTarget $target Target title
 	 * @param int $limit Number of entries to display
 	 * @param int $offsetNamespace Display from this namespace number (included)
 	 * @param int $offsetPageID Display from this article ID (excluded)
 	 * @param string $dir 'next' or 'prev'
 	 */
 	private function showIndirectLinks(
-		$level, $target, $limit, $offsetNamespace = 0, $offsetPageID = 0, $dir = 'next'
+		$level, LinkTarget $target, $limit, $offsetNamespace = 0, $offsetPageID = 0, $dir = 'next'
 	) {
 		$out = $this->getOutput();
-		$dbr = $this->loadBalancer->getConnectionRef( ILoadBalancer::DB_REPLICA );
+		$dbr = $this->dbProvider->getReplicaDatabase();
+		$hookRunner = $this->getHookRunner();
 
-		$hidelinks = $this->opts->getValue( 'hidelinks' );
-		$hideredirs = $this->opts->getValue( 'hideredirs' );
-		$hidetrans = $this->opts->getValue( 'hidetrans' );
-		$hideimages = $target->getNamespace() !== NS_FILE || $this->opts->getValue( 'hideimages' );
+		$hidelinks = $this->formData['hidelinks'];
+		$hideredirs = $this->formData['hideredirs'];
+		$hidetrans = $this->formData['hidetrans'];
+		$hideimages = $target->getNamespace() !== NS_FILE || ( $this->formData['hideimages'] ?? false );
 
 		// For historical reasons `pagelinks` always contains an entry for the redirect target.
 		// So we only need to query `redirect` if `pagelinks` isn't being queried.
@@ -222,19 +204,18 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 		$conds['redirect'] = [
 			'rd_namespace' => $target->getNamespace(),
 			'rd_title' => $target->getDBkey(),
+			'rd_interwiki' => '',
 		];
-		$conds['pagelinks'] = [
-			'pl_namespace' => $target->getNamespace(),
-			'pl_title' => $target->getDBkey(),
-		];
+		$conds['pagelinks'] = $this->linksMigration->getLinksConditions( 'pagelinks', $target );
 		$conds['templatelinks'] = $this->linksMigration->getLinksConditions( 'templatelinks', $target );
 		$conds['imagelinks'] = [
 			'il_to' => $target->getDBkey(),
 		];
 
-		$namespace = $this->opts->getValue( 'namespace' );
-		if ( is_int( $namespace ) ) {
-			$invert = $this->opts->getValue( 'invert' );
+		$namespace = $this->formData['namespace'];
+		if ( $namespace !== '' ) {
+			$namespace = intval( $this->formData['namespace'] );
+			$invert = $this->formData['invert'];
 			if ( $invert ) {
 				// Select all namespaces except for the specified one.
 				// This allows the database to use the *_from_namespace index. (T241837)
@@ -282,8 +263,8 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 		$sortDirection = $dir === 'prev' ? SelectQueryBuilder::SORT_DESC : SelectQueryBuilder::SORT_ASC;
 
 		$fname = __METHOD__;
-		$queryFunc = static function ( IDatabase $dbr, $table, $fromCol ) use (
-			$conds, $target, $limit, $sortDirection, $fname
+		$queryFunc = function ( IReadableDatabase $dbr, $table, $fromCol ) use (
+			$conds, $target, $limit, $sortDirection, $fname, $hookRunner
 		) {
 			// Read an extra row as an at-end check
 			$queryLimit = $limit + 1;
@@ -291,7 +272,7 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 				"rd_from = $fromCol",
 				'rd_title' => $target->getDBkey(),
 				'rd_namespace' => $target->getNamespace(),
-				'rd_interwiki = ' . $dbr->addQuotes( '' ) . ' OR rd_interwiki IS NULL'
+				'rd_interwiki' => '',
 			];
 			// Inner LIMIT is 2X in case of stale backlinks with wrong namespaces
 			$subQuery = $dbr->newSelectQueryBuilder()
@@ -302,27 +283,31 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 				->limit( 2 * $queryLimit )
 				->leftJoin( 'redirect', 'redirect', $on );
 
-			return $dbr->newSelectQueryBuilder()
+			$queryBuilder = $dbr->newSelectQueryBuilder()
 				->table( $subQuery, 'temp_backlink_range' )
 				->join( 'page', 'page', "$fromCol = page_id" )
 				->fields( [ 'page_id', 'page_namespace', 'page_title',
 					'rd_from', 'rd_fragment', 'page_is_redirect' ] )
 				->orderBy( [ 'page_namespace', 'page_id' ], $sortDirection )
-				->limit( $queryLimit )
-				->caller( $fname )
-				->fetchResultSet();
+				->limit( $queryLimit );
+
+			$hookRunner->onSpecialWhatLinksHereQuery( $table, $this->formData, $queryBuilder );
+
+			return $queryBuilder->caller( $fname )->fetchResultSet();
 		};
 
 		if ( $fetchredirs ) {
-			$rdRes = $dbr->newSelectQueryBuilder()
+			$queryBuilder = $dbr->newSelectQueryBuilder()
 				->table( 'redirect' )
 				->fields( [ 'page_id', 'page_namespace', 'page_title', 'rd_from', 'rd_fragment', 'page_is_redirect' ] )
 				->conds( $conds['redirect'] )
 				->orderBy( 'rd_from', $sortDirection )
 				->limit( $limit + 1 )
-				->join( 'page', 'page', 'rd_from = page_id' )
-				->caller( __METHOD__ )
-				->fetchResultSet();
+				->join( 'page', 'page', 'rd_from = page_id' );
+
+			$hookRunner->onSpecialWhatLinksHereQuery( 'redirect', $this->formData, $queryBuilder );
+
+			$rdRes = $queryBuilder->caller( __METHOD__ )->fetchResultSet();
 		}
 
 		if ( !$hidelinks ) {
@@ -450,8 +435,8 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 			$prevPageId = $offsetPageID ? $rows[0]->page_id : false;
 			if ( $numRows > $limit ) {
 				// Get the next row from the last displayed row
-				$nextNamespace = $rows[$limit - 1]->page_namespace;
-				$nextPageId = $rows[$limit - 1]->page_id;
+				$nextNamespace = $rows[$limit - 1]->page_namespace ?? false;
+				$nextPageId = $rows[$limit - 1]->page_id ?? false;
 				// Remove undisplayed rows
 				$rows = array_slice( $rows, 0, $limit );
 			} else {
@@ -517,21 +502,22 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 		return Xml::openElement( 'ul', ( $level ? [] : [ 'id' => 'mw-whatlinkshere-list' ] ) );
 	}
 
-	protected function listItem( $row, $nt, $target, $notClose = false ) {
-		$dirmark = $this->getLanguage()->getDirMark();
+	private function listItem( stdClass $row, PageIdentity $nt, LinkTarget $target, bool $notClose = false ) {
+		$legacyTitle = $this->titleFactory->newFromPageIdentity( $nt );
 
-		if ( $row->rd_from ) {
+		if ( $row->rd_from || $row->page_is_redirect ) {
 			$query = [ 'redirect' => 'no' ];
 		} else {
 			$query = [];
 		}
 
-		$link = $this->getLinkRenderer()->makeKnownLink(
+		$dir = $this->getLanguage()->getDir();
+		$link = Html::rawElement( 'bdi', [ 'dir' => $dir ], $this->getLinkRenderer()->makeKnownLink(
 			$nt,
 			null,
 			$row->page_is_redirect ? [ 'class' => 'mw-redirect' ] : [],
 			$query
-		);
+		) );
 
 		// Display properties (redirect or template)
 		$propsText = '';
@@ -552,7 +538,8 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 			$props[] = $this->msg( 'isimage' )->escaped();
 		}
 
-		$this->getHookRunner()->onWhatLinksHereProps( $row, $nt, $target, $props );
+		$legacyTarget = $this->titleFactory->newFromLinkTarget( $target );
+		$this->getHookRunner()->onWhatLinksHereProps( $row, $legacyTitle, $legacyTarget, $props );
 
 		if ( count( $props ) ) {
 			$propsText = $this->msg( 'parentheses' )
@@ -561,18 +548,19 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 
 		# Space for utilities links, with a what-links-here link provided
 		$wlhLink = $this->wlhLink(
-			$nt,
+			$legacyTitle,
 			$this->msg( 'whatlinkshere-links' )->text(),
 			$this->msg( 'editlink' )->text()
 		);
-		$wlh = Xml::wrapClass(
-			$this->msg( 'parentheses' )->rawParams( $wlhLink )->escaped(),
-			'mw-whatlinkshere-tools'
+		$wlh = Html::rawElement(
+			'span',
+			[ 'class' => 'mw-whatlinkshere-tools' ],
+			$this->msg( 'parentheses' )->rawParams( $wlhLink )->escaped()
 		);
 
 		return $notClose ?
-			Xml::openElement( 'li' ) . "$link $propsText $dirmark $wlh\n" :
-			Xml::tags( 'li', null, "$link $propsText $dirmark $wlh" ) . "\n";
+			Xml::openElement( 'li' ) . "$link $propsText $wlh\n" :
+			Xml::tags( 'li', null, "$link $propsText $wlh" ) . "\n";
 	}
 
 	protected function listEnd() {
@@ -581,9 +569,7 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 
 	protected function wlhLink( Title $target, $text, $editText ) {
 		static $title = null;
-		if ( $title === null ) {
-			$title = $this->getPageTitle();
-		}
+		$title ??= $this->getPageTitle();
 
 		$linkRenderer = $this->getLinkRenderer();
 
@@ -623,10 +609,18 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 		$navBuilder
 			->setPage( $this->getPageTitle( $this->target->getPrefixedDBkey() ) )
 			// Remove 'target', already included in the request title
-			->setLinkQuery( array_diff_key( $this->opts->getChangedValues(), [ 'target' => null ] ) )
-			->setLimits( $this->limits )
+			->setLinkQuery(
+				array_diff_key(
+					array_filter(
+						$this->formData,
+						static fn ( $value ) => $value !== null && $value !== '' && $value !== false
+					),
+					[ 'target' => null, 'from' => null ]
+				)
+			)
+			->setLimits( self::LIMITS )
 			->setLimitLinkQueryParam( 'limit' )
-			->setCurrentLimit( $this->opts->getValue( 'limit' ) )
+			->setCurrentLimit( $this->formData['limit'] )
 			->setPrevMsg( 'whatlinkshere-prev' )
 			->setNextMsg( 'whatlinkshere-next' );
 
@@ -659,6 +653,7 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 				'id' => 'namespace',
 				'label-message' => 'namespace',
 				'all' => '',
+				'default' => '',
 				'in-user-lang' => true,
 				'section' => 'whatlinkshere-ns',
 			],
@@ -670,8 +665,28 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 				'label-message' => 'invert',
 				'help-message' => 'tooltip-whatlinkshere-invert',
 				'help-inline' => false,
-				'section' => 'whatlinkshere-ns',
+				'section' => 'whatlinkshere-ns'
 			],
+			'limit' => [
+				'type' => 'hidden',
+				'name' => 'limit',
+				'default' => $this->getConfig()->get( MainConfigNames::QueryPageDefaultLimit ),
+				'filter-callback' => static fn ( $value ) => max( 0, min( intval( $value ), 5000 ) ),
+			],
+			'offset' => [
+				'type' => 'api',
+				'name' => 'offset',
+				'default' => '',
+			],
+			'dir' => [
+				'type' => 'api',
+				'name' => 'dir',
+			],
+			'from' => [
+				'type' => 'api',
+				'name' => 'from',
+				'default' => 0,
+			]
 		];
 
 		$filters = [ 'hidetrans', 'hidelinks', 'hideredirs' ];
@@ -727,6 +742,7 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 	}
 
 	public function onSubmit( array $data ) {
+		$this->formData = $data;
 		return true;
 	}
 
@@ -754,3 +770,9 @@ class SpecialWhatLinksHere extends FormSpecialPage {
 		return 'pagetools';
 	}
 }
+
+/**
+ * Retain the old class name for backwards compatibility.
+ * @deprecated since 1.41
+ */
+class_alias( SpecialWhatLinksHere::class, 'SpecialWhatLinksHere' );

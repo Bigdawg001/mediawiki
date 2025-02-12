@@ -2,15 +2,16 @@
 
 namespace Wikimedia\Rdbms;
 
+use Stringable;
+
 /**
  * An object representing a primary or replica DB position in a replicated setup.
  *
  * The implementation details of this opaque type are up to the database subclass.
  *
  * @since 1.37
- * @stable to implement
  */
-interface DBPrimaryPos {
+interface DBPrimaryPos extends Stringable {
 	/**
 	 * @since 1.25
 	 * @return float UNIX timestamp

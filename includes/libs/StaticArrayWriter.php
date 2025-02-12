@@ -45,11 +45,7 @@ class StaticArrayWriter {
 	public static function write( array $data, $header ) {
 		$code = "<?php\n"
 			. "// " . implode( "\n// ", explode( "\n", $header ) ) . "\n"
-			. "return [\n";
-		foreach ( $data as $key => $value ) {
-			$code .= self::encodePair( $key, $value, 1 );
-		}
-		$code .= "];\n";
+			. "return " . self::encodeArray( $data ) . ";\n";
 		return $code;
 	}
 
@@ -71,59 +67,46 @@ class StaticArrayWriter {
 			. "namespace {$layout['namespace']};\n"
 			. "\n"
 			. "class {$layout['class']} {\n"
-			. "\tpublic const {$layout['const']} = [\n";
-		foreach ( $data as $key => $value ) {
-			$code .= self::encodePair( $key, $value, 2 );
-		}
-		$code .= "\t];\n}\n";
+			. "\tpublic const {$layout['const']} = " . self::encodeArray( $data, "\t\t" ) . ";\n}\n";
 		return $code;
 	}
 
 	/**
-	 * Recursively turn one k/v pair into properly-indented PHP
+	 * Recursively turn an array into properly-indented PHP
 	 *
-	 * @since 1.38
-	 *
-	 * @param string|int $key
-	 * @param mixed $value
-	 * @param int $indent Indentation level
+	 * @param array $array
+	 * @param string $tabs Indentation level
 	 * @return string PHP code
 	 */
-	private static function encodePair( $key, $value, $indent = 0 ) {
-		$tabs = str_repeat( "\t", $indent );
-		$line = $tabs . var_export( $key, true ) . ' => ';
-		$line .= self::encodeValue( $value, $indent );
-
-		$line .= ",\n";
-		return $line;
+	private static function encodeArray( array $array, string $tabs = "\t" ): string {
+		$code = "[\n";
+		if ( array_is_list( $array ) ) {
+			foreach ( $array as $value ) {
+				$code .= $tabs . self::encodeValue( $value, $tabs ) . ",\n";
+			}
+		} else {
+			foreach ( $array as $key => $value ) {
+				$code .= $tabs . var_export( $key, true ) . ' => ' .
+					self::encodeValue( $value, $tabs ) . ",\n";
+			}
+		}
+		return $code . substr( $tabs, 0, -1 ) . ']';
 	}
 
 	/**
 	 * Recursively turn one value into properly-indented PHP
 	 *
-	 * @since 1.38
-	 *
 	 * @param mixed $value
-	 * @param int $indent Indentation level
+	 * @param string $tabs Indentation level
 	 * @return string PHP code
 	 */
-	public static function encodeValue( $value, $indent = 0 ) {
+	private static function encodeValue( $value, string $tabs ): string {
 		if ( is_array( $value ) ) {
-			$tabs = str_repeat( "\t", $indent );
-			$line = "[\n";
-			foreach ( $value as $subkey => $subvalue ) {
-				$line .= self::encodePair( $subkey, $subvalue, $indent + 1 );
-			}
-			$line .= "$tabs]";
-			return $line;
-		} else {
-			$exportedValue = var_export( $value, true );
-			if ( $exportedValue === 'NULL' ) {
-				// var_export() exports nulls as uppercase NULL which
-				// violates our own coding standards.
-				$exportedValue = 'null';
-			}
-			return $exportedValue;
+			return self::encodeArray( $value, $tabs . "\t" );
 		}
+
+		// var_export() exports nulls as uppercase NULL which
+		// violates our own coding standards.
+		return $value === null ? 'null' : var_export( $value, true );
 	}
 }

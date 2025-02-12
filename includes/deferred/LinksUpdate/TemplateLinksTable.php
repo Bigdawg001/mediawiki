@@ -2,10 +2,9 @@
 
 namespace MediaWiki\Deferred\LinksUpdate;
 
-use Config;
-use MediaWiki\Config\ServiceOptions;
-use MediaWiki\MainConfigNames;
-use ParserOutput;
+use LogicException;
+use MediaWiki\Parser\ParserOutput;
+use MediaWiki\Parser\ParserOutputLinkTypes;
 
 /**
  * templatelinks
@@ -13,22 +12,15 @@ use ParserOutput;
  * @since 1.38
  */
 class TemplateLinksTable extends GenericPageLinksTable {
-	private const CONSTRUCTOR_OPTIONS = [
-		MainConfigNames::TemplateLinksSchemaMigrationStage,
-	];
-
-	/** @var int */
-	private $migrationStage;
-
-	public function __construct( Config $config ) {
-		$options = new ServiceOptions( self::CONSTRUCTOR_OPTIONS, $config );
-		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
-
-		$this->migrationStage = $options->get( MainConfigNames::TemplateLinksSchemaMigrationStage );
-	}
-
 	public function setParserOutput( ParserOutput $parserOutput ) {
-		$this->newLinks = $parserOutput->getTemplates();
+		// Convert the format of the template links
+		$this->newLinks = [];
+		foreach (
+			$parserOutput->getLinkList( ParserOutputLinkTypes::TEMPLATE )
+			as [ 'link' => $link, 'pageid' => $pageid ]
+		) {
+			$this->newLinks[$link->getNamespace()][$link->getDBkey()] = $pageid;
+		}
 	}
 
 	protected function getTableName() {
@@ -40,11 +32,13 @@ class TemplateLinksTable extends GenericPageLinksTable {
 	}
 
 	protected function getNamespaceField() {
-		return 'tl_namespace';
+		// @phan-suppress-previous-line PhanPluginNeverReturnMethod
+		throw new LogicException( 'not supported' );
 	}
 
 	protected function getTitleField() {
-		return 'tl_title';
+		// @phan-suppress-previous-line PhanPluginNeverReturnMethod
+		throw new LogicException( 'not supported' );
 	}
 
 	protected function getFromNamespaceField() {
@@ -57,9 +51,8 @@ class TemplateLinksTable extends GenericPageLinksTable {
 
 	/**
 	 * Normalization stage of the links table (see T222224)
-	 * @return int
 	 */
 	protected function linksTargetNormalizationStage(): int {
-		return $this->migrationStage;
+		return MIGRATION_NEW;
 	}
 }

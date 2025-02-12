@@ -5,15 +5,15 @@ namespace MediaWiki\Tests\HookContainer;
 use MediaWiki\HookContainer\FauxGlobalHookArray;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\StaticHookRegistry;
+use MediaWikiUnitTestCase;
 use Wikimedia\ObjectFactory\ObjectFactory;
 
 /**
  * Tests that all arguments passed into FauxGlobalHookArray are passed along to HookContainer.
  * @covers \MediaWiki\HookContainer\FauxGlobalHookArray
  * @covers \MediaWiki\HookContainer\FauxHookHandlerArray
- * @package MediaWiki\Tests\HookContainer
  */
-class FauxGlobalHookArrayTest extends \MediaWikiUnitTestCase {
+class FauxGlobalHookArrayTest extends MediaWikiUnitTestCase {
 
 	public function testRegisterHandler() {
 		$this->expectDeprecationAndContinue( '/Accessing \$wgHooks directly is deprecated/' );
@@ -29,11 +29,13 @@ class FauxGlobalHookArrayTest extends \MediaWikiUnitTestCase {
 		$container = new HookContainer( $registry, $factory );
 		$hooks = new FauxGlobalHookArray( $container );
 
+		$this->expectDeprecationAndContinue( '/getHandlerCallbacks/' );
+
 		// Register a handler via the array
 		$hooks['FirstHook'][] = $handler;
 
 		$this->assertTrue( $container->isRegistered( 'FirstHook' ) );
-		$this->assertCount( 1, $container->getLegacyHandlers( 'FirstHook' ) );
+		$this->assertCount( 1, $container->getHandlerCallbacks( 'FirstHook' ) );
 
 		$this->assertTrue( isset( $hooks['FirstHook'] ) );
 		$this->assertCount( 1, $hooks['FirstHook'] );

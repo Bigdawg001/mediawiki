@@ -24,7 +24,7 @@ use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\PageStore;
 use MediaWiki\Page\ProperPageIdentity;
 use MediaWiki\Title\TitleFactory;
-use TitleFormatter;
+use MediaWiki\Title\TitleFormatter;
 
 class MultiTitleFilter implements Filter {
 
@@ -44,7 +44,7 @@ class MultiTitleFilter implements Filter {
 	 * @param TitleFormatter|null $titleFormatter
 	 */
 	public function __construct(
-		TitleFactory $titleFactory = null, PageStore $pageStore = null, TitleFormatter $titleFormatter = null ) {
+		?TitleFactory $titleFactory = null, ?PageStore $pageStore = null, ?TitleFormatter $titleFormatter = null ) {
 		$this->pageStore = $pageStore;
 		$this->titleFormatter = $titleFormatter;
 	}
@@ -86,17 +86,11 @@ class MultiTitleFilter implements Filter {
 		return null;
 	}
 
-	/**
-	 * @return PageStore
-	 */
 	private function getPageStore(): PageStore {
 		$this->pageStore ??= MediaWikiServices::getInstance()->getPageStore();
 		return $this->pageStore;
 	}
 
-	/**
-	 * @return TitleFormatter
-	 */
 	private function getTitleFormatter(): TitleFormatter {
 		$this->titleFormatter ??= MediaWikiServices::getInstance()->getTitleFormatter();
 		return $this->titleFormatter;

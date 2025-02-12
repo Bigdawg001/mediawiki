@@ -24,12 +24,14 @@ use BanConverter;
 use CrhConverter;
 use EnConverter;
 use GanConverter;
-use ILanguageConverter;
 use IuConverter;
-use KkConverter;
 use KuConverter;
-use Language;
+use MediaWiki\Config\ServiceOptions;
+use MediaWiki\Language\ILanguageConverter;
+use MediaWiki\Language\Language;
+use MediaWiki\MainConfigNames;
 use MediaWiki\StubObject\StubUserLang;
+use MniConverter;
 use ShConverter;
 use ShiConverter;
 use SrConverter;
@@ -38,6 +40,8 @@ use TlyConverter;
 use TrivialLanguageConverter;
 use UzConverter;
 use Wikimedia\ObjectFactory\ObjectFactory;
+use WuuConverter;
+use ZghConverter;
 use ZhConverter;
 
 /**
@@ -48,9 +52,11 @@ use ZhConverter;
  */
 class LanguageConverterFactory {
 
+	/** @var ILanguageConverter[] */
 	private $cache = [];
 	/**
 	 * @var array
+	 * @phpcs-require-sorted-array
 	 */
 	private $converterList = [
 		'ban' => [
@@ -65,17 +71,17 @@ class LanguageConverterFactory {
 		'iu' => [
 			'class' => IuConverter::class,
 		],
-		'kk' => [
-			'class' => KkConverter::class,
-		],
 		'ku' => [
 			'class' => KuConverter::class,
 		],
-		'shi' => [
-			'class' => ShiConverter::class,
+		'mni' => [
+			'class' => MniConverter::class,
 		],
 		'sh' => [
 			'class' => ShConverter::class,
+		],
+		'shi' => [
+			'class' => ShiConverter::class,
 		],
 		'sr' => [
 			'class' => SrConverter::class,
@@ -88,6 +94,12 @@ class LanguageConverterFactory {
 		],
 		'uz' => [
 			'class' => UzConverter::class,
+		],
+		'wuu' => [
+			'class' => WuuConverter::class,
+		],
+		'zgh' => [
+			'class' => ZghConverter::class,
 		],
 		'zh' => [
 			'class' => ZhConverter::class,
@@ -105,59 +117,56 @@ class LanguageConverterFactory {
 		'class' => EnConverter::class,
 	];
 
-	/** @var ObjectFactory */
-	private $objectFactory;
-
 	/**
-	 * @var bool Whether to disable language variant conversion.
+	 * @internal For use by ServiceWiring
 	 */
-	private $isConversionDisabled;
+	public const CONSTRUCTOR_OPTIONS = [
+		MainConfigNames::UsePigLatinVariant,
+		MainConfigNames::DisableLangConversion,
+		MainConfigNames::DisableTitleConversion,
+	];
+
+	private ServiceOptions $options;
+	private ObjectFactory $objectFactory;
 
 	/**
-	 * @var bool Whether to disable language variant conversion for links.
-	 */
-	private $isTitleConversionDisabled;
-
-	/**
-	 * @var callable callback of () : Language
+	 * @var callable callback of "() : Language"
 	 */
 	private $defaultLanguage;
 
 	/**
+	 * @param ServiceOptions $options
 	 * @param ObjectFactory $objectFactory
-	 * @param bool $usePigLatinVariant should pig variant of English be used
-	 * @param bool $isConversionDisabled Whether to disable language variant conversion
-	 * @param bool $isTitleConversionDisabled Whether to disable language variant conversion for links
-	 * @param callable $defaultLanguage callback of () : Language, should return
-	 * default language. Used in getLanguageConverter when $language is null.
+	 * @param callable $defaultLanguage callback of "() : Language", should return
+	 *  default language. Used in getLanguageConverter when $language is null.
 	 *
 	 * @internal Should be called from MediaWikiServices only.
 	 */
 	public function __construct(
+		ServiceOptions $options,
 		ObjectFactory $objectFactory,
-		$usePigLatinVariant, $isConversionDisabled, $isTitleConversionDisabled,
 		callable $defaultLanguage
 	) {
+		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
+		$this->options = $options;
 		$this->objectFactory = $objectFactory;
-		if ( $usePigLatinVariant ) {
+		if ( $options->get( MainConfigNames::UsePigLatinVariant ) ) {
 			$this->converterList['en'] = self::EN_CONVERTER;
 		}
-		$this->isConversionDisabled = $isConversionDisabled;
-		$this->isTitleConversionDisabled = $isTitleConversionDisabled;
 		$this->defaultLanguage = $defaultLanguage;
 	}
 
 	/**
-	 * Returns Converter instance for given language object
+	 * Returns Converter instance for a given language object
 	 *
-	 * @param Language|\MediaWiki\StubObject\StubUserLang $lang
+	 * @param Language|StubUserLang $lang
 	 * @return ILanguageConverter
 	 */
 	private function instantiateConverter( $lang ): ILanguageConverter {
 		$code = mb_strtolower( $lang->getCode() );
 		$spec = $this->converterList[$code] ?? self::DEFAULT_CONVERTER;
 		// ObjectFactory::createObject accepts an array, not just a callable (phan bug)
-		// @phan-suppress-next-line PhanTypeInvalidCallableArrayKey,PhanTypeInvalidCallableArraySize
+		// @phan-suppress-next-line PhanTypeInvalidCallableArrayKey, PhanTypeInvalidCallableArraySize
 		return $this->objectFactory->createObject(
 			$spec,
 			[
@@ -171,7 +180,7 @@ class LanguageConverterFactory {
 	 * Provide a LanguageConverter for given language
 	 *
 	 * @param Language|StubUserLang|null $language for which a LanguageConverter should be provided.
-	 * If null then LanguageConverter provided for current content language as returned
+	 * If it is null, then the LanguageConverter provided for current content language as returned
 	 * by the callback provided to the constructor.
 	 *
 	 * @return ILanguageConverter
@@ -189,27 +198,21 @@ class LanguageConverterFactory {
 
 	/**
 	 * Whether to disable language variant conversion.
+	 *
 	 * @return bool
 	 */
 	public function isConversionDisabled() {
-		return $this->isConversionDisabled;
-	}
-
-	/**
-	 * Whether to disable language variant conversion for titles.
-	 * @return bool
-	 * @deprecated since 1.36 Should use ::isLinkConversionDisabled() instead
-	 */
-	public function isTitleConversionDisabled() {
-		wfDeprecated( __METHOD__, '1.36' );
-		return $this->isTitleConversionDisabled;
+		return $this->options->get( MainConfigNames::DisableLangConversion );
 	}
 
 	/**
 	 * Whether to disable language variant conversion for links.
+	 *
 	 * @return bool
 	 */
 	public function isLinkConversionDisabled() {
-		return $this->isConversionDisabled || $this->isTitleConversionDisabled;
+		return $this->options->get( MainConfigNames::DisableLangConversion ) ||
+			// Note that this configuration option is misnamed.
+			$this->options->get( MainConfigNames::DisableTitleConversion );
 	}
 }

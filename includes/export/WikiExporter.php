@@ -2,7 +2,7 @@
 /**
  * Base class for exporting
  *
- * Copyright © 2003, 2005, 2006 Brion Vibber <brion@pobox.com>
+ * Copyright © 2003, 2005, 2006 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
  * This program is free software; you can redistribute it and/or modify
@@ -28,6 +28,7 @@
  */
 
 use MediaWiki\CommentStore\CommentStore;
+use MediaWiki\Debug\MWDebug;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\MainConfigNames;
@@ -36,7 +37,9 @@ use MediaWiki\Page\PageIdentity;
 use MediaWiki\Revision\RevisionAccessException;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\RevisionStore;
-use Wikimedia\Rdbms\IDatabase;
+use MediaWiki\Title\MalformedTitleException;
+use MediaWiki\Title\TitleParser;
+use Wikimedia\Rdbms\IReadableDatabase;
 use Wikimedia\Rdbms\IResultWrapper;
 
 /**
@@ -64,7 +67,7 @@ class WikiExporter {
 	public const TEXT = XmlDumpWriter::WRITE_CONTENT;
 	public const STUB = XmlDumpWriter::WRITE_STUB;
 
-	protected const BATCH_SIZE = 50000;
+	protected const BATCH_SIZE = 10000;
 
 	/** @var int */
 	public $text;
@@ -75,7 +78,7 @@ class WikiExporter {
 	/** @var XmlDumpWriter */
 	private $writer;
 
-	/** @var IDatabase */
+	/** @var IReadableDatabase */
 	protected $db;
 
 	/** @var array|int */
@@ -106,7 +109,7 @@ class WikiExporter {
 	}
 
 	/**
-	 * @param IDatabase $db
+	 * @param IReadableDatabase $db
 	 * @param CommentStore $commentStore
 	 * @param HookContainer $hookContainer
 	 * @param RevisionStore $revisionStore
@@ -223,9 +226,6 @@ class WikiExporter {
 		$this->dumpFrom( $condition );
 	}
 
-	/**
-	 * @param PageIdentity $page
-	 */
 	public function pageByTitle( PageIdentity $page ) {
 		$this->dumpFrom(
 			'page_namespace=' . $page->getNamespace() .
@@ -234,7 +234,6 @@ class WikiExporter {
 
 	/**
 	 * @param string $name
-	 * @throws MWException
 	 */
 	public function pageByName( $name ) {
 		try {
@@ -243,7 +242,7 @@ class WikiExporter {
 				'page_namespace=' . $link->getNamespace() .
 				' AND page_title=' . $this->db->addQuotes( $link->getDBkey() ) );
 		} catch ( MalformedTitleException $ex ) {
-			throw new MWException( "Can't export invalid title" );
+			throw new RuntimeException( "Can't export invalid title" );
 		}
 	}
 
@@ -283,21 +282,12 @@ class WikiExporter {
 		$this->author_list = "<contributors>";
 		// rev_deleted
 
-		$revQuery = $this->revisionStore->getQueryInfo( [ 'page' ] );
-		$res = $this->db->newSelectQueryBuilder()
-			->select( [
-				'rev_user_text' => $revQuery['fields']['rev_user_text'],
-				'rev_user' => $revQuery['fields']['rev_user'],
-			] )
-			->tables( $revQuery['tables'] )
-			->where( [
-				$this->db->bitAnd( 'rev_deleted', RevisionRecord::DELETED_USER ) . ' = 0',
-				$cond,
-			] )
-			->joinConds( $revQuery['joins'] )
+		$res = $this->revisionStore->newSelectQueryBuilder( $this->db )
+			->joinPage()
 			->distinct()
-			->caller( __METHOD__ )
-			->fetchResultSet();
+			->where( $this->db->bitAnd( 'rev_deleted', RevisionRecord::DELETED_USER ) . ' = 0' )
+			->andWhere( $cond )
+			->caller( __METHOD__ )->fetchResultSet();
 
 		foreach ( $res as $row ) {
 			$this->author_list .= "<contributor>" .
@@ -315,8 +305,6 @@ class WikiExporter {
 	/**
 	 * @param string $cond
 	 * @param bool $orderRevs
-	 * @throws MWException
-	 * @throws Exception
 	 */
 	protected function dumpFrom( $cond = '', $orderRevs = false ) {
 		if ( is_int( $this->history ) && ( $this->history & self::LOGS ) ) {
@@ -328,7 +316,6 @@ class WikiExporter {
 
 	/**
 	 * @param string $cond
-	 * @throws Exception
 	 */
 	protected function dumpLogs( $cond ) {
 		$where = [];
@@ -344,32 +331,23 @@ class WikiExporter {
 
 		$commentQuery = $this->commentStore->getJoin( 'log_comment' );
 
-		$tables = array_merge(
-			[ 'logging', 'actor' ], $commentQuery['tables']
-		);
-		$fields = [
-			'log_id', 'log_type', 'log_action', 'log_timestamp', 'log_namespace',
-			'log_title', 'log_params', 'log_deleted', 'actor_user', 'actor_name'
-		] + $commentQuery['fields'];
-		$options = [
-			'ORDER BY' => 'log_id',
-			'USE INDEX' => [ 'logging' => 'PRIMARY' ],
-			'LIMIT' => self::BATCH_SIZE,
-		];
-		$joins = [
-			'actor' => [ 'JOIN', 'actor_id=log_actor' ]
-		] + $commentQuery['joins'];
-
 		$lastLogId = 0;
 		while ( true ) {
-			$result = $this->db->select(
-				$tables,
-				$fields,
-				array_merge( $where, [ 'log_id > ' . intval( $lastLogId ) ] ),
-				__METHOD__,
-				$options,
-				$joins
-			);
+			$result = $this->db->newSelectQueryBuilder()
+				->select( [
+					'log_id', 'log_type', 'log_action', 'log_timestamp', 'log_namespace',
+					'log_title', 'log_params', 'log_deleted', 'actor_user', 'actor_name'
+				] )
+				->from( 'logging' )
+				->join( 'actor', null, 'actor_id=log_actor' )
+				->where( $where )
+				->andWhere( $this->db->expr( 'log_id', '>', intval( $lastLogId ) ) )
+				->orderBy( 'log_id' )
+				->useIndex( [ 'logging' => 'PRIMARY' ] )
+				->limit( self::BATCH_SIZE )
+				->queryInfo( $commentQuery )
+				->caller( __METHOD__ )
+				->fetchResultSet();
 
 			if ( !$result->numRows() ) {
 				break;
@@ -383,8 +361,6 @@ class WikiExporter {
 	/**
 	 * @param string $cond
 	 * @param bool $orderRevs
-	 * @throws MWException
-	 * @throws Exception
 	 */
 	protected function dumpPages( $cond, $orderRevs ) {
 		$revQuery = $this->revisionStore->getQueryInfo( [ 'page' ] );
@@ -457,13 +433,13 @@ class WikiExporter {
 			$join['revision'] = [ 'JOIN', 'page_id=rev_page AND page_latest=rev_id' ];
 			# One, and only one hook should set this, and return false
 			if ( $this->hookRunner->onWikiExporter__dumpStableQuery( $tables, $opts, $join ) ) {
-				throw new MWException( __METHOD__ . " given invalid history dump type." );
+				throw new LogicException( __METHOD__ . " given invalid history dump type." );
 			}
 		} elseif ( $this->history & self::RANGE ) {
 			# Dump of revisions within a specified range.  Condition already set in revsByRange().
 		} else {
 			# Unknown history specification parameter?
-			throw new MWException( __METHOD__ . " given invalid history dump type." );
+			throw new UnexpectedValueException( __METHOD__ . " given invalid history dump type." );
 		}
 
 		$done = false;
@@ -484,19 +460,18 @@ class WikiExporter {
 				$done = true;
 			}
 
-			$queryConds = $conds;
-			$queryConds[] = 'rev_page>' . intval( $revPage ) . ' OR (rev_page=' .
-				intval( $revPage ) . ' AND rev_id' . $op . intval( $revId ) . ')';
-
 			# Do the query and process any results, remembering max ids for the next iteration.
-			$result = $this->db->select(
-				$tables,
-				$fields,
-				$queryConds,
-				__METHOD__,
-				$opts,
-				$join
-			);
+			$result = $this->db->newSelectQueryBuilder()
+				->tables( $tables )
+				->fields( $fields )
+				->where( $conds )
+				->andWhere( $this->db->expr( 'rev_page', '>', intval( $revPage ) )->orExpr(
+					$this->db->expr( 'rev_page', '=', intval( $revPage ) )->and( 'rev_id', $op, intval( $revId ) )
+				) )
+				->caller( __METHOD__ )
+				->options( $opts )
+				->joinConds( $join )
+				->fetchResultSet();
 			if ( $result->numRows() > 0 ) {
 				$lastRow = $this->outputPageStreamBatch( $result, $lastRow );
 				$rowCount += $result->numRows();
@@ -596,6 +571,8 @@ class WikiExporter {
 			$carry = null;
 		}
 
+		// Reading further rows from the result set for the same rev id
+		// phpcs:ignore Generic.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition
 		while ( $row = $results->fetchObject() ) {
 			if ( $prev && $prev->rev_id !== $row->rev_id ) {
 				$carry = $row;

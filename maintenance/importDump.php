@@ -2,7 +2,7 @@
 /**
  * Import XML dump files into the current wiki.
  *
- * Copyright © 2005 Brion Vibber <brion@pobox.com>
+ * Copyright © 2005 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
  * This program is free software; you can redistribute it and/or modify
@@ -25,9 +25,13 @@
  */
 
 use MediaWiki\Linker\LinkTarget;
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\Permissions\UltimateAuthority;
+use MediaWiki\User\User;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script that imports XML dump files into the current wiki.
@@ -103,7 +107,9 @@ TEXT
 		);
 		$this->addOption( 'image-base-path', 'Import files from a specified path', false, true );
 		$this->addOption( 'skip-to', 'Start from nth page by skipping first n-1 pages', false, true );
-		$this->addOption( 'username-prefix', 'Prefix for interwiki usernames', false, true );
+		$this->addOption( 'username-prefix',
+			'Prefix for interwiki usernames; a trailing ">" will be added. Default: "imported>"',
+			false, true );
 		$this->addOption( 'no-local-users',
 			'Treat all usernames as interwiki. ' .
 			'The default is to assign edits to local users where they exist.',
@@ -113,7 +119,7 @@ TEXT
 	}
 
 	public function execute() {
-		if ( MediaWikiServices::getInstance()->getReadOnlyMode()->isReadOnly() ) {
+		if ( $this->getServiceContainer()->getReadOnlyMode()->isReadOnly() ) {
 			$this->fatalError( "Wiki is in read-only mode; you'll need to disable it for import to work." );
 		}
 
@@ -154,7 +160,7 @@ TEXT
 	}
 
 	private function getNsIndex( $namespace ) {
-		$contLang = MediaWikiServices::getInstance()->getContentLanguage();
+		$contLang = $this->getServiceContainer()->getContentLanguage();
 		$result = $contLang->getNsIndex( $namespace );
 		if ( $result !== false ) {
 			return $result;
@@ -168,7 +174,6 @@ TEXT
 
 	/**
 	 * @param LinkTarget|null $title
-	 * @throws MWException
 	 * @return bool
 	 */
 	private function skippedNamespace( $title ) {
@@ -186,9 +191,6 @@ TEXT
 		$this->pageCount++;
 	}
 
-	/**
-	 * @param WikiRevision $rev
-	 */
 	public function handleRevision( WikiRevision $rev ) {
 		$title = $rev->getTitle();
 		if ( !$title ) {
@@ -205,7 +207,7 @@ TEXT
 		$this->report();
 
 		if ( !$this->dryRun ) {
-			call_user_func( $this->importCallback, $rev );
+			( $this->importCallback )( $rev );
 		}
 	}
 
@@ -224,8 +226,8 @@ TEXT
 
 			if ( !$this->dryRun ) {
 				// bluuuh hack
-				// call_user_func( $this->uploadCallback, $revision );
-				$importer = MediaWikiServices::getInstance()->getWikiRevisionUploadImporter();
+				// ( $this->uploadCallback )( $revision );
+				$importer = $this->getServiceContainer()->getWikiRevisionUploadImporter();
 				$statusValue = $importer->import( $revision );
 
 				return $statusValue->isGood();
@@ -235,9 +237,6 @@ TEXT
 		return false;
 	}
 
-	/**
-	 * @param WikiRevision $rev
-	 */
 	public function handleLogItem( WikiRevision $rev ) {
 		if ( $this->skippedNamespace( $rev->getTitle() ) ) {
 			return;
@@ -246,7 +245,7 @@ TEXT
 		$this->report();
 
 		if ( !$this->dryRun ) {
-			call_user_func( $this->logItemCallback, $rev );
+			( $this->logItemCallback )( $rev );
 		}
 	}
 
@@ -273,7 +272,7 @@ TEXT
 				$this->progress( "$this->revCount ($revrate revs/sec)" );
 			}
 		}
-		MediaWikiServices::getInstance()->getDBLoadBalancerFactory()->waitForReplication();
+		$this->waitForReplication();
 	}
 
 	private function progress( $string ) {
@@ -309,10 +308,12 @@ TEXT
 	private function importFromHandle( $handle ) {
 		$this->startTime = microtime( true );
 
+		$user = User::newSystemUser( User::MAINTENANCE_SCRIPT_USER, [ 'steal' => true ] );
+
 		$source = new ImportStreamSource( $handle );
-		$importer = MediaWikiServices::getInstance()
+		$importer = $this->getServiceContainer()
 			->getWikiImporterFactory()
-			->getWikiImporter( $source );
+			->getWikiImporter( $source, new UltimateAuthority( $user ) );
 
 		// Updating statistics require a lot of time so disable it
 		$importer->disableStatisticsUpdate();
@@ -323,17 +324,15 @@ TEXT
 		if ( $this->hasOption( 'no-updates' ) ) {
 			$importer->setNoUpdates( true );
 		}
-		if ( $this->hasOption( 'username-prefix' ) ) {
-			$importer->setUsernamePrefix(
-				$this->getOption( 'username-prefix' ),
-				!$this->hasOption( 'no-local-users' )
-			);
-		}
+		$importer->setUsernamePrefix(
+			$this->getOption( 'username-prefix', 'imported' ),
+			!$this->hasOption( 'no-local-users' )
+		);
 		if ( $this->hasOption( 'rootpage' ) ) {
 			$statusRootPage = $importer->setTargetRootPage( $this->getOption( 'rootpage' ) );
 			if ( !$statusRootPage->isGood() ) {
 				// Die here so that it doesn't print "Done!"
-				$this->fatalError( $statusRootPage->getMessage( false, false, 'en' )->text() );
+				$this->fatalError( $statusRootPage );
 			}
 		}
 		if ( $this->hasOption( 'skip-to' ) ) {
@@ -366,5 +365,7 @@ TEXT
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = BackupReader::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

@@ -1,5 +1,8 @@
 <?php
 
+use MediaWiki\Message\Message;
+use Wikimedia\Message\MessageSpecifier;
+
 /**
  * A simple {@link MessageLocalizer} implementation for use in tests.
  * By default, it sets the message language to 'qqx',
@@ -30,7 +33,9 @@ class MockMessageLocalizer implements MessageLocalizer {
 	 *
 	 * @param string|string[]|MessageSpecifier $key Message key, or array of keys,
 	 *   or a MessageSpecifier.
-	 * @param mixed ...$params
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param MessageParam|MessageSpecifier|string|int|float|list<MessageParam|MessageSpecifier|string|int|float> ...$params
+	 *   See Message::params()
 	 * @return Message
 	 */
 	public function msg( $key, ...$params ) {

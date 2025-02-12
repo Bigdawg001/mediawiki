@@ -20,7 +20,7 @@
 
 namespace MediaWiki\Storage;
 
-use Content;
+use MediaWiki\Content\Content;
 use MediaWiki\Revision\MutableRevisionSlots;
 use MediaWiki\Revision\RevisionAccessException;
 use MediaWiki\Revision\RevisionSlots;
@@ -55,7 +55,7 @@ class RevisionSlotsUpdate {
 	 */
 	public static function newFromRevisionSlots(
 		RevisionSlots $newSlots,
-		RevisionSlots $parentSlots = null
+		?RevisionSlots $parentSlots = null
 	) {
 		$modified = $newSlots->getSlots();
 		$removed = [];
@@ -88,7 +88,7 @@ class RevisionSlotsUpdate {
 	 *
 	 * @return RevisionSlotsUpdate
 	 */
-	public static function newFromContent( array $newContent, RevisionSlots $parentSlots = null ) {
+	public static function newFromContent( array $newContent, ?RevisionSlots $parentSlots = null ) {
 		$modified = [];
 
 		foreach ( $newContent as $role => $content ) {
@@ -162,8 +162,6 @@ class RevisionSlotsUpdate {
 	 *
 	 * The roles used with modifySlot() will be returned from getModifiedRoles(),
 	 * unless overwritten with removeSlot().
-	 *
-	 * @param SlotRecord $slot
 	 */
 	public function modifySlot( SlotRecord $slot ) {
 		$role = $slot->getRole();
@@ -286,8 +284,6 @@ class RevisionSlotsUpdate {
 	/**
 	 * Applies this update to the given MutableRevisionSlots, setting all modified slots,
 	 * and removing all removed roles.
-	 *
-	 * @param MutableRevisionSlots $slots
 	 */
 	public function apply( MutableRevisionSlots $slots ) {
 		foreach ( $this->getModifiedRoles() as $role ) {

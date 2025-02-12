@@ -18,6 +18,9 @@
  * @file
  */
 
+use MediaWiki\Language\LanguageConverter;
+use MediaWiki\Language\ReplacementArray;
+
 /**
  * Converts Serbo-Croatian from Latin script to Cyrillic script
  *
@@ -25,10 +28,14 @@
  */
 class ShConverter extends LanguageConverter {
 
-	/**
-	 * @var string[]
-	 */
-	private $mToCyrillic = [
+	private const TO_CYRILLIC = [
+		'konjug' => 'конјуг', // T385768
+		'konjun' => 'конјун', // T385768
+		'Konjug' => 'Конјуг', // T385768
+		'Konjun' => 'Конјун', // T385768
+		'wiki' => 'вики', // T385826
+		'Wiki' => 'Вики', // T385826
+
 		'dž' => 'џ',
 		'lj' => 'љ',
 		'nj' => 'њ',
@@ -96,61 +103,33 @@ class ShConverter extends LanguageConverter {
 		'Ž' => 'Ж',
 	];
 
-	/** @inheritDoc */
 	public function getMainCode(): string {
 		return 'sh';
 	}
 
-	/** @inheritDoc */
 	public function getLanguageVariants(): array {
 		return [ 'sh-latn', 'sh-cyrl' ];
 	}
 
-	/** @inheritDoc */
 	public function getVariantsFallbacks(): array {
 		return [
 			'sh-cyrl' => 'sh-latn',
 		];
 	}
 
-	protected function loadDefaultTables() {
-		$this->mTables = [
-			'sh-cyrl' => new ReplacementArray( $this->mToCyrillic ),
+	protected function loadDefaultTables(): array {
+		return [
+			'sh-cyrl' => new ReplacementArray( self::TO_CYRILLIC ),
 			'sh-latn' => new ReplacementArray(),
 		];
 	}
 
 	/**
-	 * It would omit roman numbers
+	 * Omits roman numbers
 	 *
 	 * @inheritDoc
 	 */
-	public function translate( $text, $toVariant ) {
-		$breaks = '[^\w\x80-\xff]';
-
-		// regexp for roman numbers
-		// Lookahead assertion ensures $roman doesn't match the empty string
-		$roman = '(?=[MDCLXVI])M{0,4}(C[DM]|D?C{0,3})(X[LC]|L?X{0,3})(I[VX]|V?I{0,3})';
-
-		$reg = '/^' . $roman . '$|^' . $roman . $breaks . '|' . $breaks
-			. $roman . '$|' . $breaks . $roman . $breaks . '/';
-
-		$matches = preg_split( $reg, $text, -1, PREG_SPLIT_OFFSET_CAPTURE );
-
-		$m = array_shift( $matches );
-		$this->loadTables();
-		if ( !isset( $this->mTables[$toVariant] ) ) {
-			throw new MWException( "Broken variant table: "
-				. implode( ',', array_keys( $this->mTables ) ) );
-		}
-		$ret = $this->mTables[$toVariant]->replace( $m[0] );
-		$mstart = (int)$m[1] + strlen( $m[0] );
-		foreach ( $matches as $m ) {
-			$ret .= substr( $text, $mstart, (int)$m[1] - $mstart );
-			$ret .= parent::translate( $m[0], $toVariant );
-			$mstart = (int)$m[1] + strlen( $m[0] );
-		}
-
-		return $ret;
+	public function translate( $text, $variant ) {
+		return $this->translateWithoutRomanNumbers( $text, $variant );
 	}
 }

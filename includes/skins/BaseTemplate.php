@@ -19,8 +19,10 @@
  */
 
 use MediaWiki\Html\Html;
-use Wikimedia\WrappedString;
-use Wikimedia\WrappedStringList;
+use MediaWiki\Message\Message;
+use MediaWiki\Parser\Sanitizer;
+use Wikimedia\Message\MessageParam;
+use Wikimedia\Message\MessageSpecifier;
 
 /**
  * Extended QuickTemplate with additional MediaWiki-specific helper methods.
@@ -37,7 +39,9 @@ abstract class BaseTemplate extends QuickTemplate {
 	 * Get a Message object with its context set
 	 *
 	 * @param string $name Message name
-	 * @param mixed ...$params Message params
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param MessageParam|MessageSpecifier|string|int|float|list<MessageParam|MessageSpecifier|string|int|float> ...$params
+	 *   See Message::params()
 	 * @return Message
 	 */
 	public function getMsg( $name, ...$params ) {
@@ -46,33 +50,6 @@ abstract class BaseTemplate extends QuickTemplate {
 
 	public function msg( $str ) {
 		echo $this->getMsg( $str )->escaped();
-	}
-
-	/**
-	 * Create an array of common toolbox items from the data in the quicktemplate
-	 * stored by SkinTemplate and items added by hook to the 'toolbox' section.
-	 * The resulting array is built according to a format intended to be passed
-	 * through makeListItem to generate the html.
-	 *
-	 * @deprecated since 1.35. To add items to the toolbox, use SidebarBeforeOutput
-	 * hook. To get the toolbox only use $this->data['sidebar']['TOOLBOX'], if you are
-	 * extending this class.
-	 * @return array
-	 */
-	public function getToolbox() {
-		wfDeprecated( __METHOD__, '1.35' );
-
-		$toolbox = $this->getSkin()->makeToolbox(
-			$this->data['nav_urls'],
-			$this->data['feeds']
-		);
-
-		// Merge content that might be added to the toolbox section by hook
-		if ( isset( $this->data['sidebar']['TOOLBOX'] ) ) {
-			$toolbox = array_merge( $toolbox, $this->data['sidebar']['TOOLBOX'] ?? [] );
-		}
-
-		return $toolbox;
 	}
 
 	/**
@@ -91,6 +68,7 @@ abstract class BaseTemplate extends QuickTemplate {
 		// Force the rendering of the following portals
 		$sidebar = $this->data['sidebar'];
 		if ( !isset( $sidebar['SEARCH'] ) ) {
+			// @phan-suppress-next-line PhanTypeMismatchDimAssignment False positive
 			$sidebar['SEARCH'] = true;
 		}
 		if ( !isset( $sidebar['TOOLBOX'] ) ) {
@@ -284,8 +262,6 @@ abstract class BaseTemplate extends QuickTemplate {
 	/**
 	 * Unsets any elements in an array of icon definitions which do
 	 * not have src attributes or are not strings.
-	 *
-	 * @param array &$icons
 	 */
 	private function unsetIconsWithoutImages( array &$icons ) {
 		// Unset any icons which don't have an image
@@ -404,35 +380,5 @@ abstract class BaseTemplate extends QuickTemplate {
 		}
 		$out .= "</div>\n";
 		return $out;
-	}
-
-	/**
-	 * Output getTrail
-	 * @deprecated 1.39
-	 */
-	protected function printTrail() {
-		wfDeprecated( __METHOD__, '1.39' );
-		echo $this->getTrail();
-	}
-
-	/**
-	 * Get the basic end-page trail including bottomscripts, reporttime, and
-	 * debug stuff. This should be called right before outputting the closing
-	 * body and html tags.
-	 *
-	 * @return string|WrappedStringList HTML
-	 * @since 1.29
-	 * @deprecated 1.39
-	 */
-	public function getTrail() {
-		wfDeprecated( __METHOD__, '1.39' );
-		$skin = $this->getSkin();
-		$options = $skin->getOptions();
-
-		return $options['bodyOnly'] ? '' : WrappedString::join( "\n", [
-			MWDebug::getDebugHTML( $skin->getContext() ),
-			$this->get( 'bottomscripts' ),
-			$this->get( 'reporttime' )
-		] );
 	}
 }

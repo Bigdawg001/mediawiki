@@ -1,11 +1,11 @@
 <?php
 namespace MediaWiki\Content\Transform;
 
-use Content;
+use MediaWiki\Content\Content;
 use MediaWiki\Content\IContentHandlerFactory;
 use MediaWiki\Page\PageReference;
+use MediaWiki\Parser\ParserOptions;
 use MediaWiki\User\UserIdentity;
-use ParserOptions;
 
 /**
  * A service to transform content.
@@ -16,9 +16,6 @@ class ContentTransformer {
 	/** @var IContentHandlerFactory */
 	private $contentHandlerFactory;
 
-	/**
-	 * @param IContentHandlerFactory $contentHandlerFactory
-	 */
 	public function __construct( IContentHandlerFactory $contentHandlerFactory ) {
 		$this->contentHandlerFactory = $contentHandlerFactory;
 	}

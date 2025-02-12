@@ -38,19 +38,10 @@ use Wikimedia\Stats\StatsUtils;
  */
 class UDPEmitter implements EmitterInterface {
 
-	/** @var string */
 	private string $prefix;
-
-	/** @var StatsCache */
 	private StatsCache $cache;
-
-	/** @var FormatterInterface */
 	private FormatterInterface $formatter;
-
-	/** @var UDPTransport|null */
 	private ?UDPTransport $transport;
-
-	/** @var int */
 	private int $payloadSize;
 
 	public function __construct( string $prefix, StatsCache $cache, FormatterInterface $formatter, ?string $target ) {
@@ -92,8 +83,6 @@ class UDPEmitter implements EmitterInterface {
 
 	/**
 	 * Renders metrics and samples through the formatter and returns a string[] of wire-formatted metric samples.
-	 *
-	 * @return array
 	 */
 	private function render(): array {
 		$output = [];
@@ -120,13 +109,12 @@ class UDPEmitter implements EmitterInterface {
 	private function batch( array $samples, int $payloadSize ): void {
 		$payload = '';
 		foreach ( $samples as $sample ) {
-			if ( strlen( $payload ) + strlen( $sample ) + 1 < $payloadSize ) {
-				$payload .= $sample . "\n";
-			} else {
+			if ( strlen( $payload ) + strlen( $sample ) + 1 > $payloadSize ) {
 				// Send this payload and make a new one
 				$this->transport->emit( $payload );
 				$payload = '';
 			}
+			$payload .= $sample . "\n";
 		}
 		// Send what is left in the payload
 		if ( strlen( $payload ) > 0 ) {

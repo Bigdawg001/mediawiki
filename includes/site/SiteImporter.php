@@ -18,6 +18,13 @@
  * @file
  */
 
+namespace MediaWiki\Site;
+
+use DOMDocument;
+use DOMElement;
+use Exception;
+use InvalidArgumentException;
+use RuntimeException;
 use Wikimedia\RequestTimeout\TimeoutException;
 
 /**
@@ -41,9 +48,6 @@ class SiteImporter {
 	 */
 	private $exceptionCallback;
 
-	/**
-	 * @param SiteStore $store
-	 */
 	public function __construct( SiteStore $store ) {
 		$this->store = $store;
 	}
@@ -78,7 +82,6 @@ class SiteImporter {
 	/**
 	 * @param string $xml
 	 *
-	 * @throws InvalidArgumentException
 	 */
 	public function importFromXML( $xml ) {
 		$document = new DOMDocument();
@@ -107,14 +110,7 @@ class SiteImporter {
 		libxml_use_internal_errors( $oldLibXmlErrors );
 		// phpcs:ignore Generic.PHP.NoSilencedErrors
 		@libxml_disable_entity_loader( $oldDisable );
-		$this->importFromDOM( $document->documentElement );
-	}
-
-	/**
-	 * @param DOMElement $root
-	 */
-	private function importFromDOM( DOMElement $root ) {
-		$sites = $this->makeSiteList( $root );
+		$sites = $this->makeSiteList( $document->documentElement );
 		$this->store->saveSites( $sites );
 	}
 
@@ -160,7 +156,6 @@ class SiteImporter {
 	 * @param DOMElement $siteElement
 	 *
 	 * @return Site
-	 * @throws InvalidArgumentException
 	 */
 	public function makeSite( DOMElement $siteElement ) {
 		if ( $siteElement->tagName !== 'site' ) {
@@ -207,7 +202,6 @@ class SiteImporter {
 	 * @param string|null|false $default
 	 *
 	 * @return null|string
-	 * @throws MWException If the attribute is not found and no default is provided
 	 */
 	private function getAttributeValue( DOMElement $element, $name, $default = false ) {
 		$node = $element->getAttributeNode( $name );
@@ -216,7 +210,7 @@ class SiteImporter {
 			if ( $default !== false ) {
 				return $default;
 			} else {
-				throw new MWException(
+				throw new RuntimeException(
 					'Required ' . $name . ' attribute not found in <' . $element->tagName . '> tag'
 				);
 			}
@@ -231,7 +225,6 @@ class SiteImporter {
 	 * @param string|null|false $default
 	 *
 	 * @return null|string
-	 * @throws MWException If the child element is not found and no default is provided
 	 */
 	private function getChildText( DOMElement $element, $name, $default = false ) {
 		$elements = $element->getElementsByTagName( $name );
@@ -240,7 +233,7 @@ class SiteImporter {
 			if ( $default !== false ) {
 				return $default;
 			} else {
-				throw new MWException(
+				throw new RuntimeException(
 					'Required <' . $name . '> tag not found inside <' . $element->tagName . '> tag'
 				);
 			}
@@ -255,15 +248,11 @@ class SiteImporter {
 	 * @param string $name
 	 *
 	 * @return bool
-	 * @throws MWException
 	 */
 	private function hasChild( DOMElement $element, $name ) {
 		return $this->getChildText( $element, $name, null ) !== null;
 	}
 
-	/**
-	 * @param Exception $ex
-	 */
 	private function handleException( Exception $ex ) {
 		if ( $this->exceptionCallback ) {
 			call_user_func( $this->exceptionCallback, $ex );
@@ -273,3 +262,6 @@ class SiteImporter {
 	}
 
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( SiteImporter::class, 'SiteImporter' );

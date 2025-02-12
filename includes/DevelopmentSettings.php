@@ -10,6 +10,8 @@
  * @file
  */
 
+use Wikimedia\FileBackend\FSFile\TempFSFile;
+
 /**
  * Ad-hoc debugging
  *
@@ -29,19 +31,20 @@
  * Debugging for PHP
  */
 
-// Enable showing of errors
-use MediaWiki\WikiMap\WikiMap;
-
+// Enable logging of all errors
 error_reporting( -1 );
-// @phan-suppress-next-line PhanTypeMismatchArgumentInternal Scalar okay with php8.1
-ini_set( 'display_errors', 1 );
+
+// Enable showing of errors, but avoid breaking non-HTML responses
+if ( MW_ENTRY_POINT === 'index' ) {
+	ini_set( 'display_errors', '1' );
+}
 
 /**
  * Debugging for MediaWiki
  */
 
 global $wgDevelopmentWarnings, $wgShowExceptionDetails, $wgShowHostnames,
-	$wgCommandLineMode, $wgDebugLogFile,
+	$wgDebugLogFile,
 	$wgDBerrorLog, $wgDebugLogGroups;
 
 // Use of wfWarn() should cause tests to fail
@@ -54,15 +57,39 @@ $wgShowHostnames = true;
 // Enable log files
 $logDir = getenv( 'MW_LOG_DIR' );
 if ( $logDir ) {
-	if ( $wgCommandLineMode ) {
-		$wgDebugLogFile = "$logDir/mw-debug-cli.log";
-	} else {
-		$wgDebugLogFile = "$logDir/mw-debug-www.log";
+	if ( !file_exists( $logDir ) ) {
+		mkdir( $logDir );
 	}
-	$wgDBerrorLog = "$logDir/mw-dberror.log";
-	$wgDebugLogGroups['ratelimit'] = "$logDir/mw-ratelimit.log";
-	$wgDebugLogGroups['error'] = "$logDir/mw-error.log";
-	$wgDebugLogGroups['exception'] = "$logDir/mw-error.log";
+	$logFileNames = [
+		'debug-cli' => 'mw-debug-cli',
+		'debug-web' => 'mw-debug-web',
+		'db' => 'mw-dberror',
+		'ratelimit' => 'mw-ratelimit',
+		'error' => 'mw-error',
+	];
+	// For PHPUnit tests run in parallel via ComposerLaunchParallel,
+	// there will be an environment variable containing the group ID
+	// of the batch of tests being run in a process. Use this to group
+	// those logs together.
+	$splitGroupLogId = getenv( 'MW_PHPUNIT_SPLIT_GROUP_ID' );
+
+	foreach ( $logFileNames as $key => $logFileName ) {
+		if ( $splitGroupLogId ) {
+			$logFileNames[$key] = "$logDir/$logFileName.split-group-$splitGroupLogId.log";
+		} else {
+			$logFileNames[$key] = "$logDir/$logFileName.log";
+		}
+	}
+
+	if ( MW_ENTRY_POINT === 'cli' ) {
+		$wgDebugLogFile = $logFileNames['debug-cli'];
+	} else {
+		$wgDebugLogFile = $logFileNames['debug-web'];
+	}
+	$wgDBerrorLog = $logFileNames['db'];
+	$wgDebugLogGroups['ratelimit'] = $logFileNames['ratelimit'];
+	$wgDebugLogGroups['error'] = $logFileNames['error'];
+	$wgDebugLogGroups['exception'] = $logFileNames['error'];
 }
 unset( $logDir );
 
@@ -89,6 +116,8 @@ $wgEnableJavaScriptTest = true;
 
 // Enable development/experimental endpoints
 $wgRestAPIAdditionalRouteFiles[] = 'includes/Rest/coreDevelopmentRoutes.json';
+$wgRestAPIAdditionalRouteFiles[] = 'includes/Rest/content.v1.json';
+$wgRestAPIAdditionalRouteFiles[] = 'includes/Rest/specs.v0.json';
 
 // Greatly raise the limits on short/long term login attempts,
 // so that automated tests run in parallel don't error.
@@ -113,17 +142,23 @@ $wgParsoidSettings['html2wtLimits']['htmlSize'] = 100 * 1024; // in characters!
 // Enable Vue dev mode by default, so that Vue devtools are functional.
 $wgVueDevelopmentMode = true;
 
+// Disable rate limiting of temp account creation and temp account name
+// acquisition, to facilitate local development and testing
+$wgTempAccountCreationThrottle = [];
+$wgTempAccountNameAcquisitionThrottle = [];
+
 /**
  * Experimental changes that may later become the default.
  * (Must reference a Phabricator ticket)
  */
 
-global $wgSQLMode, $wgLocalisationCacheConf, $wgCiteBookReferencing,
+global $wgSQLMode, $wgDBStrictWarnings, $wgLocalisationCacheConf, $wgCiteBookReferencing,
 	$wgCacheDirectory, $wgEnableUploads, $wgUsePigLatinVariant,
-	$wgVisualEditorEnableWikitext, $wgDefaultUserOptions;
+	$wgVisualEditorEnableWikitext, $wgDefaultUserOptions, $wgAutoCreateTempUser;
 
 // Enable MariaDB/MySQL strict mode (T108255)
 $wgSQLMode = 'STRICT_ALL_TABLES,ONLY_FULL_GROUP_BY';
+$wgDBStrictWarnings = true;
 
 // Localisation Cache to StaticArray (T218207)
 $wgLocalisationCacheConf['store'] = 'array';
@@ -135,15 +170,30 @@ $wgCiteBookReferencing = true;
 // directory by default (T218207)
 $wgCacheDirectory = TempFSFile::getUsableTempDirectory() .
 	DIRECTORY_SEPARATOR .
-	rawurlencode( WikiMap::getCurrentWikiId() );
+	rawurlencode( MediaWiki\WikiMap\WikiMap::getCurrentWikiId() );
 
 // Enable uploads for FileImporter browser tests (T190829)
 $wgEnableUploads = true;
 
 // Enable en-x-piglatin variant conversion for testing
 $wgUsePigLatinVariant = true;
+// Enable x-xss language code for testing correct message escaping
+$wgUseXssLanguage = true;
 
 // Enable the new wikitext mode for browser testing (T270240)
 $wgVisualEditorEnableWikitext = true;
 // Currently the default, but repeated here for safety since it would break many source editor tests.
 $wgDefaultUserOptions['visualeditor-newwikitext'] = 0;
+
+// Enable creation of temp user accounts on edit (T355880, T359043)
+$wgAutoCreateTempUser['enabled'] = true;
+
+// Make sure Mocha tests can create language links by defining an interwiki
+// prefix that matches a known language code.
+$wgHooks['InterwikiLoadPrefix'][] = static function ( $prefix, &$iwData ) {
+	if ( $prefix === 'en-x-piglatin' ) {
+		$iwData['iw_url'] = 'https://piggy.wikipedia.org/wiki/$1';
+		return false;
+	}
+	return true;
+};

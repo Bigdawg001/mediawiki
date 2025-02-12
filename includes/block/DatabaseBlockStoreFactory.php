@@ -20,15 +20,15 @@
 
 namespace MediaWiki\Block;
 
-use ConfiguredReadOnlyMode;
 use MediaWiki\CommentStore\CommentStore;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\User\ActorStoreFactory;
+use MediaWiki\User\TempUser\TempUserConfig;
 use MediaWiki\User\UserFactory;
 use Psr\Log\LoggerInterface;
-use ReadOnlyMode;
 use Wikimedia\Rdbms\LBFactory;
+use Wikimedia\Rdbms\ReadOnlyMode;
 
 /**
  * @author Zabe
@@ -41,47 +41,22 @@ class DatabaseBlockStoreFactory {
 	 */
 	public const CONSTRUCTOR_OPTIONS = DatabaseBlockStore::CONSTRUCTOR_OPTIONS;
 
-	/** @var ServiceOptions */
-	private $options;
-
-	/** @var LoggerInterface */
-	private $logger;
-
-	/** @var ActorStoreFactory */
-	private $actorStoreFactory;
-
-	/** @var BlockRestrictionStoreFactory */
-	private $blockRestrictionStoreFactory;
-
-	/** @var CommentStore */
-	private $commentStore;
-
-	/** @var HookContainer */
-	private $hookContainer;
-
-	/** @var LBFactory */
-	private $loadBalancerFactory;
-
-	/** @var ConfiguredReadOnlyMode */
-	private $configuredReadOnlyMode;
-
-	/** @var UserFactory */
-	private $userFactory;
+	private ServiceOptions $options;
+	private LoggerInterface $logger;
+	private ActorStoreFactory $actorStoreFactory;
+	private BlockRestrictionStoreFactory $blockRestrictionStoreFactory;
+	private CommentStore $commentStore;
+	private HookContainer $hookContainer;
+	private LBFactory $loadBalancerFactory;
+	private ReadOnlyMode $readOnlyMode;
+	private UserFactory $userFactory;
+	private TempUserConfig $tempUserConfig;
+	private BlockUtilsFactory $blockUtilsFactory;
+	private AutoblockExemptionList $autoblockExemptionList;
 
 	/** @var DatabaseBlockStore[] */
-	private $storeCache = [];
+	private array $storeCache = [];
 
-	/**
-	 * @param ServiceOptions $options
-	 * @param LoggerInterface $logger
-	 * @param ActorStoreFactory $actorStoreFactory
-	 * @param BlockRestrictionStoreFactory $blockRestrictionStoreFactory
-	 * @param CommentStore $commentStore
-	 * @param HookContainer $hookContainer
-	 * @param LBFactory $loadBalancerFactory
-	 * @param ConfiguredReadOnlyMode $configuredReadOnlyMode
-	 * @param UserFactory $userFactory
-	 */
 	public function __construct(
 		ServiceOptions $options,
 		LoggerInterface $logger,
@@ -90,8 +65,11 @@ class DatabaseBlockStoreFactory {
 		CommentStore $commentStore,
 		HookContainer $hookContainer,
 		LBFactory $loadBalancerFactory,
-		ConfiguredReadOnlyMode $configuredReadOnlyMode,
-		UserFactory $userFactory
+		ReadOnlyMode $readOnlyMode,
+		UserFactory $userFactory,
+		TempUserConfig $tempUserConfig,
+		BlockUtilsFactory $blockUtilsFactory,
+		AutoblockExemptionList $autoblockExemptionList
 	) {
 		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
 
@@ -102,8 +80,11 @@ class DatabaseBlockStoreFactory {
 		$this->commentStore = $commentStore;
 		$this->hookContainer = $hookContainer;
 		$this->loadBalancerFactory = $loadBalancerFactory;
-		$this->configuredReadOnlyMode = $configuredReadOnlyMode;
+		$this->readOnlyMode = $readOnlyMode;
 		$this->userFactory = $userFactory;
+		$this->tempUserConfig = $tempUserConfig;
+		$this->blockUtilsFactory = $blockUtilsFactory;
+		$this->autoblockExemptionList = $autoblockExemptionList;
 	}
 
 	/**
@@ -117,7 +98,6 @@ class DatabaseBlockStoreFactory {
 
 		$storeCacheKey = $wikiId === DatabaseBlock::LOCAL ? 'LOCAL' : 'crosswikistore-' . $wikiId;
 		if ( !isset( $this->storeCache[$storeCacheKey] ) ) {
-			$loadBalancer = $this->loadBalancerFactory->getMainLB( $wikiId );
 			$this->storeCache[$storeCacheKey] = new DatabaseBlockStore(
 				$this->options,
 				$this->logger,
@@ -125,9 +105,12 @@ class DatabaseBlockStoreFactory {
 				$this->blockRestrictionStoreFactory->getBlockRestrictionStore( $wikiId ),
 				$this->commentStore,
 				$this->hookContainer,
-				$loadBalancer,
-				new ReadOnlyMode( $this->configuredReadOnlyMode, $loadBalancer ),
+				$this->loadBalancerFactory,
+				$this->readOnlyMode,
 				$this->userFactory,
+				$this->tempUserConfig,
+				$this->blockUtilsFactory->getBlockUtils( $wikiId ),
+				$this->autoblockExemptionList,
 				$wikiId
 			);
 		}

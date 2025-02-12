@@ -21,20 +21,22 @@
 
 namespace MediaWiki\Category;
 
-use ExtensionRegistry;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\PageReference;
+use MediaWiki\Parser\Parser;
+use MediaWiki\Registration\ExtensionRegistry;
+use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\Title\Title;
-use NamespaceInfo;
-use ParserOutput;
+use MediaWiki\Title\TitleParser;
 use Psr\Log\LoggerInterface;
-use TitleParser;
+use Wikimedia\Parsoid\Core\ContentMetadataCollector;
 
 /**
- * This class performs some operations related to tracking categories, such as creating
- * a list of all such categories.
+ * This class performs some operations related to tracking categories, such as
+ * adding a tracking category to a ParserOutput, and creating a list of all
+ * such categories.
  * @since 1.29
  */
 class TrackingCategories {
@@ -64,8 +66,6 @@ class TrackingCategories {
 
 	/**
 	 * Tracking categories that exist in core
-	 *
-	 * @var array
 	 */
 	private const CORE_TRACKING_CATEGORIES = [
 		'broken-file-category',
@@ -87,14 +87,10 @@ class TrackingCategories {
 		'template-loop-category',
 		'unstrip-depth-category',
 		'unstrip-size-category',
+		'bad-language-code-category',
+		'double-px-category',
 	];
 
-	/**
-	 * @param ServiceOptions $options
-	 * @param NamespaceInfo $namespaceInfo
-	 * @param TitleParser $titleParser
-	 * @param LoggerInterface $logger
-	 */
 	public function __construct(
 		ServiceOptions $options,
 		NamespaceInfo $namespaceInfo,
@@ -158,7 +154,7 @@ class TrackingCategories {
 
 			// Match things like {{NAMESPACE}} and {{NAMESPACENUMBER}}.
 			// False positives are ok, this is just an efficiency shortcut
-			if ( strpos( $msgObj->plain(), '{{' ) !== false ) {
+			if ( str_contains( $msgObj->plain(), '{{' ) ) {
 				$ns = $this->namespaceInfo->getValidNamespaces();
 				foreach ( $ns as $namesp ) {
 					$tempTitle = $this->titleParser->makeTitleValueSafe( $namesp, $catMsg );
@@ -168,27 +164,23 @@ class TrackingCategories {
 					// XXX: should be a better way to convert a TitleValue
 					// to a PageReference!
 					$tempTitle = Title::newFromLinkTarget( $tempTitle );
-					$catName = $msgObj->page( $tempTitle )->text();
-					# Allow tracking categories to be disabled by setting them to "-"
-					if ( $catName !== '-' ) {
-						$catTitle = $this->titleParser->makeTitleValueSafe( NS_CATEGORY, $catName );
-						if ( $catTitle ) {
-							$allCats[] = $catTitle;
-						}
-					}
+					$allCats[] = $msgObj->page( $tempTitle )->text();
 				}
 			} else {
-				$catName = $msgObj->text();
-				# Allow tracking categories to be disabled by setting them to "-"
+				$allCats[] = $msgObj->text();
+			}
+			$titles = [];
+			foreach ( $allCats as $catName ) {
+				// Extra check in case a message does fancy stuff with {{#if:… and such
 				if ( $catName !== '-' ) {
 					$catTitle = $this->titleParser->makeTitleValueSafe( NS_CATEGORY, $catName );
 					if ( $catTitle ) {
-						$allCats[] = $catTitle;
+						$titles[] = $catTitle;
 					}
 				}
 			}
 			$trackingCategories[$catMsg] = [
-				'cats' => $allCats,
+				'cats' => $titles,
 				'msg' => $catMsgTitle,
 			];
 		}
@@ -236,24 +228,35 @@ class TrackingCategories {
 	}
 
 	/**
-	 * Add a tracking category to a ParserOutput.
-	 * @param ParserOutput $parserOutput
+	 * Add a tracking category to a ParserOutput, getting the title from a
+	 * system message.
+	 *
+	 * Any message used with this function should be registered so it will
+	 * show up on [[Special:TrackingCategories]].  Core messages should be
+	 * added to TrackingCategories::CORE_TRACKING_CATEGORIES, and extensions
+	 * should add to "TrackingCategories" in their extension.json.
+	 *
+	 * @param ContentMetadataCollector $parserOutput The target ParserOutput which will
+	 *  store the new category
 	 * @param string $msg Message key
 	 * @param ?PageReference $contextPage Context page title
 	 * @return bool Whether the addition was successful
 	 * @since 1.38
+	 * @see Parser::addTrackingCategory
 	 */
-	public function addTrackingCategory( ParserOutput $parserOutput, string $msg, ?PageReference $contextPage ): bool {
+	public function addTrackingCategory(
+		ContentMetadataCollector $parserOutput,
+		string $msg,
+		?PageReference $contextPage
+	): bool {
 		$categoryPage = $this->resolveTrackingCategory( $msg, $contextPage );
 		if ( $categoryPage === null ) {
 			return false;
 		}
-		$parserOutput->addCategory(
-			$categoryPage->getDBkey(),
-			$parserOutput->getPageProperty( 'defaultsort' ) ?? ''
-		);
+		$parserOutput->addCategory( $categoryPage );
 		return true;
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( TrackingCategories::class, 'TrackingCategories' );

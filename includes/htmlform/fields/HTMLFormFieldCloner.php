@@ -1,7 +1,14 @@
 <?php
 
+namespace MediaWiki\HTMLForm\Field;
+
+use InvalidArgumentException;
 use MediaWiki\Html\Html;
+use MediaWiki\HTMLForm\HTMLForm;
+use MediaWiki\HTMLForm\HTMLFormField;
+use MediaWiki\Parser\Sanitizer;
 use MediaWiki\Request\DerivativeRequest;
+use MediaWiki\Xml\Xml;
 
 /**
  * A container for HTMLFormFields that allows for multiple copies of the set of
@@ -40,6 +47,7 @@ use MediaWiki\Request\DerivativeRequest;
  * @stable to extend
  */
 class HTMLFormFieldCloner extends HTMLFormField {
+	/** @var int */
 	private static $counter = 0;
 
 	/**
@@ -49,7 +57,7 @@ class HTMLFormFieldCloner extends HTMLFormField {
 	 */
 	protected $uniqueId;
 
-	/* @var HTMLFormField[] */
+	/** @var array<string, HTMLFormField[]> */
 	protected $mFields = [];
 
 	/**
@@ -192,8 +200,9 @@ class HTMLFormFieldCloner extends HTMLFormField {
 			return null;
 		}
 		if ( !isset( $this->mParams['fields'][$find] ) ) {
-			if ( isset( $this->mParams['cloner'] ) ) {
-				return $this->mParams['cloner']->findNearestField( $this, $find );
+			$cloner = $this->mParams['cloner'] ?? null;
+			if ( $cloner instanceof self ) {
+				return $cloner->findNearestField( $this, $find );
 			}
 			return null;
 		}
@@ -207,8 +216,9 @@ class HTMLFormFieldCloner extends HTMLFormField {
 	 */
 	protected function getFieldPath( $field ) {
 		$path = [ $this->mParams['fieldname'], $field->mParams['cloner-key'] ];
-		if ( isset( $this->mParams['cloner'] ) ) {
-			$path = array_merge( $this->mParams['cloner']->getFieldPath( $this ), $path );
+		$cloner = $this->mParams['cloner'] ?? null;
+		if ( $cloner instanceof self ) {
+			$path = array_merge( $cloner->getFieldPath( $this ), $path );
 		}
 		return $path;
 	}
@@ -348,10 +358,7 @@ class HTMLFormFieldCloner extends HTMLFormField {
 		foreach ( $values as $key => $value ) {
 			$fields = $this->getFieldsForKey( $key );
 			foreach ( $fields as $fieldname => $field ) {
-				if ( !array_key_exists( $fieldname, $value ) ) {
-					continue;
-				}
-				if ( $field->isHidden( $alldata ) ) {
+				if ( !array_key_exists( $fieldname, $value ) || $field->isHidden( $alldata ) ) {
 					continue;
 				}
 				$ok = $field->validate( $value[$fieldname], $alldata );
@@ -573,3 +580,6 @@ class HTMLFormFieldCloner extends HTMLFormField {
 		return $html;
 	}
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( HTMLFormFieldCloner::class, 'HTMLFormFieldCloner' );

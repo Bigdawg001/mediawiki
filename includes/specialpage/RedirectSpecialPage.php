@@ -1,7 +1,5 @@
 <?php
 /**
- * Shortcuts to construct a special page alias.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,9 +16,11 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
  */
 
+namespace MediaWiki\SpecialPage;
+
+use LogicException;
 use MediaWiki\Title\Title;
 
 /**
@@ -82,9 +82,9 @@ abstract class RedirectSpecialPage extends UnlistedSpecialPage {
 		foreach ( array_merge( $this->mAllowedRedirectParams,
 				[ 'uselang', 'useskin', 'variant', 'debug', 'safemode' ] // parameters which can be passed to all pages
 			) as $arg ) {
-			if ( $request->getVal( $arg, null ) !== null ) {
+			if ( $request->getVal( $arg ) !== null ) {
 				$params[$arg] = $request->getVal( $arg );
-			} elseif ( $request->getArray( $arg, null ) !== null ) {
+			} elseif ( $request->getArray( $arg ) !== null ) {
 				$params[$arg] = $request->getArray( $arg );
 			}
 		}
@@ -119,3 +119,6 @@ abstract class RedirectSpecialPage extends UnlistedSpecialPage {
 		throw new LogicException( "RedirectSpecialPage $class doesn't redirect!" );
 	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( RedirectSpecialPage::class, 'RedirectSpecialPage' );

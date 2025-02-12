@@ -24,13 +24,13 @@ use MediaWiki\Page\PageReferenceValue;
 use Wikimedia\Assert\ParameterAssertionException;
 
 /**
- * @covers MediaWiki\Page\PageReferenceValue
+ * @covers \MediaWiki\Page\PageReferenceValue
  *
  * @group Title
  */
 class PageReferenceValueTest extends MediaWikiUnitTestCase {
 
-	public function goodConstructorProvider() {
+	public static function goodConstructorProvider() {
 		return [
 			[ NS_MAIN, 'Test', false ],
 			[ NS_MAIN, 'Test', false ],
@@ -51,7 +51,7 @@ class PageReferenceValueTest extends MediaWikiUnitTestCase {
 		$this->assertSame( $dbKey, $pageReference->getDBkey() );
 	}
 
-	public function badConstructorProvider() {
+	public static function badConstructorProvider() {
 		return [
 			[ NS_MAIN, 'Test', 2.3 ],
 		];

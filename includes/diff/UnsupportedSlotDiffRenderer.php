@@ -21,6 +21,7 @@
  * @ingroup DifferenceEngine
  */
 
+use MediaWiki\Content\Content;
 use MediaWiki\Html\Html;
 
 /**
@@ -37,15 +38,12 @@ class UnsupportedSlotDiffRenderer extends SlotDiffRenderer {
 	 */
 	private $localizer;
 
-	/**
-	 * @param MessageLocalizer $localizer
-	 */
 	public function __construct( MessageLocalizer $localizer ) {
 		$this->localizer = $localizer;
 	}
 
 	/** @inheritDoc */
-	public function getDiff( Content $oldContent = null, Content $newContent = null ) {
+	public function getDiff( ?Content $oldContent = null, ?Content $newContent = null ) {
 		$this->normalizeContents( $oldContent, $newContent );
 
 		$oldModel = $oldContent->getModel();

@@ -1,6 +1,6 @@
 <?php
 /**
- * Copyright © 2004 Brion Vibber <brion@pobox.com>
+ * Copyright © 2004 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
  * This program is free software; you can redistribute it and/or modify
@@ -52,7 +52,9 @@ class RSSFeed extends ChannelFeed {
 		// uses htmlentities, which does not work with XML
 		$templateParams = [
 			'title' => $this->getTitle(),
-			'url' => $this->xmlEncode( wfExpandUrl( $this->getUrlUnescaped(), PROTO_CURRENT ) ),
+			'url' => $this->xmlEncode(
+				$this->urlUtils->expand( $this->getUrlUnescaped(), PROTO_CURRENT ) ?? ''
+			),
 			'description' => $this->getDescription(),
 			'language' => $this->xmlEncode( $this->getLanguage() ),
 			'version' => $this->xmlEncode( MW_VERSION ),
@@ -70,7 +72,9 @@ class RSSFeed extends ChannelFeed {
 		// uses htmlentities, which does not work with XML
 		$templateParams = [
 			"title" => $item->getTitle(),
-			"url" => $this->xmlEncode( wfExpandUrl( $item->getUrlUnescaped(), PROTO_CURRENT ) ),
+			"url" => $this->xmlEncode(
+				$this->urlUtils->expand( $item->getUrlUnescaped(), PROTO_CURRENT ) ?? ''
+			),
 			"permalink" => $item->rssIsPermalink,
 			"uniqueID" => $item->getUniqueID(),
 			"description" => $item->getDescription(),
@@ -79,7 +83,9 @@ class RSSFeed extends ChannelFeed {
 		];
 		$comments = $item->getCommentsUnescaped();
 		if ( $comments ) {
-			$commentsEscaped = $this->xmlEncode( wfExpandUrl( $comments, PROTO_CURRENT ) );
+			$commentsEscaped = $this->xmlEncode(
+				$this->urlUtils->expand( $comments, PROTO_CURRENT ) ?? ''
+			);
 			$templateParams["comments"] = $commentsEscaped;
 		}
 		print $this->templateParser->processTemplate( 'RSSItem', $templateParams );
@@ -93,4 +99,5 @@ class RSSFeed extends ChannelFeed {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( RSSFeed::class, 'RSSFeed' );

@@ -2,7 +2,7 @@
 /**
  * MediaWiki page data importer.
  *
- * Copyright © 2003,2005 Brion Vibber <brion@pobox.com>
+ * Copyright © 2003,2005 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
  * This program is free software; you can redistribute it and/or modify
@@ -24,10 +24,15 @@
  * @ingroup SpecialPage
  */
 
+use MediaWiki\Content\Content;
+use MediaWiki\Content\ContentHandler;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Revision\MutableRevisionSlots;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Title\Title;
+use MediaWiki\User\ExternalUserNames;
+use MediaWiki\User\User;
+use MediaWiki\User\UserIdentityValue;
 
 /**
  * Represents a revision, log entry or upload during the import process.
@@ -116,10 +121,7 @@ class WikiRevision implements ImportableUploadRevision, ImportableOldRevision {
 	 */
 	public $comment = "";
 
-	/**
-	 * @var MutableRevisionSlots
-	 */
-	private $slots;
+	private MutableRevisionSlots $slots;
 
 	/**
 	 * @since 1.5.7
@@ -194,20 +196,8 @@ class WikiRevision implements ImportableUploadRevision, ImportableOldRevision {
 		$this->slots = new MutableRevisionSlots();
 	}
 
-	/**
-	 * @since 1.7 taking a Title object (string before)
-	 * @param Title $title
-	 * @throws MWException
-	 */
-	public function setTitle( $title ) {
-		if ( is_object( $title ) ) {
-			$this->title = $title;
-		} elseif ( $title === null ) {
-			throw new MWException( "WikiRevision given a null title in import. "
-				. "You may need to adjust \$wgLegalTitleChars." );
-		} else {
-			throw new MWException( "WikiRevision given non-object title in import." );
-		}
+	public function setTitle( Title $title ) {
+		$this->title = $title;
 	}
 
 	/**
@@ -637,7 +627,7 @@ class WikiRevision implements ImportableUploadRevision, ImportableOldRevision {
 
 	/**
 	 * @since 1.4.1
-	 * @deprecated in 1.31. Use OldRevisionImporter::import
+	 * @deprecated since 1.31. Use OldRevisionImporter::import
 	 * @return bool
 	 */
 	public function importOldRevision() {
@@ -654,9 +644,16 @@ class WikiRevision implements ImportableUploadRevision, ImportableOldRevision {
 	 * @return bool
 	 */
 	public function importLogItem() {
-		$dbw = wfGetDB( DB_PRIMARY );
+		$services = MediaWikiServices::getInstance();
+		$dbw = $services->getConnectionProvider()->getPrimaryDatabase();
 
-		$user = $this->getUserObj() ?: User::newFromName( $this->getUser(), false );
+		$userName = $this->getUser();
+		if ( ExternalUserNames::isExternal( $userName ) ) {
+			// Use newAnonymous() since the user name is already prefixed.
+			$user = UserIdentityValue::newAnonymous( $userName );
+		} else {
+			$user = $this->getUserObj() ?: User::newFromName( $userName, false );
+		}
 
 		# @todo FIXME: This will not record autoblocks
 		if ( !$this->getTitle() ) {
@@ -666,15 +663,18 @@ class WikiRevision implements ImportableUploadRevision, ImportableOldRevision {
 		}
 		# Check if it exists already
 		// @todo FIXME: Use original log ID (better for backups)
-		$prior = (bool)$dbw->selectField( 'logging', '1',
-			[ 'log_type' => $this->getType(),
+		$prior = (bool)$dbw->newSelectQueryBuilder()
+			->select( '1' )
+			->from( 'logging' )
+			->where( [
+				'log_type' => $this->getType(),
 				'log_action' => $this->getAction(),
 				'log_timestamp' => $dbw->timestamp( $this->timestamp ),
 				'log_namespace' => $this->getTitle()->getNamespace(),
 				'log_title' => $this->getTitle()->getDBkey(),
-				'log_params' => $this->params ],
-			__METHOD__
-		);
+				'log_params' => $this->params
+			] )
+			->caller( __METHOD__ )->fetchField();
 		// @todo FIXME: This could fail slightly for multiple matches :P
 		if ( $prior ) {
 			wfDebug( __METHOD__
@@ -682,19 +682,19 @@ class WikiRevision implements ImportableUploadRevision, ImportableOldRevision {
 				. $this->timestamp );
 			return false;
 		}
-		$services = MediaWikiServices::getInstance();
 		$actorId = $services->getActorNormalization()->acquireActorId( $user, $dbw );
-		$data = [
-			'log_type' => $this->type,
-			'log_action' => $this->action,
-			'log_timestamp' => $dbw->timestamp( $this->timestamp ),
-			'log_actor' => $actorId,
-			'log_namespace' => $this->getTitle()->getNamespace(),
-			'log_title' => $this->getTitle()->getDBkey(),
-			'log_params' => $this->params
-		] + $services->getCommentStore()->insert( $dbw, 'log_comment', $this->getComment() );
-		$dbw->insert( 'logging', $data, __METHOD__ );
-
+		$dbw->newInsertQueryBuilder()
+			->insertInto( 'logging' )
+			->row( [
+				'log_type' => $this->type,
+				'log_action' => $this->action,
+				'log_timestamp' => $dbw->timestamp( $this->timestamp ),
+				'log_actor' => $actorId,
+				'log_namespace' => $this->getTitle()->getNamespace(),
+				'log_title' => $this->getTitle()->getDBkey(),
+				'log_params' => $this->params
+				] + $services->getCommentStore()->insert( $dbw, 'log_comment', $this->getComment() ) )
+			->caller( __METHOD__ )->execute();
 		return true;
 	}
 

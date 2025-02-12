@@ -2,8 +2,8 @@
 
 namespace Wikimedia\Tests\Message;
 
-use MediaWiki\Message\UserGroupMembershipParam;
-use MediaWiki\User\UserIdentityValue;
+use MediaWiki\Json\JsonCodec;
+use MediaWikiUnitTestCase;
 use Wikimedia\Message\ListType;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\Message\ParamType;
@@ -12,33 +12,54 @@ use Wikimedia\Message\ScalarParam;
 /**
  * @covers \Wikimedia\Message\MessageValue
  */
-class MessageValueTest extends \PHPUnit\Framework\TestCase {
+class MessageValueTest extends MediaWikiUnitTestCase {
+	use MessageSerializationTestTrait;
+
+	public static function getClassToTest(): string {
+		return MessageValue::class;
+	}
+
 	public static function provideConstruct() {
 		return [
-			[
-				[],
+			'empty' => [
+				[ 'key', [] ],
 				'<message key="key"></message>',
 			],
-			[
-				[ 'a' ],
+			'withText' => [
+				[ 'key', [ 'a' ] ],
 				'<message key="key"><text>a</text></message>'
 			],
-			[
-				[ new ScalarParam( ParamType::BITRATE, 100 ) ],
+			'withScalarParam' => [
+				[ 'key', [ new ScalarParam( ParamType::BITRATE, 100 ) ] ],
 				'<message key="key"><bitrate>100</bitrate></message>'
 			],
 		];
 	}
 
 	/** @dataProvider provideConstruct */
-	public function testConstruct( $input, $expected ) {
-		$mv = new MessageValue( 'key', $input );
+	public function testSerialize( $args, $_ ) {
+		[ $key, $input ] = $args;
+		$codec = new JsonCodec;
+		$obj = new MessageValue( $key, $input );
+
+		$serialized = $codec->serialize( $obj );
+		$newObj = $codec->deserialize( $serialized );
+
+		// XXX: would be nice to have a proper ::equals() method.
+		$this->assertEquals( $obj->dump(), $newObj->dump() );
+	}
+
+	/** @dataProvider provideConstruct */
+	public function testConstruct( $args, $expected ) {
+		[ $key, $input ] = $args;
+		$mv = new MessageValue( $key, $input );
 		$this->assertSame( $expected, $mv->dump() );
 	}
 
 	/** @dataProvider provideConstruct */
-	public function testNew( $input, $expected ) {
-		$mv = MessageValue::new( 'key', $input );
+	public function testNew( $args, $expected ) {
+		[ $key, $input ] = $args;
+		$mv = MessageValue::new( $key, $input );
 		$this->assertSame( $expected, $mv->dump() );
 	}
 
@@ -180,18 +201,6 @@ class MessageValueTest extends \PHPUnit\Framework\TestCase {
 		$mv2 = $mv->userGroupParams( 'bot' );
 		$this->assertSame( '<message key="key">' .
 			"<group>bot</group>" .
-			'</message>',
-			$mv->dump() );
-		$this->assertSame( $mv, $mv2 );
-	}
-
-	public function testUserGroupMemberParams() {
-		$mv = new MessageValue( 'key' );
-		$mv2 = $mv->objectParams(
-			new UserGroupMembershipParam( 'bot', new UserIdentityValue( 1, 'user' ) )
-		);
-		$this->assertSame( '<message key="key">' .
-			'<object>bot:user</object>' .
 			'</message>',
 			$mv->dump() );
 		$this->assertSame( $mv, $mv2 );

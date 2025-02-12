@@ -32,18 +32,14 @@ use Wikimedia\Parsoid\Config\SiteConfig;
  * transition is complete.  Use MediaWikiServices instead.
  */
 class ParsoidServices {
+	private MediaWikiServices $services;
 
-	/** @var MediaWikiServices */
-	private $services;
-
-	/**
-	 * @param MediaWikiServices $services
-	 */
 	public function __construct( MediaWikiServices $services ) {
 		$this->services = $services;
 	}
 
 	/**
+	 * @deprecated since 1.39.
 	 * @return DataAccess
 	 */
 	public function getParsoidDataAccess(): DataAccess {
@@ -52,6 +48,7 @@ class ParsoidServices {
 	}
 
 	/**
+	 * @deprecated since 1.39.
 	 * @return PageConfigFactory
 	 */
 	public function getParsoidPageConfigFactory(): PageConfigFactory {
@@ -60,6 +57,7 @@ class ParsoidServices {
 	}
 
 	/**
+	 * @deprecated since 1.39.
 	 * @return SiteConfig
 	 */
 	public function getParsoidSiteConfig(): SiteConfig {

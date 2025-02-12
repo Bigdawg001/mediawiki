@@ -18,7 +18,11 @@
  * @file
  */
 
+use MediaWiki\Maintenance\LoggedUpdateMaintenance;
+
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script that merges the revision_comment_temp table into the
@@ -79,12 +83,11 @@ class MigrateRevisionCommentTemp extends LoggedUpdateMaintenance {
 			$last = null;
 			foreach ( $res as $row ) {
 				$last = $row->rev_id;
-				$dbw->update(
-					'revision',
-					[ 'rev_comment_id' => $row->revcomment_comment_id ],
-					[ 'rev_id' => $row->rev_id ],
-					__METHOD__
-				);
+				$dbw->newUpdateQueryBuilder()
+					->update( 'revision' )
+					->set( [ 'rev_comment_id' => $row->revcomment_comment_id ] )
+					->where( [ 'rev_id' => $row->rev_id ] )
+					->caller( __METHOD__ )->execute();
 				$updated += $dbw->affectedRows();
 			}
 
@@ -95,7 +98,7 @@ class MigrateRevisionCommentTemp extends LoggedUpdateMaintenance {
 
 			// @phan-suppress-next-line PhanTypeSuspiciousStringExpression last is not-null when used
 			$this->output( "... rev_id=$last, updated $updated\n" );
-			$conds = [ $dbw->buildComparison( '>', [ 'rev_id' => $last ] ) ];
+			$conds = [ $dbw->expr( 'rev_id', '>', $last ) ];
 
 			// Sleep between batches for replication to catch up
 			$this->waitForReplication();
@@ -111,5 +114,7 @@ class MigrateRevisionCommentTemp extends LoggedUpdateMaintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = MigrateRevisionCommentTemp::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

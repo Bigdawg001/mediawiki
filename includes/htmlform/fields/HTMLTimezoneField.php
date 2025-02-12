@@ -1,8 +1,15 @@
 <?php
 
+namespace MediaWiki\HTMLForm\Field;
+
+use DateTime;
+use DateTimeZone;
+use InvalidArgumentException;
+use MediaWiki\Context\RequestContext;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\User\UserTimeCorrection;
+use MediaWiki\Utils\MWTimestamp;
 use Wikimedia\Message\ITextFormatter;
 use Wikimedia\Message\MessageValue;
 
@@ -162,3 +169,6 @@ class HTMLTimezoneField extends HTMLSelectOrOtherField {
 		return $classes;
 	}
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( HTMLTimezoneField::class, 'HTMLTimezoneField' );

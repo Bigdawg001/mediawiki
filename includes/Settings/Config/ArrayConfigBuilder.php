@@ -2,7 +2,7 @@
 
 namespace MediaWiki\Settings\Config;
 
-use HashConfig;
+use MediaWiki\Config\HashConfig;
 use MediaWiki\Config\IterableConfig;
 use function array_key_exists;
 
@@ -48,8 +48,6 @@ class ArrayConfigBuilder extends ConfigBuilderBase {
 
 	/**
 	 * Build the configuration.
-	 *
-	 * @return IterableConfig
 	 */
 	public function build(): IterableConfig {
 		return new HashConfig( $this->config );

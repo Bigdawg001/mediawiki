@@ -76,21 +76,19 @@ class SerializationTestUtils {
 		$this->logger = new NullLogger();
 	}
 
-	/**
-	 * @param LoggerInterface $logger
-	 */
 	public function setLogger( LoggerInterface $logger ): void {
 		$this->logger = $logger;
 	}
 
 	/**
 	 * Get the files with stored serialized instances of $class with extension $ext.
-	 * @param string $class
+	 * @param class-string $class
 	 * @param string $ext
 	 * @return array
 	 */
 	private function getMatchingFiles( string $class, string $ext ): array {
-		$glob = $this->serializedDataPath . "/*-{$class}-*.$ext";
+		$classFile = self::classToFile( $class );
+		$glob = $this->serializedDataPath . "/*-{$classFile}-*.$ext";
 		$matches = glob( $glob );
 
 		if ( !$matches ) {
@@ -99,7 +97,7 @@ class SerializationTestUtils {
 		}
 
 		// File names should look something like this: "1.35-CacheTime-empty.serialized".
-		$pattern = '!/([^/-]+)-' . preg_quote( $class, '!' ) . '-([^/-]+)\.[^/]+$!';
+		$pattern = '!/([^/-]+)-' . preg_quote( $classFile, '!' ) . '-([^/-]+)\.[^/]+$!';
 
 		$files = [];
 		foreach ( $matches as $path ) {
@@ -142,12 +140,12 @@ class SerializationTestUtils {
 	/**
 	 * Get an array of instances of $class deserialized from
 	 * files for different code versions, keyed by the test case name.
-	 * @param string $class
+	 * @param class-string $class
 	 * @return array
 	 */
 	private function getDeserializedInstances( string $class ): array {
 		return array_map( function ( $fileInfo ) {
-			$fileInfo->object = call_user_func( $this->deserializer, $fileInfo->data );
+			$fileInfo->object = ( $this->deserializer )( $fileInfo->data );
 			return $fileInfo;
 		}, $this->getMatchingFiles( $class, $this->ext ) );
 	}
@@ -155,7 +153,7 @@ class SerializationTestUtils {
 	/**
 	 * Get an array of serialization fixtures for $class stored in files
 	 * for different MW versions, for test case name $testCaseName.
-	 * @param string $class
+	 * @param class-string $class
 	 * @param string $testCaseName
 	 * @return array
 	 */
@@ -170,7 +168,7 @@ class SerializationTestUtils {
 	/**
 	 * Get an array of instances of $class deserialized from stored files
 	 * for different MW versions, for test case named $testCaseName.
-	 * @param string $class
+	 * @param class-string $class
 	 * @param string $testCaseName
 	 * @return array
 	 */
@@ -185,19 +183,18 @@ class SerializationTestUtils {
 	/**
 	 * Get test objects of $class, serialized using $serializer,
 	 * keyed by test case name.
-	 * @return array
 	 */
 	public function getSerializedInstances(): array {
 		$instances = $this->getTestInstances();
 		return array_map( function ( $object )  {
-			return call_user_func( $this->serializer, $object );
+			return ( $this->serializer )( $object );
 		}, $instances );
 	}
 
 	/**
 	 * Get the file info about a stored serialized instance of $class,
 	 * for test case $testCaseName with extension $ext for $version of MW.
-	 * @param string $class
+	 * @param class-string $class
 	 * @param string $testCaseName
 	 * @param string|null $version
 	 * @return \stdClass
@@ -205,17 +202,29 @@ class SerializationTestUtils {
 	public function getStoredSerializedInstance(
 		string $class,
 		string $testCaseName,
-		string $version = null
+		?string $version = null
 	) {
+		$classFile = self::classToFile( $class );
+		$curPath = "$this->serializedDataPath/{$this->getCurrentVersion()}-$classFile-$testCaseName.$this->ext";
 		if ( $version ) {
-			$path = "$this->serializedDataPath/$version-$class-$testCaseName.$this->ext";
+			$path = "$this->serializedDataPath/$version-$classFile-$testCaseName.$this->ext";
 		} else {
 			// Find the latest version we have saved.
-			$savedFiles = glob( "$this->serializedDataPath/?.??-$class-$testCaseName.$this->ext" );
-			sort( $savedFiles );
-			$path = $savedFiles[count( $savedFiles ) - 1];
+			$savedFiles = glob( "$this->serializedDataPath/?.??*-$classFile-$testCaseName.$this->ext" );
+			if ( count( $savedFiles ) > 0 ) {
+				// swap _ and - to ensure that 1.43-foo sorts after 1.43_wmf...-foo
+				usort(
+					$savedFiles,
+					static fn ( $a, $b ) => strtr( $a, '-_', '_-' ) <=> strtr( $b, '-_', '_-' )
+				);
+				$path = end( $savedFiles );
+			} else {
+				// Handle creation of a new test case from scratch (no prior
+				// serialization file exists)
+				$path = $curPath;
+			}
 		}
-		$curPath = "$this->serializedDataPath/{$this->getCurrentVersion()}-$class-$testCaseName.$this->ext";
+
 		return (object)[
 			'version' => $version,
 			'class' => $class,
@@ -229,10 +238,24 @@ class SerializationTestUtils {
 
 	/**
 	 * Returns the current version of MediaWiki in `1.xx` format.
-	 * @return string
 	 */
 	private function getCurrentVersion(): string {
 		return preg_replace( '/^(\d\.\d+).*$/', '$1', MW_VERSION );
+	}
+
+	/**
+	 * Clean up the class name to make a filename.
+	 *
+	 * At the moment this strips the namespace prefix; in the future
+	 * we might consider keeping it but replacing backslashes with
+	 * dashes or some such.
+	 *
+	 * @param class-string $class
+	 * @return string A cleaned-up filename
+	 */
+	private static function classToFile( string $class ): string {
+		$arr = explode( '\\', $class );
+		return end( $arr );
 	}
 
 	private function log( $msg ) {

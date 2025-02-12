@@ -1,8 +1,11 @@
 <?php
 
-use MediaWiki\MediaWikiServices;
-
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
+
+use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\Site\MediaWikiSite;
 
 /**
  * Maintenance script for adding a site definition into the sites table.
@@ -37,10 +40,9 @@ class AddSite extends Maintenance {
 	/**
 	 * Imports the site described by the parameters (see self::__construct()) passed to this
 	 * maintenance sccript into the sites table of MediaWiki.
-	 * @return bool
 	 */
 	public function execute() {
-		$siteStore = MediaWikiServices::getInstance()->getSiteStore();
+		$siteStore = $this->getServiceContainer()->getSiteStore();
 		if ( method_exists( $siteStore, 'reset' ) ) {
 			// @phan-suppress-next-line PhanUndeclaredMethod
 			$siteStore->reset();
@@ -55,13 +57,11 @@ class AddSite extends Maintenance {
 		$filepath = $this->getOption( 'filepath' );
 
 		if ( !is_string( $globalId ) || !is_string( $group ) ) {
-			$this->error( 'Arguments globalid and group need to be strings.' );
-			return false;
+			$this->fatalError( 'Arguments globalid and group need to be strings.' );
 		}
 
 		if ( $siteStore->getSite( $globalId ) !== null ) {
-			$this->error( "Site with global id $globalId already exists." );
-			return false;
+			$this->fatalError( "Site with global id $globalId already exists." );
 		}
 
 		$site = new MediaWikiSite();
@@ -97,5 +97,7 @@ class AddSite extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = AddSite::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

@@ -2,22 +2,24 @@
 
 namespace MediaWiki\Tests\Integration\Permissions;
 
-use CentralIdLookup;
-use HashBagOStuff;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Permissions\RateLimiter;
 use MediaWiki\Permissions\RateLimitSubject;
+use MediaWiki\User\CentralId\CentralIdLookup;
 use MediaWiki\User\UserIdentity;
 use MediaWiki\User\UserIdentityValue;
 use MediaWikiIntegrationTestCase;
 use PHPUnit\Framework\MockObject\MockObject;
+use Wikimedia\ObjectCache\HashBagOStuff;
+use Wikimedia\Stats\StatsFactory;
 use Wikimedia\TestingAccessWrapper;
 use Wikimedia\WRStats\BagOStuffStatsStore;
 use Wikimedia\WRStats\WRStatsFactory;
 
 /**
- * @coversDefaultClass \MediaWiki\Permissions\RateLimiter
+ * @covers \MediaWiki\Permissions\RateLimiter
+ * @group Database
  */
 class RateLimiterTest extends MediaWikiIntegrationTestCase {
 
@@ -41,14 +43,14 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers ::limit
-	 * @covers ::__construct
-	 * @covers ::getConditions
 	 * @covers \Wikimedia\WRStats\WRStatsFactory
 	 * @covers \Wikimedia\WRStats\BagOStuffStatsStore
 	 */
 	public function testPingLimiterGlobal() {
 		$limits = [
+			'read' => [ // not limitable, will be ignored
+				'anon' => [ 1, 60 ],
+			],
 			'edit' => [
 				'anon' => [ 1, 60 ],
 			],
@@ -73,9 +75,10 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 		$cacheAccess = TestingAccessWrapper::newFromObject( $cache );
 		$cacheAccess->keyspace = 'xwiki';
 
-		$statsFactory = new WRStatsFactory( new BagOStuffStatsStore( $cache ) );
-
-		$limiter = $this->newRateLimiter( $limits, [], $statsFactory );
+		$wrStatsFactory = new WRStatsFactory( new BagOStuffStatsStore( $cache ) );
+		$statsHelper = StatsFactory::newUnitTestingHelper();
+		$limiter = $this->newRateLimiter( $limits, [], $wrStatsFactory );
+		$limiter->setStats( $statsHelper->getStatsFactory() );
 
 		// Set up some fake users
 		$anon1 = $this->newFakeAnon( '1.2.3.4' );
@@ -96,6 +99,9 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 		$karaY1 = $this->newFakeUser( 'Kara', '5.5.5.5', 200 );
 
 		// Test limits on wiki X
+		$this->assertFalse( $limiter->limit( $anon1, 'read' ), 'First anon read' );
+		$this->assertFalse( $limiter->limit( $anon2, 'read' ), 'Second anon read (should ignore any limits)' );
+
 		$this->assertFalse( $limiter->limit( $anon1, 'edit' ), 'First anon edit' );
 		$this->assertTrue( $limiter->limit( $anon2, 'edit' ), 'Second anon edit' );
 
@@ -134,12 +140,23 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 		// For a user without a global ID, user-global acts as a local restriction
 		$this->assertFalse( $limiter->limit( $karaY1, 'move' ), 'Move by another user' );
 		$this->assertTrue( $limiter->limit( $karaY1, 'move' ), 'Second move by another user' );
+
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="edit",tripped_by="anon"}' );
+		$this->assertEquals( 2, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="purge",tripped_by="ip"}' );
+		$this->assertEquals( 5, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="purge",tripped_by="subnet"}' );
+		$this->assertEquals( 7, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="delete",tripped_by="ip_all"}' );
+		$this->assertEquals( 7, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="delete",tripped_by="subnet_all"}' );
+		$this->assertEquals( 8, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="rollback",tripped_by="user"}' );
+		$this->assertEquals( 2, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="move",tripped_by="user_global"}' );
+		$this->assertEquals( 10, $actual );
 	}
 
-	/**
-	 * @covers ::limit
-	 * @covers ::getConditions
-	 */
 	public function testPingLimiterWithStaleCache() {
 		$limits = [
 			'edit' => [
@@ -172,10 +189,6 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 		$this->assertTrue( $limiter->limit( $user, 'edit' ), 'limit functional after expiry' );
 	}
 
-	/**
-	 * @covers ::limit
-	 * @covers ::getConditions
-	 */
 	public function testPingLimiterRate() {
 		$limits = [
 			'edit' => [
@@ -211,9 +224,6 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 		$this->assertFalse( $limiter->limit( $user, 'edit' ), 'fifth ping should pass' );
 	}
 
-	/**
-	 * @covers ::limit
-	 */
 	public function testPingLimiterHook() {
 		$limits = [
 			'edit' => [
@@ -221,8 +231,12 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 			],
 		];
 
+		$statsHelper = StatsFactory::newUnitTestingHelper();
+		$statsFactory = $statsHelper->getStatsFactory();
+
 		$user = $this->newFakeUser( 'Frank', '1.2.3.4', 111 );
 		$limiter = $this->newRateLimiter( $limits, [] );
+		$limiter->setStats( $statsFactory );
 
 		// Hook leaves $result false
 		$this->setTemporaryHook(
@@ -249,6 +263,10 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 			$limiter->limit( $user, 'edit' ),
 			'Hooks can set $result to true'
 		);
+		$this->assertFalse(
+			$limiter->limit( $user, 'read' ),
+			'The "read" permission will bypass the hook'
+		);
 		$this->removeTemporaryHook( 'PingLimiter' );
 
 		// Unknown action
@@ -256,6 +274,44 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 			$limiter->limit( $user, 'FakeActionWithNoRateLimit' ),
 			'Actions with no rate limit set do not trip the rate limiter'
 		);
+
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",tripped_by="passed_by_hook"}' );
+		$this->assertEquals( 2, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",tripped_by="tripped_by_hook"}' );
+		$this->assertEquals( 2, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",tripped_by="passed"}' );
+		$this->assertEquals( 2, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",tripped_by="tripped"}' );
+		$this->assertEquals( 2, $actual );
+	}
+
+	public function testIsLimitableAction() {
+		$limits = [
+			'read' => [ // will be ignored, because 'read' is non-limitable
+				'user' => [ 3, 60 ],
+			],
+			'edit' => [
+				'user' => [ 3, 60 ],
+			],
+		];
+
+		$limiter = $this->newRateLimiter( $limits, [] );
+
+		$this->assertTrue( $limiter->isLimitable( 'edit' ), 'edit should be limitable' );
+		$this->assertFalse( $limiter->isLimitable( 'read' ), 'read should be non-limitable' );
+		$this->assertFalse( $limiter->isLimitable( 'move' ), 'move should not be limited' );
+
+		// Set the hook!
+		$this->setTemporaryHook(
+			'PingLimiter',
+			static function () {
+				// no-op
+			}
+		);
+
+		$this->assertTrue( $limiter->isLimitable( 'edit' ), 'edit should be limitable' );
+		$this->assertFalse( $limiter->isLimitable( 'read' ), 'read should be non-limitable' );
+		$this->assertTrue( $limiter->isLimitable( 'move' ), 'move should be limitable because of hook' );
 	}
 
 	public static function provideIsExempt() {
@@ -277,7 +333,6 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 
 	/**
 	 * @dataProvider provideIsExempt
-	 * @covers ::isExempt
 	 *
 	 * @param array $rateLimitExcludeIps
 	 * @param RateLimitSubject $subject
@@ -320,11 +375,9 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 	protected function newRateLimiter(
 		array $limits,
 		array $excludedIPs,
-		WRStatsFactory $statsFactory = null
+		?WRStatsFactory $statsFactory = null
 	): RateLimiter {
-		if ( $statsFactory === null ) {
-			$statsFactory = new WRStatsFactory( new BagOStuffStatsStore( new HashBagOStuff() ) );
-		}
+		$statsFactory ??= new WRStatsFactory( new BagOStuffStatsStore( new HashBagOStuff() ) );
 
 		$services = $this->getServiceContainer();
 
@@ -344,9 +397,9 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * Test limit with different limit types
-	 * @covers ::limit
-	 * @covers ::getConditions
+	 * Test limit with different limit types:
+	 * - newbie trips the 'user' limit when 'newbie' not set
+	 * - newbie trips the 'ip' limit on shared IP when 'user' is set
 	 */
 	public function testLimitTypes() {
 		$limits = [
@@ -356,21 +409,53 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 			],
 		];
 
-		$user1 = $this->newFakeUser( 'User1', '127.0.0.1', 1, true );
-		$user2 = $this->newFakeUser( 'User2', '127.0.0.1', 2, true );
-		$user3 = $this->newFakeUser( 'User3', '127.0.0.1', 3, true );
+		$newbie1 = $this->newFakeUser( 'User1', '127.0.0.1', 1, true );
+		$newbie2 = $this->newFakeUser( 'User2', '127.0.0.1', 2, true );
+		$newbie3 = $this->newFakeUser( 'User3', '127.0.0.1', 3, true );
+
+		$statsHelper = StatsFactory::newUnitTestingHelper();
+		$limiter = $this->newRateLimiter( $limits, [] );
+		$limiter->setStats( $statsHelper->getStatsFactory() );
+
+		$this->assertFalse( $limiter->limit( $newbie1, 'edit' ) );
+		$this->assertFalse( $limiter->limit( $newbie2, 'edit' ) );
+		$this->assertTrue( $limiter->limit( $newbie3, 'edit' ) );
+
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",result="passed"}' );
+		$this->assertEquals( 5, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",result="tripped"}' );
+		$this->assertEquals( 4, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="edit",tripped_by="ip"}' );
+		$this->assertEquals( 2, $actual );
+	}
+
+	/**
+	 * Test limit when 'newbie' is set:
+	 * - 'newbie' limit takes precedence over 'user' limit for newbie
+	 * - newbie trips the 'ip' limit on a shared IP, when 'newbie' limit is set
+	 */
+	public function testLimitTypes_newbie() {
+		$limits = [
+			'edit' => [
+				'user' => [ 10, 60 ],
+				'newbie' => [ 1, 60 ],
+				'ip' => [ 1, 60 ],
+			],
+		];
+
+		$newbie1 = $this->newFakeUser( 'User1', '127.0.0.1', 1, true );
+		$newbie2 = $this->newFakeUser( 'User2', '127.0.0.1', 2, true );
 
 		$limiter = $this->newRateLimiter( $limits, [] );
-		$this->assertFalse( $limiter->limit( $user1, 'edit' ) );
-		$this->assertFalse( $limiter->limit( $user2, 'edit' ) );
-		$this->assertTrue( $limiter->limit( $user3, 'edit' ) );
+
+		$this->assertFalse( $limiter->limit( $newbie1, 'edit' ) );
+		$this->assertTrue( $limiter->limit( $newbie1, 'edit' ) );
+		$this->assertTrue( $limiter->limit( $newbie2, 'edit' ) );
 	}
 
 	/**
 	 * Test that '&can-bypass' can be used to impose limits on users
 	 * who are otherwise exempt from limits.
-	 *
-	 * @covers ::limit
 	 */
 	public function testCanBypass() {
 		$limits = [
@@ -389,19 +474,27 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 			[ RateLimitSubject::EXEMPT => true ]
 		);
 
+		$statsHelper = StatsFactory::newUnitTestingHelper();
 		$limiter = $this->newRateLimiter( $limits, [] );
+		$limiter->setStats( $statsHelper->getStatsFactory() );
+
 		$this->assertFalse( $limiter->limit( $user, 'edit' ) );
 		$this->assertFalse( $limiter->limit( $user, 'delete' ) );
 
 		$this->assertFalse( $limiter->limit( $user, 'edit' ), 'bypass should be granted' );
 		$this->assertTrue( $limiter->limit( $user, 'delete' ), 'bypass should be denied' );
+
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",result="exempt"}' );
+		$this->assertEquals( 4, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="delete",result="exempt"}' );
+		$this->assertEquals( 2, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="delete",result="tripped"}' );
+		$this->assertEquals( 3, $actual );
 	}
 
 	/**
 	 * Test that the most permissive limit is used when a limit is defined for
 	 * multiple groups a user belongs to.
-	 *
-	 * @covers ::limit
 	 */
 	public function testGroupLimits() {
 		$limits = [
@@ -414,10 +507,19 @@ class RateLimiterTest extends MediaWikiIntegrationTestCase {
 		$user = $this->getTestUser( [ 'autoconfirmed' ] )->getUser();
 		$user = new RateLimitSubject( $user, '127.0.0.1', [] );
 
+		$statsHelper = StatsFactory::newUnitTestingHelper();
 		$limiter = $this->newRateLimiter( $limits, [] );
+		$limiter->setStats( $statsHelper->getStatsFactory() );
+
 		$this->assertFalse( $limiter->limit( $user, 'edit' ) );
 		$this->assertFalse( $limiter->limit( $user, 'edit' ), 'limit for autoconfirmed used' );
 		$this->assertTrue( $limiter->limit( $user, 'edit' ), 'limit for autoconfirmed exceeded' );
-	}
 
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",result="passed"}' );
+		$this->assertEquals( 5, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_actions_total{action="edit",result="tripped"}' );
+		$this->assertEquals( 4, $actual );
+		$actual = $statsHelper->count( 'RateLimiter_limit_cause_total{action="edit",tripped_by="autoconfirmed"}' );
+		$this->assertEquals( 2, $actual );
+	}
 }

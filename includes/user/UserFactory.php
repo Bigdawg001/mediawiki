@@ -1,7 +1,5 @@
 <?php
 /**
- * Factory for creating User objects without static coupling.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -22,44 +20,56 @@
 
 namespace MediaWiki\User;
 
-use DBAccessObjectUtils;
-use IDBAccessObject;
 use InvalidArgumentException;
+use MediaWiki\Config\ServiceOptions;
+use MediaWiki\Logger\LoggerFactory;
+use MediaWiki\MainConfigNames;
 use MediaWiki\Permissions\Authority;
+use RuntimeException;
 use stdClass;
-use User;
+use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IDBAccessObject;
+use Wikimedia\Rdbms\ILBFactory;
 use Wikimedia\Rdbms\ILoadBalancer;
 
 /**
- * Creates User objects.
+ * Create User objects.
+ *
+ * This creates User objects, and involves all the same global state,
+ * but wraps it in a service class to avoid static coupling, which
+ * eases mocking in unit tests.
  *
  * @since 1.35
+ * @ingroup User
  */
-class UserFactory implements IDBAccessObject, UserRigorOptions {
+class UserFactory implements UserRigorOptions {
 
 	/**
 	 * RIGOR_* constants are inherited from UserRigorOptions
-	 * READ_* constants are inherited from IDBAccessObject
 	 */
 
-	/** @var ILoadBalancer */
-	private $loadBalancer;
+	/** @internal */
+	public const CONSTRUCTOR_OPTIONS = [
+		MainConfigNames::SharedDB,
+		MainConfigNames::SharedTables,
+	];
 
-	/** @var UserNameUtils */
-	private $userNameUtils;
+	private ServiceOptions $options;
+	private ILBFactory $loadBalancerFactory;
+	private ILoadBalancer $loadBalancer;
+	private UserNameUtils $userNameUtils;
 
-	/** @var User|null */
-	private $lastUserFromIdentity = null;
+	private ?User $lastUserFromIdentity = null;
 
-	/**
-	 * @param ILoadBalancer $loadBalancer
-	 * @param UserNameUtils $userNameUtils
-	 */
 	public function __construct(
-		ILoadBalancer $loadBalancer,
+		ServiceOptions $options,
+		ILBFactory $loadBalancerFactory,
 		UserNameUtils $userNameUtils
 	) {
-		$this->loadBalancer = $loadBalancer;
+		$options->assertRequiredOptions( self::CONSTRUCTOR_OPTIONS );
+		$this->options = $options;
+		$this->loadBalancerFactory = $loadBalancerFactory;
+		$this->loadBalancer = $loadBalancerFactory->getMainLB();
 		$this->userNameUtils = $userNameUtils;
 	}
 
@@ -76,7 +86,8 @@ class UserFactory implements IDBAccessObject, UserRigorOptions {
 	 *
 	 * @param string $name Username, validated by Title::newFromText
 	 * @param string $validate Validation strategy, one of the RIGOR_* constants. For no
-	 *    validation, use RIGOR_NONE.
+	 *    validation, use RIGOR_NONE. If you just want to create valid user who can be either a named
+	 *    user or an IP, consider using newFromNameOrIp() instead of calling this with RIGOR_NONE.
 	 * @return ?User User object, or null if the username is invalid (e.g. if it contains
 	 *  illegal characters or is an IP address). If the username is not present in the database,
 	 *  the result will be a user object with a name, a user id of 0, and default settings.
@@ -120,6 +131,26 @@ class UserFactory implements IDBAccessObject, UserRigorOptions {
 	}
 
 	/**
+	 * Returns either an anonymous or a named User based on the supplied argument
+	 *
+	 * If IP is supplied, an anonymous user will be created, otherwise a valid named user.
+	 * If you don't want to have the named user validated, use self::newFromName().
+	 * If you want to create simple anonymous user without providing the IP, use self::newAnonymous()
+	 *
+	 * @since 1.44
+	 *
+	 * @param string $name IP address or username
+	 * @return User|null
+	 */
+	public function newFromNameOrIp( string $name ): ?User {
+		if ( $this->userNameUtils->isIP( $name ) ) {
+			return $this->newAnonymous( $name );
+		}
+
+		return $this->newFromName( $name );
+	}
+
+	/**
 	 * Factory method for creation from a given user ID, replacing User::newFromId
 	 *
 	 * @since 1.35
@@ -152,7 +183,7 @@ class UserFactory implements IDBAccessObject, UserRigorOptions {
 	}
 
 	/**
-	 * Factory method for creation fom a given UserIdentity, replacing User::newFromIdentity
+	 * Factory method for creation from a given UserIdentity, replacing User::newFromIdentity
 	 *
 	 * @since 1.35
 	 *
@@ -174,6 +205,7 @@ class UserFactory implements IDBAccessObject, UserRigorOptions {
 			$this->lastUserFromIdentity
 			&& $this->lastUserFromIdentity->getId() === $id
 			&& $this->lastUserFromIdentity->getName() === $name
+			&& $this->lastUserFromIdentity->getWikiId() === $userIdentity->getWikiId()
 		) {
 			return $this->lastUserFromIdentity;
 		}
@@ -181,7 +213,8 @@ class UserFactory implements IDBAccessObject, UserRigorOptions {
 		$this->lastUserFromIdentity = $this->newFromAnyId(
 			$id === 0 ? null : $id,
 			$name === '' ? null : $name,
-			null
+			null,
+			$userIdentity->getWikiId()
 		);
 
 		return $this->lastUserFromIdentity;
@@ -211,7 +244,13 @@ class UserFactory implements IDBAccessObject, UserRigorOptions {
 		// Stop-gap solution for the problem described in T222212.
 		// Force the User ID and Actor ID to zero for users loaded from the database
 		// of another wiki, to prevent subtle data corruption and confusing failure modes.
+		// FIXME this assumes the same username belongs to the same user on all wikis
 		if ( $dbDomain !== false ) {
+			LoggerFactory::getInstance( 'user' )->warning(
+				'UserFactory::newFromAnyId called with cross-wiki user data',
+				[ 'userId' => $userId, 'userName' => $userName, 'actorId' => $actorId,
+				  'dbDomain' => $dbDomain, 'exception' => new RuntimeException() ]
+			);
 			$userId = 0;
 			$actorId = 0;
 		}
@@ -264,22 +303,21 @@ class UserFactory implements IDBAccessObject, UserRigorOptions {
 	 */
 	public function newFromConfirmationCode(
 		string $confirmationCode,
-		int $flags = self::READ_NORMAL
-	) {
-		[ $index, $options ] = DBAccessObjectUtils::getDBOptions( $flags );
+		int $flags = IDBAccessObject::READ_NORMAL
+	): ?User {
+		if ( ( $flags & IDBAccessObject::READ_LATEST ) == IDBAccessObject::READ_LATEST ) {
+			$db = $this->loadBalancer->getConnection( DB_PRIMARY );
+		} else {
+			$db = $this->loadBalancer->getConnection( DB_REPLICA );
+		}
 
-		$db = $this->loadBalancer->getConnectionRef( $index );
-
-		$id = $db->selectField(
-			'user',
-			'user_id',
-			[
-				'user_email_token' => md5( $confirmationCode ),
-				'user_email_token_expires > ' . $db->addQuotes( $db->timestamp() ),
-			],
-			__METHOD__,
-			$options
-		);
+		$id = $db->newSelectQueryBuilder()
+			->select( 'user_id' )
+			->from( 'user' )
+			->where( [ 'user_email_token' => md5( $confirmationCode ) ] )
+			->andWhere( $db->expr( 'user_email_token_expires', '>', $db->timestamp() ) )
+			->recency( $flags )
+			->caller( __METHOD__ )->fetchField();
 
 		if ( !$id ) {
 			return null;
@@ -297,7 +335,7 @@ class UserFactory implements IDBAccessObject, UserRigorOptions {
 	 * @param array|null $data Further data to load into the object
 	 * @return User
 	 */
-	public function newFromRow( $row, $data = null ) {
+	public function newFromRow( $row, $data = null ): User {
 		return User::newFromRow( $row, $data );
 	}
 
@@ -321,22 +359,88 @@ class UserFactory implements IDBAccessObject, UserRigorOptions {
 	 * @since 1.39
 	 * @return User
 	 */
-	public function newTempPlaceholder() {
+	public function newTempPlaceholder(): User {
 		$user = new User();
 		$user->setName( $this->userNameUtils->getTempPlaceholder() );
 		return $user;
 	}
 
 	/**
-	 * Create an unsaved temporary user with a previously acquired name.
+	 * Create an unsaved temporary user with a previously acquired name or a placeholder name.
 	 *
 	 * @since 1.39
-	 * @param string $name
+	 * @param ?string $name If null, a placeholder name is used
 	 * @return User
 	 */
-	public function newUnsavedTempUser( string $name ) {
+	public function newUnsavedTempUser( ?string $name ): User {
 		$user = new User();
-		$user->setName( $name );
+		$user->setName( $name ?? $this->userNameUtils->getTempPlaceholder() );
 		return $user;
+	}
+
+	/**
+	 * Purge user related caches, "touch" the user table to invalidate further caches
+	 * @since 1.41
+	 * @param UserIdentity $userIdentity
+	 */
+	public function invalidateCache( UserIdentity $userIdentity ): void {
+		if ( !$userIdentity->isRegistered() ) {
+			return;
+		}
+
+		$wikiId = $userIdentity->getWikiId();
+		if ( $wikiId === UserIdentity::LOCAL ) {
+			$legacyUser = $this->newFromUserIdentity( $userIdentity );
+			// Update user_touched within User class to manage state of User::mTouched for CAS check
+			$legacyUser->invalidateCache();
+		} else {
+			// cross-wiki invalidation
+			$userId = $userIdentity->getId( $wikiId );
+
+			$dbw = $this->getUserTableConnection( ILoadBalancer::DB_PRIMARY, $wikiId );
+			$dbw->newUpdateQueryBuilder()
+				->update( 'user' )
+				->set( [ 'user_touched' => $dbw->timestamp() ] )
+				->where( [ 'user_id' => $userId ] )
+				->caller( __METHOD__ )->execute();
+
+			$dbw->onTransactionPreCommitOrIdle(
+				static function () use ( $wikiId, $userId ) {
+					User::purge( $wikiId, $userId );
+				},
+				__METHOD__
+			);
+		}
+	}
+
+	/**
+	 * @param int $mode
+	 * @param string|false $wikiId
+	 * @return IDatabase
+	 */
+	private function getUserTableConnection( $mode, $wikiId ): IDatabase {
+		if ( is_string( $wikiId ) && $this->loadBalancerFactory->getLocalDomainID() === $wikiId ) {
+			$wikiId = UserIdentity::LOCAL;
+		}
+
+		if ( $this->options->get( MainConfigNames::SharedDB ) &&
+			in_array( 'user', $this->options->get( MainConfigNames::SharedTables ) )
+		) {
+			// The main LB is aliased for the shared database in Setup.php
+			$lb = $this->loadBalancer;
+		} else {
+			$lb = $this->loadBalancerFactory->getMainLB( $wikiId );
+		}
+
+		return $lb->getConnection( $mode, [], $wikiId );
+	}
+
+	/**
+	 * Returns if the user table is shared with other wikis.
+	 * @return bool
+	 */
+	public function isUserTableShared(): bool {
+		return $this->options->get( MainConfigNames::SharedDB ) &&
+			in_array( 'user', $this->options->get( MainConfigNames::SharedTables ) );
 	}
 }

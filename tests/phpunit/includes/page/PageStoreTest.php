@@ -12,12 +12,15 @@ use MediaWiki\Page\PageIdentityValue;
 use MediaWiki\Page\PageRecord;
 use MediaWiki\Page\PageStore;
 use MediaWiki\Title\Title;
+use MediaWiki\Title\TitleValue;
 use MediaWikiIntegrationTestCase;
 use MockTitleTrait;
-use TitleValue;
 use Wikimedia\Assert\PreconditionException;
 use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IDBAccessObject;
 use Wikimedia\Rdbms\LoadBalancer;
+use Wikimedia\Stats\Metrics\MetricInterface;
+use Wikimedia\Stats\StatsFactory;
 
 /**
  * @group Database
@@ -27,9 +30,14 @@ class PageStoreTest extends MediaWikiIntegrationTestCase {
 	use MockTitleTrait;
 	use LinkCacheTestTrait;
 
+	private StatsFactory $statsFactory;
+	private MetricInterface $linkCacheAccesses;
+
 	protected function setUp(): void {
 		parent::setUp();
-		$this->tablesUsed[] = 'page';
+		$this->statsFactory = StatsFactory::newNull();
+
+		$this->linkCacheAccesses = $this->statsFactory->getCounter( 'pagestore_linkcache_accesses_total' );
 	}
 
 	/**
@@ -45,8 +53,8 @@ class PageStoreTest extends MediaWikiIntegrationTestCase {
 		$serviceOptions = new ServiceOptions(
 			PageStore::CONSTRUCTOR_OPTIONS,
 			$options + [
-				'LanguageCode' => $services->getContentLanguage()->getCode(),
-				'PageLanguageUseDB' => true
+				MainConfigNames::LanguageCode => $services->getContentLanguageCode()->toString(),
+				MainConfigNames::PageLanguageUseDB => true,
 			]
 		);
 
@@ -58,15 +66,11 @@ class PageStoreTest extends MediaWikiIntegrationTestCase {
 			array_key_exists( 'linkCache', $params )
 				? $params['linkCache']
 				: $services->getLinkCache(),
-			$services->getStatsdDataFactory(),
+			$this->statsFactory,
 			$params['wikiId'] ?? WikiAwareEntity::LOCAL
 		);
 	}
 
-	/**
-	 * @param PageIdentity $expected
-	 * @param PageIdentity $actual
-	 */
 	private function assertSamePage( PageIdentity $expected, PageIdentity $actual ) {
 		// NOTE: Leave it to the caller to compare the wiki IDs. $expected may be local
 		//       even if $actual belongs to a (pretend) sister site.
@@ -123,7 +127,7 @@ class PageStoreTest extends MediaWikiIntegrationTestCase {
 	 * @covers \MediaWiki\Page\PageStore::getPageForLink
 	 */
 	public function testGetPageForLink_crossWiki() {
-		$wikiId = $this->db->getDomainID(); // pretend sister site
+		$wikiId = $this->getDb()->getDomainID(); // pretend sister site
 
 		$nonexistingPage = $this->getNonexistingTestPage();
 		$pageStore = $this->getPageStore( [], [ 'wikiId' => $wikiId, 'linkCache' => null ] );
@@ -206,6 +210,7 @@ class PageStoreTest extends MediaWikiIntegrationTestCase {
 
 		$linkCache = $this->getServiceContainer()->getLinkCache();
 		$this->assertSame( $page->getId(), $linkCache->getGoodLinkID( $page ) );
+		$this->assertSame( 0, $this->linkCacheAccesses->getSampleCount() );
 	}
 
 	/**
@@ -245,6 +250,7 @@ class PageStoreTest extends MediaWikiIntegrationTestCase {
 
 		$this->assertNull( $page );
 		$this->assertTrue( $linkCache->isBadLink( $nonexistingPage ) );
+		$this->assertSame( 1, $this->linkCacheAccesses->getSampleCount() );
 	}
 
 	/**
@@ -282,6 +288,7 @@ class PageStoreTest extends MediaWikiIntegrationTestCase {
 		$this->assertSame( $row->page_namespace, $page->getNamespace() );
 		$this->assertSame( $row->page_title, $page->getDBkey() );
 		$this->assertSame( $row->page_latest, $page->getLatest() );
+		$this->assertSame( 1, $this->linkCacheAccesses->getSampleCount() );
 	}
 
 	/**
@@ -306,6 +313,7 @@ class PageStoreTest extends MediaWikiIntegrationTestCase {
 		$this->assertSame( 8, $page->getId() );
 		$this->assertSame( $nonexistingPage->getNamespace(), $page->getNamespace() );
 		$this->assertSame( $nonexistingPage->getDBkey(), $page->getDBkey() );
+		$this->assertSame( 1, $this->linkCacheAccesses->getSampleCount() );
 	}
 
 	/**
@@ -651,11 +659,11 @@ class PageStoreTest extends MediaWikiIntegrationTestCase {
 		$existingPage = $this->getExistingTestPage();
 		$pageStore = $this->getPageStore();
 
-		$row = $this->db->selectRow(
-			'page',
-			$pageStore->getSelectFields(),
-			[ 'page_id' => $existingPage->getId() ]
-		);
+		$row = $this->getDb()->newSelectQueryBuilder()
+			->select( $pageStore->getSelectFields() )
+			->from( 'page' )
+			->where( [ 'page_id' => $existingPage->getId() ] )
+			->fetchRow();
 
 		$rec = $pageStore->newPageRecordFromRow( $row );
 		$this->assertSamePage( $existingPage, $rec );
@@ -705,19 +713,19 @@ class PageStoreTest extends MediaWikiIntegrationTestCase {
 		// Test that the load balancer is asked for a master connection
 		$lb = $this->createMock( LoadBalancer::class );
 		$lb->expects( $this->atLeastOnce() )
-			->method( 'getConnectionRef' )
+			->method( 'getConnection' )
 			->with( DB_PRIMARY )
 			->willReturn( $db );
 
 		$pageStore = $this->getPageStore(
 			[
-				'LanguageCode' => 'qxx',
-				'PageLanguageUseDB' => true
+				MainConfigNames::LanguageCode => 'qxx',
+				MainConfigNames::PageLanguageUseDB => true,
 			],
 			[ 'dbLoadBalancer' => $lb ]
 		);
 
-		$pageStore->newSelectQueryBuilder( PageStore::READ_LATEST )
+		$pageStore->newSelectQueryBuilder( IDBAccessObject::READ_LATEST )
 			->fetchPageRecord();
 	}
 
@@ -748,7 +756,7 @@ class PageStoreTest extends MediaWikiIntegrationTestCase {
 		$this->assertTrue( $existingSubpageB->isSamePageAs( $subpages[1] ) );
 
 		// make sure the limit works as well
-		$this->assertCount( 1, $pageStore->getSubpages( $title, 1 ) );
+		$this->assertCount( 1, iterator_to_array( $pageStore->getSubpages( $title, 1 ) ) );
 	}
 
 	/**

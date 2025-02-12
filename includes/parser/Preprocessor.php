@@ -21,6 +21,10 @@
  * @ingroup Parser
  */
 
+namespace MediaWiki\Parser;
+
+use Wikimedia\ObjectCache\WANObjectCache;
+
 /**
  * @ingroup Parser
  */
@@ -31,6 +35,11 @@ abstract class Preprocessor {
 	public const DOM_LANG_CONVERSION_DISABLED = 2;
 	/** Preprocessor cache bypass flag for Preprocessor::preprocessToObj */
 	public const DOM_UNCACHED = 4;
+	// Does preprocessing start in Start-Of-Line(SOL) state? Only relevant for Parsoid
+	// content, since Parsoid models templates as independent documents in SOL start.
+	// This flag is never set by the legacy parser (but see T2529 which has a similar
+	// effect).
+	public const START_IN_SOL_STATE = 8;
 
 	/** @var Parser */
 	public $parser;
@@ -74,7 +83,7 @@ abstract class Preprocessor {
 	 */
 	public function __construct(
 		Parser $parser,
-		WANObjectCache $wanCache = null,
+		?WANObjectCache $wanCache = null,
 		array $options = []
 	) {
 		$this->parser = $parser;
@@ -144,3 +153,6 @@ abstract class Preprocessor {
 	 */
 	abstract public function preprocessToObj( $text, $flags = 0 );
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( Preprocessor::class, 'Preprocessor' );

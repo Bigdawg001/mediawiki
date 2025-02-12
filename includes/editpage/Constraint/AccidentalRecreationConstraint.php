@@ -31,16 +31,9 @@ use StatusValue;
  */
 class AccidentalRecreationConstraint implements IEditConstraint {
 
-	/** @var bool */
-	private $deletedSinceLastEdit;
+	private bool $deletedSinceLastEdit;
+	private bool $allowRecreation;
 
-	/** @var bool */
-	private $allowRecreation;
-
-	/**
-	 * @param bool $deletedSinceLastEdit
-	 * @param bool $allowRecreation
-	 */
 	public function __construct(
 		bool $deletedSinceLastEdit,
 		bool $allowRecreation

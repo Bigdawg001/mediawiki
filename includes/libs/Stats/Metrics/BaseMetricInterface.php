@@ -21,7 +21,7 @@ declare( strict_types=1 );
 
 namespace Wikimedia\Stats\Metrics;
 
-use IBufferingStatsdDataFactory;
+use Wikimedia\Stats\IBufferingStatsdDataFactory;
 use Wikimedia\Stats\Sample;
 
 /**
@@ -55,11 +55,6 @@ interface BaseMetricInterface {
 	 */
 	public function getSampleRate(): float;
 
-	/**
-	 * Sets the sample rate.
-	 *
-	 * @param float $sampleRate
-	 */
 	public function setSampleRate( float $sampleRate ): void;
 
 	/**
@@ -70,6 +65,13 @@ interface BaseMetricInterface {
 	public function getSamples(): array;
 
 	/**
+	 * Returns a count of samples recorded by the metric.
+	 *
+	 * @return int
+	 */
+	public function getSampleCount(): int;
+
+	/**
 	 * Returns the Metric Name
 	 *
 	 * @return string
@@ -77,16 +79,20 @@ interface BaseMetricInterface {
 	public function getName(): string;
 
 	/**
-	 * Configures the metric with static labels.
+	 * Add a label with key => value.
+	 * Note that the order in which labels are added is significant for StatsD output.
 	 *
-	 * @param string[] $labelKeys
-	 * @param string[] $labelValues
-	 * @return BaseMetricInterface
-	 */
-	public function withStaticLabels( array $labelKeys, array $labelValues ): BaseMetricInterface;
-
-	/**
-	 * Add a label with key => value
+	 * Example:
+	 * ```php
+	 * $statsFactory->withComponent( 'demo' )
+	 *     ->getCounter( 'testMetric_total' )
+	 *     ->setLabel( 'first', 'foo' )
+	 *     ->setLabel( 'second', 'bar' )
+	 *     ->setLabel( 'third', 'baz' )
+	 *     ->increment();
+	 * ```
+	 * statsd: "mediawiki.demo.testMetric_total.foo.bar.baz"
+	 * prometheus: "mediawiki_demo_testMetric_total{first='foo',second='bar',third='baz'}
 	 *
 	 * @param string $key
 	 * @param string $value
@@ -102,7 +108,7 @@ interface BaseMetricInterface {
 	public function getLabelKeys(): array;
 
 	/**
-	 * Returns an array of label values with static label values in the order of label keys.
+	 * Returns an array of label values in the order of label keys.
 	 *
 	 * @return string[]
 	 */
@@ -128,10 +134,26 @@ interface BaseMetricInterface {
 	public function getStatsdDataFactory();
 
 	/**
+	 * Validates and sets legacy StatsD namespaces.
+	 *
+	 * @param string|string[] $statsdNamespaces
+	 * @return void
+	 */
+	public function setStatsdNamespaces( $statsdNamespaces ): void;
+
+	/**
+	 * Returns the configured legacy StatsD namespaces.
+	 *
+	 * @return string[]
+	 */
+	public function getStatsdNamespaces(): array;
+
+	/**
 	 * StatsD Data Factory instance to copy metrics to.
 	 *
-	 * @param IBufferingStatsdDataFactory $statsdDataFactory
+	 * @param IBufferingStatsdDataFactory|null $statsdDataFactory
+	 *
 	 * @return BaseMetricInterface
 	 */
-	public function withStatsdDataFactory( IBufferingStatsdDataFactory $statsdDataFactory );
+	public function withStatsdDataFactory( ?IBufferingStatsdDataFactory $statsdDataFactory );
 }

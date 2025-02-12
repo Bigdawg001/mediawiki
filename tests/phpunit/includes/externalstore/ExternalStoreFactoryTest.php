@@ -1,11 +1,13 @@
 <?php
 
 use MediaWiki\MainConfigNames;
+use Wikimedia\FileBackend\MemoryFileBackend;
 use Wikimedia\Rdbms\LBFactory;
+use Wikimedia\Rdbms\LoadBalancer;
 
 /**
- * @covers ExternalStoreFactory
- * @covers ExternalStoreAccess
+ * @covers \ExternalStoreFactory
+ * @covers \ExternalStoreAccess
  */
 class ExternalStoreFactoryTest extends MediaWikiIntegrationTestCase {
 
@@ -47,9 +49,9 @@ class ExternalStoreFactoryTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers ExternalStoreFactory::getProtocols
-	 * @covers ExternalStoreFactory::getWriteBaseUrls
-	 * @covers ExternalStoreFactory::getStore
+	 * @covers \ExternalStoreFactory::getProtocols
+	 * @covers \ExternalStoreFactory::getWriteBaseUrls
+	 * @covers \ExternalStoreFactory::getStore
 	 */
 	public function testStoreFactoryBasic() {
 		$active = [ 'memory', 'mwstore' ];
@@ -77,7 +79,7 @@ class ExternalStoreFactoryTest extends MediaWikiIntegrationTestCase {
 		$mwStore = $esFactory->getStore( 'mwstore' );
 		$this->assertTrue( $mwStore->isReadOnly( 'memstore1' ), "Location is read-only" );
 
-		$lb = $this->createMock( \Wikimedia\Rdbms\LoadBalancer::class );
+		$lb = $this->createMock( LoadBalancer::class );
 		$lb->method( 'getReadOnlyReason' )->willReturn( 'Locked' );
 		$lbFactory = $this->createMock( LBFactory::class );
 		$lbFactory->method( 'getExternalLB' )->willReturn( $lb );
@@ -94,8 +96,8 @@ class ExternalStoreFactoryTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers ExternalStoreFactory::getStoreForUrl
-	 * @covers ExternalStoreFactory::getStoreLocationFromUrl
+	 * @covers \ExternalStoreFactory::getStoreForUrl
+	 * @covers \ExternalStoreFactory::getStoreLocationFromUrl
 	 */
 	public function testStoreFactoryReadWrite() {
 		$active = [ 'memory' ]; // active store types

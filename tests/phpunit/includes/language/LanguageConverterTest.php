@@ -1,13 +1,19 @@
 <?php
 
+use MediaWiki\Context\RequestContext;
+use MediaWiki\Language\Language;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\PageReference;
 use MediaWiki\Page\PageReferenceValue;
 use MediaWiki\Title\Title;
+use MediaWiki\Title\TitleValue;
+use MediaWiki\User\Options\UserOptionsLookup;
+use MediaWiki\User\User;
 
 /**
  * @group Language
+ * @covers \MediaWiki\Language\LanguageConverter
  */
 class LanguageConverterTest extends MediaWikiLangTestCase {
 
@@ -17,9 +23,6 @@ class LanguageConverterTest extends MediaWikiLangTestCase {
 	/** @var DummyConverter */
 	protected $lc;
 
-	/**
-	 * @param User $user
-	 */
 	private function setContextUser( User $user ) {
 		// LanguageConverter::getPreferredVariant() reads the user from
 		// RequestContext::getMain(), so set it occordingly
@@ -48,21 +51,16 @@ class LanguageConverterTest extends MediaWikiLangTestCase {
 		parent::tearDown();
 	}
 
-	/**
-	 * @covers LanguageConverter::getPreferredVariant
-	 */
 	public function testGetPreferredVariantDefaults() {
 		$this->assertEquals( 'tg', $this->lc->getPreferredVariant() );
 	}
 
 	/**
 	 * @dataProvider provideGetPreferredVariant
-	 * @covers LanguageConverter::getPreferredVariant
-	 * @covers LanguageConverter::getURLVariant
 	 */
 	public function testGetPreferredVariant( $requestVal, $expected ) {
-		global $wgRequest;
-		$wgRequest->setVal( 'variant', $requestVal );
+		$request = RequestContext::getMain()->getRequest();
+		$request->setVal( 'variant', $requestVal );
 
 		$this->assertEquals( $expected, $this->lc->getPreferredVariant() );
 	}
@@ -75,12 +73,10 @@ class LanguageConverterTest extends MediaWikiLangTestCase {
 
 	/**
 	 * @dataProvider provideGetPreferredVariantHeaders
-	 * @covers LanguageConverter::getPreferredVariant
-	 * @covers LanguageConverter::getHeaderVariant
 	 */
 	public function testGetPreferredVariantHeaders( $headerVal, $expected ) {
-		global $wgRequest;
-		$wgRequest->setHeader( 'Accept-Language', $headerVal );
+		$request = RequestContext::getMain()->getRequest();
+		$request->setHeader( 'Accept-Language', $headerVal );
 
 		$this->assertEquals( $expected, $this->lc->getPreferredVariant() );
 	}
@@ -95,7 +91,6 @@ class LanguageConverterTest extends MediaWikiLangTestCase {
 
 	/**
 	 * @dataProvider provideGetPreferredVariantUserOption
-	 * @covers LanguageConverter::getPreferredVariant
 	 */
 	public function testGetPreferredVariantUserOption( $optionVal, $expected, $foreignLang ) {
 		$optionName = 'variant';
@@ -104,13 +99,16 @@ class LanguageConverterTest extends MediaWikiLangTestCase {
 			$optionName = 'variant-tg';
 		}
 
-		$userOptionsManager = $this->getServiceContainer()->getUserOptionsManager();
-
 		$user = new User;
 		$user->load(); // from 'defaults'
 		$user->mId = 1;
 		$user->mDataLoaded = true;
-		$userOptionsManager->setOption( $user, $optionName, $optionVal );
+
+		$userOptionsLookup = $this->createMock( UserOptionsLookup::class );
+		$userOptionsLookup->method( 'getOption' )
+			->with( $user, $optionName )
+			->willReturn( $optionVal );
+		$this->setService( 'UserOptionsLookup', $userOptionsLookup );
 
 		$this->setContextUser( $user );
 
@@ -126,24 +124,21 @@ class LanguageConverterTest extends MediaWikiLangTestCase {
 		yield 'for foreign language, BCP47 (en-simple)' => [ 'en-simple', 'simple', true ];
 	}
 
-	/**
-	 * @covers LanguageConverter::getPreferredVariant
-	 * @covers LanguageConverter::getUserVariant
-	 * @covers LanguageConverter::getURLVariant
-	 */
 	public function testGetPreferredVariantHeaderUserVsUrl() {
-		global $wgRequest;
+		$request = RequestContext::getMain()->getRequest();
 
 		$this->setContentLang( 'tg-latn' );
-		$wgRequest->setVal( 'variant', 'tg' );
-
-		$userOptionsManager = $this->getServiceContainer()->getUserOptionsManager();
+		$request->setVal( 'variant', 'tg' );
 
 		$user = User::newFromId( "admin" );
 		$user->setId( 1 );
 		$user->mFrom = 'defaults';
 		// The user's data is ignored because the variant is set in the URL.
-		$userOptionsManager->setOption( $user, 'variant', 'tg-latn' );
+		$userOptionsLookup = $this->createMock( UserOptionsLookup::class );
+		$userOptionsLookup->method( 'getOption' )
+			->with( $user, 'variant' )
+			->willReturn( 'tg-latn' );
+		$this->setService( 'UserOptionsLookup', $userOptionsLookup );
 
 		$this->setContextUser( $user );
 
@@ -151,37 +146,24 @@ class LanguageConverterTest extends MediaWikiLangTestCase {
 	}
 
 	/**
-	 * @dataProvider provideGetPreferredVariantDefaultLanguageVariant
-	 * @covers LanguageConverter::getPreferredVariant
+	 * @dataProvider provideGetPreferredVariant
 	 */
 	public function testGetPreferredVariantDefaultLanguageVariant( $globalVal, $expected ) {
 		$this->overrideConfigValue( MainConfigNames::DefaultLanguageVariant, $globalVal );
 		$this->assertEquals( $expected, $this->lc->getPreferredVariant() );
 	}
 
-	public static function provideGetPreferredVariantDefaultLanguageVariant() {
-		yield 'normal (tg-latn)' => [ 'tg-latn', 'tg-latn' ];
-		yield 'deprecated (bat-smg)' => [ 'bat-smg', 'sgs' ];
-		yield 'BCP47 (en-simple)' => [ 'en-simple', 'simple' ];
-	}
-
-	/**
-	 * @covers LanguageConverter::getPreferredVariant
-	 * @covers LanguageConverter::getURLVariant
-	 */
 	public function testGetPreferredVariantDefaultLanguageVsUrlVariant() {
-		global $wgDefaultLanguageVariant, $wgRequest;
+		$request = RequestContext::getMain()->getRequest();
 
 		$this->setContentLang( 'tg-latn' );
-		$wgDefaultLanguageVariant = 'tg';
-		$wgRequest->setVal( 'variant', null );
+		$this->overrideConfigValue( MainConfigNames::DefaultLanguageVariant, 'tg' );
+		$request->setVal( 'variant', null );
 		$this->assertEquals( 'tg', $this->lc->getPreferredVariant() );
 	}
 
 	/**
 	 * Test exhausting pcre.backtrack_limit
-	 *
-	 * @covers LanguageConverter::autoConvert
 	 */
 	public function testAutoConvertT124404() {
 		$testString = str_repeat( 'xxx xxx xxx', 1000 );
@@ -198,8 +180,6 @@ class LanguageConverterTest extends MediaWikiLangTestCase {
 
 	/**
 	 * @dataProvider provideTitlesToConvert
-	 * @covers LanguageConverter::convertTitle
-	 *
 	 * @param LinkTarget|PageReference|callable $title title to convert
 	 * @param string $expected
 	 */

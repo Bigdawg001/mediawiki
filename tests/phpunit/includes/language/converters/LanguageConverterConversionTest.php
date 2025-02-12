@@ -2,25 +2,23 @@
 
 namespace Tests\Languages\Converters;
 
-use MediaWiki\MediaWikiServices;
 use MediaWikiIntegrationTestCase;
 
 /**
  * @group Language
- *
+ * @covers \MediaWiki\Language\LanguageConverter
  */
 class LanguageConverterConversionTest extends MediaWikiIntegrationTestCase {
 
 	/**
 	 * @dataProvider provideConversionData
-	 * @covers LanguageConverter::convertTo
 	 */
 	public function testConversion( $variant, $text, $expected ) {
-		$language = MediaWikiServices::getInstance()->getLanguageFactory()->getParentLanguage(
+		$language = $this->getServiceContainer()->getLanguageFactory()->getParentLanguage(
 			str_starts_with( $variant, 'ike' ) ? 'iu' : $variant
 		);
 
-		$converter = MediaWikiServices::getInstance()->getLanguageConverterFactory()->getLanguageConverter( $language );
+		$converter = $this->getServiceContainer()->getLanguageConverterFactory()->getLanguageConverter( $language );
 
 		$this->assertEquals(
 			$expected,

@@ -1,6 +1,10 @@
 <?php
 
+use MediaWiki\Maintenance\LoggedUpdateMaintenance;
+
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script that merges the revision_actor_temp table into the
@@ -46,7 +50,7 @@ class MigrateRevisionActorTemp extends LoggedUpdateMaintenance {
 		$updated = 0;
 		$start = (int)$this->getOption( 'start', 0 );
 		if ( $start > 0 ) {
-			$conds[] = 'rev_id >= ' . $dbw->addQuotes( $start );
+			$conds[] = $dbw->expr( 'rev_id', '>=', $start );
 		}
 		while ( true ) {
 			$res = $dbw->newSelectQueryBuilder()
@@ -65,12 +69,11 @@ class MigrateRevisionActorTemp extends LoggedUpdateMaintenance {
 			foreach ( $res as $row ) {
 				$last = $row->rev_id;
 				if ( !$row->rev_actor ) {
-					$dbw->update(
-						'revision',
-						[ 'rev_actor' => $row->revactor_actor ],
-						[ 'rev_id' => $row->rev_id ],
-						__METHOD__
-					);
+					$dbw->newUpdateQueryBuilder()
+						->update( 'revision' )
+						->set( [ 'rev_actor' => $row->revactor_actor ] )
+						->where( [ 'rev_id' => $row->rev_id ] )
+						->caller( __METHOD__ )->execute();
 					$updated += $dbw->affectedRows();
 				} elseif ( $row->rev_actor !== $row->revactor_actor ) {
 					$this->error(
@@ -87,7 +90,7 @@ class MigrateRevisionActorTemp extends LoggedUpdateMaintenance {
 
 			// @phan-suppress-next-line PhanTypeSuspiciousStringExpression last is not-null when used
 			$this->output( "... rev_id=$last, updated $updated\n" );
-			$conds = [ 'rev_id > ' . $dbw->addQuotes( $last ) ];
+			$conds = [ $dbw->expr( 'rev_id', '>', $last ) ];
 
 			// Sleep between batches for replication to catch up
 			$this->waitForReplication();
@@ -107,5 +110,7 @@ class MigrateRevisionActorTemp extends LoggedUpdateMaintenance {
 
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = MigrateRevisionActorTemp::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

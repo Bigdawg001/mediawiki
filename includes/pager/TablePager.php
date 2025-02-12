@@ -18,8 +18,16 @@
  * @file
  */
 
+namespace MediaWiki\Pager;
+
+use MediaWiki\Context\IContextSource;
 use MediaWiki\Html\Html;
 use MediaWiki\Linker\LinkRenderer;
+use MediaWiki\Parser\ParserOutput;
+use MediaWiki\Xml\XmlSelect;
+use OOUI\ButtonGroupWidget;
+use OOUI\ButtonWidget;
+use stdClass;
 
 /**
  * Table-based display with a user-selectable sort order
@@ -40,7 +48,7 @@ abstract class TablePager extends IndexPager {
 	 * @param IContextSource|null $context
 	 * @param LinkRenderer|null $linkRenderer
 	 */
-	public function __construct( IContextSource $context = null, LinkRenderer $linkRenderer = null ) {
+	public function __construct( ?IContextSource $context = null, ?LinkRenderer $linkRenderer = null ) {
 		if ( $context ) {
 			$this->setContext( $context );
 		}
@@ -62,24 +70,6 @@ abstract class TablePager extends IndexPager {
 	}
 
 	/**
-	 * Get the formatted result list. Calls getStartBody(), formatRow() and getEndBody(), concatenates
-	 * the results and returns them.
-	 *
-	 * Also adds the required styles to our OutputPage object (this means that if context wasn't
-	 * passed to constructor or otherwise set up, you will get a pager with missing styles).
-	 *
-	 * This method has been made 'final' in 1.24. There's no reason to override it, and if there exist
-	 * any subclasses that do, the style loading hack is probably broken in them. Let's fail fast
-	 * rather than mysteriously render things wrong.
-	 *
-	 * @deprecated since 1.24, use getBodyOutput() or getFullOutput() instead
-	 * @return string
-	 */
-	final public function getBody() {
-		return parent::getBody();
-	}
-
-	/**
 	 * Get the formatted result list.
 	 *
 	 * Calls getBody() and getModuleStyles() and builds a ParserOutput object. (This is a bit hacky
@@ -92,7 +82,7 @@ abstract class TablePager extends IndexPager {
 		$body = parent::getBody();
 
 		$pout = new ParserOutput;
-		$pout->setText( $body );
+		$pout->setRawText( $body );
 		return $pout;
 	}
 
@@ -110,7 +100,7 @@ abstract class TablePager extends IndexPager {
 		$body = parent::getBody();
 
 		$pout = new ParserOutput;
-		$pout->setText( $navigation . $body . $navigation );
+		$pout->setRawText( $navigation . $body . $navigation );
 		$pout->addModuleStyles( $this->getModuleStyles() );
 		return $pout;
 	}
@@ -312,7 +302,7 @@ abstract class TablePager extends IndexPager {
 		$title = $this->getTitle();
 
 		foreach ( $types as $type ) {
-			$buttons[] = new \OOUI\ButtonWidget( [
+			$buttons[] = new ButtonWidget( [
 				// Messages used here:
 				// * table_pager_first
 				// * table_pager_prev
@@ -329,7 +319,7 @@ abstract class TablePager extends IndexPager {
 				'disabled' => $queries[ $type ] === false
 			] );
 		}
-		return new \OOUI\ButtonGroupWidget( [
+		return new ButtonGroupWidget( [
 			'classes' => [ $this->getNavClass() ],
 			'items' => $buttons,
 		] );
@@ -350,7 +340,7 @@ abstract class TablePager extends IndexPager {
 	 * @param string[] $attribs Extra attributes to set
 	 * @return string HTML fragment
 	 */
-	public function getLimitSelect( $attribs = [] ) {
+	public function getLimitSelect( array $attribs = [] ): string {
 		$select = new XmlSelect( 'limit', false, $this->mLimit );
 		$select->addOptions( $this->getLimitSelectList() );
 		foreach ( $attribs as $name => $value ) {
@@ -489,3 +479,6 @@ abstract class TablePager extends IndexPager {
 	 */
 	abstract protected function getFieldNames();
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( TablePager::class, 'TablePager' );

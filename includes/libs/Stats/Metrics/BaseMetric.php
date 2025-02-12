@@ -21,8 +21,9 @@ declare( strict_types=1 );
 
 namespace Wikimedia\Stats\Metrics;
 
-use IBufferingStatsdDataFactory;
+use InvalidArgumentException;
 use Wikimedia\Stats\Exceptions\IllegalOperationException;
+use Wikimedia\Stats\IBufferingStatsdDataFactory;
 use Wikimedia\Stats\Sample;
 use Wikimedia\Stats\StatsUtils;
 
@@ -41,17 +42,9 @@ use Wikimedia\Stats\StatsUtils;
  */
 class BaseMetric implements BaseMetricInterface {
 
-	/** @var float */
 	private float $sampleRate = StatsUtils::DEFAULT_SAMPLE_RATE;
-
-	/** @var string */
 	private string $name;
-
-	/** @var string */
 	private string $component;
-
-	/** @var array key-value pairs of static labels */
-	private array $staticLabels = [];
 
 	/** @var array key-value pairs of metric-specific labels */
 	private array $workingLabels = [];
@@ -62,8 +55,10 @@ class BaseMetric implements BaseMetricInterface {
 	/** @var Sample[] */
 	private array $samples = [];
 
-	/** @var IBufferingStatsdDataFactory|null */
 	private ?IBufferingStatsdDataFactory $statsdDataFactory = null;
+
+	/** @var string[] */
+	private array $statsdNamespaces = [];
 
 	/** @inheritDoc */
 	public function __construct( string $component, string $name ) {
@@ -102,10 +97,8 @@ class BaseMetric implements BaseMetricInterface {
 	}
 
 	/** @inheritDoc */
-	public function withStaticLabels( array $labelKeys, array $labelValues ): BaseMetricInterface {
-		$this->labelKeys = $labelKeys;
-		$this->staticLabels = array_combine( $labelKeys, $labelValues );
-		return $this;
+	public function getSampleCount(): int {
+		return count( $this->samples );
 	}
 
 	/** @inheritDoc */
@@ -128,6 +121,29 @@ class BaseMetric implements BaseMetricInterface {
 		return $this;
 	}
 
+	/** @inheritDoc */
+	public function setStatsdNamespaces( $statsdNamespaces ): void {
+		if ( $this->statsdDataFactory === null ) {
+			return;
+		}
+		$statsdNamespaces = is_array( $statsdNamespaces ) ? $statsdNamespaces : [ $statsdNamespaces ];
+
+		foreach ( $statsdNamespaces as $namespace ) {
+			if ( $namespace === '' ) {
+				throw new InvalidArgumentException( "Stats: StatsD namespace cannot be empty." );
+			}
+			if ( !is_string( $namespace ) ) {
+				throw new InvalidArgumentException( "Stats: StatsD namespace must be a string." );
+			}
+		}
+		$this->statsdNamespaces = $statsdNamespaces;
+	}
+
+	/** @inheritDoc */
+	public function getStatsdNamespaces(): array {
+		return $this->statsdNamespaces;
+	}
+
 	/**
 	 * Registers a label key
 	 *
@@ -135,11 +151,6 @@ class BaseMetric implements BaseMetricInterface {
 	 * @return void
 	 */
 	private function addLabelKey( string $key ): void {
-		if ( array_key_exists( $key, $this->staticLabels ) ) {
-			throw new IllegalOperationException(
-				"Stats: Cannot add a label already declared as a static label for '" . $this->name . "'"
-			);
-		}
 		if ( in_array( $key, $this->labelKeys, true ) ) {
 			return;  // key already exists
 		}
@@ -157,17 +168,21 @@ class BaseMetric implements BaseMetricInterface {
 	}
 
 	/**
-	 * Combines the provided associative array of labels
-	 * with the associative array of staticLabels and returns
-	 * the values in the order of labelKeys.
+	 * Get label values in the order of labelKeys.
 	 *
 	 * @return string[]
 	 */
 	public function getLabelValues(): array {
 		$output = [];
-		$labels = StatsUtils::mergeLabels( $this->staticLabels, $this->workingLabels );
+		# make sure all labels are accounted for
+		if ( array_diff( $this->labelKeys, array_keys( $this->workingLabels ) ) ) {
+			throw new IllegalOperationException(
+				"Stats: Cannot associate label keys with label values: "
+				. "Not all initialized labels have an assigned value." );
+		}
+
 		foreach ( $this->labelKeys as $labelKey ) {
-			$output[] = $labels[$labelKey];
+			$output[] = $this->workingLabels[$labelKey];
 		}
 		return $output;
 	}
@@ -183,7 +198,7 @@ class BaseMetric implements BaseMetricInterface {
 	}
 
 	private function hasSamples(): bool {
-		return !empty( $this->samples );
+		return $this->samples !== [];
 	}
 
 }

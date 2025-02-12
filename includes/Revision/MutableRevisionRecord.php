@@ -22,14 +22,14 @@
 
 namespace MediaWiki\Revision;
 
-use Content;
 use InvalidArgumentException;
 use MediaWiki\CommentStore\CommentStoreComment;
+use MediaWiki\Content\Content;
 use MediaWiki\Page\PageIdentity;
+use MediaWiki\Page\PageIdentityValue;
 use MediaWiki\Storage\RevisionSlotsUpdate;
 use MediaWiki\User\UserIdentity;
-use MWException;
-use MWTimestamp;
+use MediaWiki\Utils\MWTimestamp;
 
 /**
  * Mutable RevisionRecord implementation, for building new revision entries programmatically.
@@ -86,7 +86,8 @@ class MutableRevisionRecord extends RevisionRecord {
 		$newRevisionRecord->setId( $revision->getId( $revision->getWikiId() ) );
 		$newRevisionRecord->setPageId( $revision->getPageId( $revision->getWikiId() ) );
 		$newRevisionRecord->setParentId( $revision->getParentId( $revision->getWikiId() ) );
-		$newRevisionRecord->setUser( $revision->getUser() );
+		$newRevisionRecord->setUser( $revision->getUser( RevisionRecord::RAW ) );
+		$newRevisionRecord->setComment( $revision->getComment( RevisionRecord::RAW ) );
 
 		foreach ( $revision->getSlots()->getSlots() as $slot ) {
 			$newRevisionRecord->setSlot( $slot );
@@ -104,8 +105,6 @@ class MutableRevisionRecord extends RevisionRecord {
 	 *
 	 * @param PageIdentity $page The page this RevisionRecord is associated with.
 	 * @param false|string $wikiId Relevant wiki id or self::LOCAL for the current one.
-	 *
-	 * @throws MWException
 	 */
 	public function __construct( PageIdentity $page, $wikiId = self::LOCAL ) {
 		$slots = new MutableRevisionSlots( [], function () {
@@ -338,6 +337,12 @@ class MutableRevisionRecord extends RevisionRecord {
 		}
 
 		$this->mPageId = $pageId;
+		$this->mPage = new PageIdentityValue(
+			$pageId,
+			$this->mPage->getNamespace(),
+			$this->mPage->getDBkey(),
+			$this->mPage->getWikiId()
+		);
 
 		return $this;
 	}
@@ -373,8 +378,6 @@ class MutableRevisionRecord extends RevisionRecord {
 	/**
 	 * Returns the slots defined for this revision as a MutableRevisionSlots instance,
 	 * which can be modified to defined the slots for this revision.
-	 *
-	 * @return MutableRevisionSlots
 	 */
 	public function getSlots(): MutableRevisionSlots {
 		// Overwritten just to guarantee the more narrow return type.

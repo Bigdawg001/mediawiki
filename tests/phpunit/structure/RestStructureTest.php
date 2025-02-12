@@ -1,10 +1,14 @@
 <?php
 
+use MediaWiki\Context\RequestContext;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\StaticHookRegistry;
-use MediaWiki\MainConfigSchema;
+use MediaWiki\Language\Language;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
+use MediaWiki\ParamValidator\TypeDef\ArrayDef;
 use MediaWiki\Permissions\SimpleAuthority;
+use MediaWiki\Request\WebRequest;
 use MediaWiki\Rest\CorsUtils;
 use MediaWiki\Rest\EntryPoint;
 use MediaWiki\Rest\Handler;
@@ -12,11 +16,15 @@ use MediaWiki\Rest\PathTemplateMatcher\PathMatcher;
 use MediaWiki\Rest\RequestData;
 use MediaWiki\Rest\ResponseFactory;
 use MediaWiki\Rest\Router;
+use MediaWiki\Rest\Validator\Validator;
 use MediaWiki\Session\Session;
 use MediaWiki\Tests\Unit\DummyServicesTrait;
 use MediaWiki\Title\Title;
 use MediaWiki\User\UserIdentityValue;
+use Wikimedia\Message\MessageValue;
+use Wikimedia\ObjectCache\EmptyBagOStuff;
 use Wikimedia\ParamValidator\ParamValidator;
+use Wikimedia\Stats\StatsFactory;
 use Wikimedia\TestingAccessWrapper;
 
 /**
@@ -26,20 +34,36 @@ use Wikimedia\TestingAccessWrapper;
  * - do not have inconsistencies in the parameter definitions
  *
  * @coversNothing
+ * @group Database
  */
 class RestStructureTest extends MediaWikiIntegrationTestCase {
 	use DummyServicesTrait;
+	use JsonSchemaAssertionTrait;
+
+	private const SPEC_FILES = [
+		'https://spec.openapis.org/oas/3.0/schema/2021-09-28#' =>
+			MW_INSTALL_PATH . '/tests/phpunit/integration/includes/' .
+				'Rest/Handler/data/OpenApi-3.0.json',
+
+		'http://json-schema.org/draft-04/schema#' =>
+			MW_INSTALL_PATH . '/vendor/justinrainbow/json-schema/dist/' .
+				'schema/json-schema-draft-04.json',
+
+		'https://www.mediawiki.org/schema/mwapi-1.0#' =>
+			MW_INSTALL_PATH . '/docs/rest/mwapi-1.0.json',
+
+		'https://www.mediawiki.org/schema/discovery-1.0#' =>
+			MW_INSTALL_PATH . '/docs/rest/discovery-1.0.json',
+	];
 
 	/** @var ?Router */
 	private $router = null;
 
 	/**
 	 * Constructs a fake MediaWikiServices instance for use in data providers.
-	 *
-	 * @return MediaWikiServices
 	 */
 	private function getFakeServiceContainer(): MediaWikiServices {
-		$config = new HashConfig( iterator_to_array( MainConfigSchema::listDefaultValues() ) );
+		$realConfig = MediaWikiServices::getInstance()->getMainConfig();
 
 		$objectFactory = $this->getDummyObjectFactory();
 		$hookContainer = new HookContainer(
@@ -54,23 +78,19 @@ class RestStructureTest extends MediaWikiIntegrationTestCase {
 				'getHookContainer',
 				'getObjectFactory',
 				'getLocalServerObjectCache',
-				'getStatsdDataFactory',
+				'getStatsFactory',
 			]
 		);
-		$services->method( 'getMainConfig' )->willReturn( $config );
+		$services->method( 'getMainConfig' )->willReturn( $realConfig );
 		$services->method( 'getHookContainer' )->willReturn( $hookContainer );
 		$services->method( 'getObjectFactory' )->willReturn( $objectFactory );
 		$services->method( 'getLocalServerObjectCache' )->willReturn( new EmptyBagOStuff() );
-		$services->method( 'getStatsdDataFactory' )->willReturn( new NullStatsdDataFactory() );
+		$services->method( 'getStatsFactory' )->willReturn( StatsFactory::newNull() );
 
 		return $services;
 	}
 
-	/**
-	 * Return all routes. Safe to use in data providers.
-	 * @return Iterator<array>
-	 */
-	private function getAllRoutes(): Iterator {
+	private function getRouterForDataProviders(): Router {
 		static $router = null;
 
 		if ( !$router ) {
@@ -80,13 +100,8 @@ class RestStructureTest extends MediaWikiIntegrationTestCase {
 			$title = Title::makeTitle( NS_SPECIAL, 'Badtitle/dummy title for RestStructureTest' );
 			$authority = new SimpleAuthority( new UserIdentityValue( 0, 'Testor' ), [] );
 
-			$request = $this->createNoOpMock(
-				WebRequest::class,
-				[ 'getSession' ]
-			);
-			$request->method( 'getSession' )->willReturn(
-				$this->createNoOpMock( Session::class )
-			);
+			$request = $this->createNoOpMock( WebRequest::class, [ 'getSession' ] );
+			$request->method( 'getSession' )->willReturn( $this->createNoOpMock( Session::class ) );
 
 			$context = $this->createNoOpMock(
 				RequestContext::class,
@@ -104,11 +119,16 @@ class RestStructureTest extends MediaWikiIntegrationTestCase {
 
 			// NOTE: createRouter() implements the logic for determining the list of route files to load.
 			$entryPoint = TestingAccessWrapper::newFromClass( EntryPoint::class );
-			$router = $entryPoint->createRouter( $services, $context, new RequestData(), $responseFactory, $cors );
-			$router = TestingAccessWrapper::newFromObject( $router );
+			$router = $entryPoint->createRouter(
+				$services,
+				$context,
+				new RequestData(),
+				$responseFactory,
+				$cors
+			);
 		}
 
-		return $router->getAllRoutes();
+		return $router;
 	}
 
 	/**
@@ -116,19 +136,32 @@ class RestStructureTest extends MediaWikiIntegrationTestCase {
 	 * @warning Must not be called in data providers!
 	 * @return Router
 	 */
-	private function getRouter(): Router {
+	private function getTestRouter(): Router {
 		if ( !$this->router ) {
-			$context = new DerivativeContext( RequestContext::getMain() );
-			$context->setLanguage( 'en' );
-			$context->setTitle(
-				Title::makeTitle( NS_SPECIAL, 'Badtitle/dummy title for RestStructureTest' )
+			$language = $this->createNoOpMock( Language::class, [ 'getCode' ] );
+			$language->method( 'getCode' )->willReturn( 'en' );
+
+			$title = Title::makeTitle( NS_SPECIAL, 'Badtitle/dummy title for RestStructureTest' );
+			$authority = new SimpleAuthority( new UserIdentityValue( 0, 'Testor' ), [] );
+
+			$request = $this->createNoOpMock( WebRequest::class, [ 'getSession' ] );
+			$request->method( 'getSession' )->willReturn( $this->createNoOpMock( Session::class ) );
+
+			$context = $this->createNoOpMock(
+				RequestContext::class,
+				[ 'getLanguage', 'getTitle', 'getAuthority', 'getRequest' ]
 			);
+			$context->method( 'getLanguage' )->willReturn( $language );
+			$context->method( 'getTitle' )->willReturn( $title );
+			$context->method( 'getAuthority' )->willReturn( $authority );
+			$context->method( 'getRequest' )->willReturn( $request );
 
 			$responseFactory = $this->createNoOpMock( ResponseFactory::class );
 			$cors = $this->createNoOpMock( CorsUtils::class );
 
-			$this->router = TestingAccessWrapper::newFromClass( EntryPoint::class )
-				->createRouter( $this->getServiceContainer(), $context, new RequestData(), $responseFactory, $cors );
+			$this->router = EntryPoint::createRouter(
+				$this->getServiceContainer(), $context, new RequestData(), $responseFactory, $cors
+			);
 		}
 		return $this->router;
 	}
@@ -136,18 +169,20 @@ class RestStructureTest extends MediaWikiIntegrationTestCase {
 	/**
 	 * @dataProvider provideRoutes
 	 */
-	public function testPathParameters( array $spec ): void {
-		$router = TestingAccessWrapper::newFromObject( $this->getRouter() );
-		$request = new RequestData();
-		$handler = $router->createHandler( $request, $spec );
-		$params = $handler->getParamSettings();
+	public function testPathParameters( string $moduleName, string $method, string $path ): void {
+		$router = $this->getTestRouter();
+		$module = $router->getModule( $moduleName );
 
+		$request = new RequestData( [ 'method' => $method ] );
+		$handler = $module->getHandlerForPath( $path, $request, false );
+
+		$params = $handler->getParamSettings();
 		$dataName = $this->dataName();
 
 		// Test that all parameters in the path exist and are declared as such
 		$matcher = TestingAccessWrapper::newFromObject( new PathMatcher );
 		$pathParams = [];
-		foreach ( explode( '/', $spec['path'] ) as $part ) {
+		foreach ( explode( '/', $path ) as $part ) {
 			$param = $matcher->getParamName( $part );
 			if ( $param !== false ) {
 				$this->assertArrayHasKey( $param, $params, "Path parameter $param exists" );
@@ -173,37 +208,107 @@ class RestStructureTest extends MediaWikiIntegrationTestCase {
 		$this->addToAssertionCount( 1 );
 	}
 
-	public function provideRoutes(): Iterator {
-		foreach ( $this->getAllRoutes() as $spec ) {
-			$method = $spec['method'] ?? 'GET';
-			$method = implode( ",", (array)$method );
+	/**
+	 * @dataProvider provideRoutes
+	 */
+	public function testBodyParameters( string $moduleName, string $method, string $path ): void {
+		$router = $this->getTestRouter();
+		$module = $router->getModule( $moduleName );
 
-			yield "Handler {$method} {$spec['path']}" => [ $spec ];
+		$request = new RequestData( [ 'method' => $method ] );
+		$handler = $module->getHandlerForPath( $path, $request, false );
+
+		$bodySettings = $handler->getBodyParamSettings();
+
+		if ( !$bodySettings ) {
+			$this->addToAssertionCount( 1 );
+			return;
+		}
+
+		foreach ( $bodySettings as $settings ) {
+			$this->assertArrayHasKey( Handler::PARAM_SOURCE, $settings );
+			$this->assertSame( 'body', $settings[Handler::PARAM_SOURCE] );
+
+			if ( isset( $settings[ ArrayDef::PARAM_SCHEMA ] ) ) {
+				try {
+					$this->assertValidJsonSchema( $settings[ ArrayDef::PARAM_SCHEMA ] );
+				} catch ( LogicException $e ) {
+					$this->fail( "Invalid JSON schema for parameter {$settings['name']}: " . $e->getMessage() );
+				}
+			}
 		}
 	}
 
 	/**
 	 * @dataProvider provideRoutes
 	 */
-	public function testParameters( array $routeSpec ): void {
-		$router = TestingAccessWrapper::newFromObject( $this->getRouter() );
+	public function testBodyParametersNotInParamSettings( string $moduleName, string $method, string $path ): void {
+		$router = $this->getTestRouter();
+		$module = $router->getModule( $moduleName );
 
-		$request = new RequestData();
-		$handler = $router->createHandler( $request, $routeSpec );
+		$request = new RequestData( [ 'method' => $method ] );
+		$handler = $module->getHandlerForPath( $path, $request, false );
+
+		$paramSettings = $handler->getParamSettings();
+
+		if ( !$paramSettings ) {
+			$this->addToAssertionCount( 1 );
+			return;
+		}
+
+		foreach ( $paramSettings as $settings ) {
+			$this->assertArrayHasKey( Handler::PARAM_SOURCE, $settings );
+			$this->assertNotSame( 'body', $settings[Handler::PARAM_SOURCE] );
+		}
+	}
+
+	public function provideModules(): Iterator {
+		$router = $this->getRouterForDataProviders();
+
+		foreach ( $router->getModuleIds() as $name ) {
+			yield "Module '$name'" => [ $name ];
+		}
+	}
+
+	public function provideRoutes(): Iterator {
+		$router = $this->getRouterForDataProviders();
+
+		foreach ( $router->getModuleIds() as $moduleName ) {
+			$module = $router->getModule( $moduleName );
+
+			foreach ( $module->getDefinedPaths() as $path => $methods ) {
+
+				foreach ( $methods as $method ) {
+					// NOTE: we can't use the $module object directly, since it
+					//       may hold references to incorrect service instance.
+					yield "Handler in module '$moduleName' for $method $path"
+						=> [ $moduleName, $method, $path ];
+				}
+			}
+		}
+	}
+
+	/**
+	 * @dataProvider provideRoutes
+	 */
+	public function testParameters( string $moduleName, string $method, string $path ): void {
+		$router = $this->getTestRouter();
+		$module = $router->getModule( $moduleName );
+
+		$request = new RequestData( [ 'method' => $method ] );
+		$handler = $module->getHandlerForPath( $path, $request, false );
 
 		$params = $handler->getParamSettings();
 		foreach ( $params as $param => $settings ) {
 			$method = $routeSpec['method'] ?? 'GET';
 			$method = implode( ",", (array)$method );
 
-			$this->assertParameter( $param, $settings, "Handler {$method} {$routeSpec['path']}, parameter $param" );
+			$this->assertParameter( $param, $settings, "Handler {$method} {$path}, parameter $param" );
 		}
 	}
 
 	private function assertParameter( string $name, $settings, $msg ) {
-		static $sources = [ 'path', 'query', 'post' ];
-
-		$router = TestingAccessWrapper::newFromObject( $this->getRouter() );
+		$router = TestingAccessWrapper::newFromObject( $this->getTestRouter() );
 
 		$dataName = $this->dataName();
 		$this->assertNotSame( '', $name, "$msg: $dataName: Name cannot be empty" );
@@ -213,8 +318,14 @@ class RestStructureTest extends MediaWikiIntegrationTestCase {
 
 		// REST-specific parameters
 		$ret['allowedKeys'][] = Handler::PARAM_SOURCE;
-		if ( !in_array( $settings[Handler::PARAM_SOURCE] ?? '', $sources, true ) ) {
-			$ret['issues'][Handler::PARAM_SOURCE] = "PARAM_SOURCE must be 'path', 'query', or 'post'";
+		$ret['allowedKeys'][] = Handler::PARAM_DESCRIPTION;
+		if ( !in_array( $settings[Handler::PARAM_SOURCE] ?? '', Validator::KNOWN_PARAM_SOURCES, true ) ) {
+			$ret['issues'][Handler::PARAM_SOURCE] = "PARAM_SOURCE must be one of " . implode( ', ', Validator::KNOWN_PARAM_SOURCES );
+		}
+
+		// Check that "array" type is not used in getParamSettings
+		if ( isset( $settings[ParamValidator::PARAM_TYPE] ) && $settings[ParamValidator::PARAM_TYPE] === 'array' ) {
+			$this->fail( "$msg: $dataName: 'array' type is not allowed in getParamSettings" );
 		}
 
 		// Warn about unknown keys. Don't fail, they might be for forward- or back-compat.
@@ -247,23 +358,91 @@ class RestStructureTest extends MediaWikiIntegrationTestCase {
 					"$msg: $dataName: Parameter message $key exists" );
 			}
 		}
+
+		$description = $settings[Handler::PARAM_DESCRIPTION] ?? null;
+		if ( $description && !is_string( $description ) ) {
+			$this->assertInstanceOf( MessageValue::class, $description );
+			$this->assertTrue(
+				wfMessage( $description->getKey() )->exists(),
+				'Message key of parameter description should exit: '
+				. $description->getKey()
+			);
+		}
 	}
 
 	public function testRoutePathAndMethodForDuplicates() {
-		$router = TestingAccessWrapper::newFromObject( $this->getRouter() );
+		$router = $this->getTestRouter();
 		$routes = [];
 
-		foreach ( $router->getAllRoutes() as $spec ) {
-			$method = $spec['method'] ?? 'GET';
-			$method = (array)$method;
+		foreach ( $router->getModuleIds() as $moduleName ) {
+			$module = $router->getModule( $moduleName );
+			$paths = $module->getDefinedPaths();
 
-			foreach ( $method as $m ) {
-				$key = "{$m} {$spec['path']}";
+			foreach ( $paths as $path => $methods ) {
+				foreach ( $methods as $method ) {
+					// NOTE: we can't use the $module object directly, since it
+					//       may hold references to incorrect service instance.
+					$key = "$moduleName: $method $path";
 
-				$this->assertArrayNotHasKey( $key, $routes, "{$key} already exists in routes" );
-
-				$routes[$key] = true;
+					$this->assertArrayNotHasKey( $key, $routes, "{$key} already exists in routes" );
+					$routes[$key] = true;
+				}
 			}
 		}
 	}
+
+	public function provideModuleDefinitionFiles() {
+		$conf = MediaWikiServices::getInstance()->getMainConfig();
+		$entryPoint = TestingAccessWrapper::newFromClass( EntryPoint::class );
+		$routeFiles = $entryPoint->getRouteFiles( $conf );
+
+		foreach ( $routeFiles as $file ) {
+			$moduleSpec = self::loadJsonData( $file );
+			if ( !isset( $moduleSpec->mwapi ) ) {
+				// old-school flat route file, skip
+				continue;
+			}
+			yield $file => [ $moduleSpec ];
+		}
+	}
+
+	/**
+	 * @dataProvider provideModuleDefinitionFiles
+	 */
+	public function testModuleDefinitionFiles( stdClass $moduleSpec ) {
+		$schemaFile = MW_INSTALL_PATH . '/docs/rest/mwapi-1.0.json';
+
+		$this->assertMatchesJsonSchema( $schemaFile, $moduleSpec, self::SPEC_FILES );
+	}
+
+	/**
+	 * @dataProvider provideModules
+	 */
+	public function testGetModuleDescription( string $moduleName ): void {
+		static $infoSchema = [ '$ref' =>
+			'https://www.mediawiki.org/schema/discovery-1.0#/definitions/Module'
+		];
+
+		$router = $this->getTestRouter();
+		$module = $router->getModule( $moduleName );
+		$info = $module->getModuleDescription();
+
+		$this->assertMatchesJsonSchema( $infoSchema, $info, self::SPEC_FILES );
+	}
+
+	/**
+	 * @dataProvider provideModules
+	 */
+	public function testGetOpenApiInfo( string $moduleName ): void {
+		static $infoSchema = [ '$ref' =>
+			'https://spec.openapis.org/oas/3.0/schema/2021-09-28#/definitions/Info'
+		];
+
+		$router = $this->getTestRouter();
+		$module = $router->getModule( $moduleName );
+		$info = $module->getOpenApiInfo();
+
+		$this->assertMatchesJsonSchema( $infoSchema, $info, self::SPEC_FILES );
+	}
+
 }

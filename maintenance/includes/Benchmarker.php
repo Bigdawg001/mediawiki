@@ -26,6 +26,8 @@
  * @ingroup Benchmark
  */
 
+namespace MediaWiki\Maintenance;
+
 use Wikimedia\RunningStat;
 
 // @codeCoverageIgnoreStart
@@ -38,6 +40,7 @@ require_once __DIR__ . '/../Maintenance.php';
  * @ingroup Benchmark
  */
 abstract class Benchmarker extends Maintenance {
+	/** @var int */
 	protected $defaultCount = 100;
 
 	public function __construct() {
@@ -107,7 +110,7 @@ abstract class Benchmarker extends Maintenance {
 		foreach ( $normBenchs as $name => $bench ) {
 			// Optional setup called outside time measure
 			if ( isset( $bench['setup'] ) ) {
-				call_user_func( $bench['setup'] );
+				$bench['setup']();
 			}
 
 			// Run benchmarks
@@ -225,9 +228,12 @@ abstract class Benchmarker extends Maintenance {
 	protected function loadFile( $file ) {
 		$content = file_get_contents( $file );
 		// Detect GZIP compression header
-		if ( substr( $content, 0, 2 ) === "\037\213" ) {
+		if ( str_starts_with( $content, "\037\213" ) ) {
 			$content = gzdecode( $content );
 		}
 		return $content;
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( Benchmarker::class, 'Benchmarker' );

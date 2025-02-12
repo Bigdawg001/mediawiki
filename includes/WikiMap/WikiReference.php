@@ -26,16 +26,19 @@ namespace MediaWiki\WikiMap;
  * Reference to a locally-hosted wiki
  */
 class WikiReference {
-	private $mCanonicalServer; ///< canonical server URL, e.g. 'https://www.mediawiki.org'
-	private $mServer; ///< server URL, may be protocol-relative, e.g. '//www.mediawiki.org'
-	private $mPath; ///< path, '/wiki/$1'
+	/** @var string wgCanonicalServer, e.g. 'https://www.mediawiki.org' */
+	private string $mCanonicalServer;
+	/** @var string wgServer, may be protocol-relative, e.g. '//www.mediawiki.org' */
+	private string $mServer;
+	/** @var string wgArticlepath, e.g. '/wiki/$1' */
+	private string $mPath;
 
 	/**
 	 * @param string $canonicalServer
 	 * @param string $path
 	 * @param null|string $server
 	 */
-	public function __construct( $canonicalServer, $path, $server = null ) {
+	public function __construct( string $canonicalServer, string $path, ?string $server = null ) {
 		$this->mCanonicalServer = $canonicalServer;
 		$this->mPath = $path;
 		$this->mServer = $server ?? $canonicalServer;
@@ -48,9 +51,9 @@ class WikiReference {
 	 * @return string
 	 */
 	public function getDisplayName() {
-		$parsed = wfParseUrl( $this->mCanonicalServer );
-		if ( $parsed ) {
-			return $parsed['host'];
+		$host = parse_url( $this->mCanonicalServer, PHP_URL_HOST );
+		if ( $host ) {
+			return $host;
 		} else {
 			// Invalid server spec.
 			// There's no sensible thing to do here, so just return the canonical server name in full.
@@ -124,4 +127,5 @@ class WikiReference {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( WikiReference::class, 'WikiReference' );

@@ -43,10 +43,6 @@ class TitleDef extends TypeDef {
 	/** @var TitleFactory */
 	private $titleFactory;
 
-	/**
-	 * @param Callbacks $callbacks
-	 * @param TitleFactory $titleFactory
-	 */
 	public function __construct( Callbacks $callbacks, TitleFactory $titleFactory ) {
 		parent::__construct( $callbacks );
 		$this->titleFactory = $titleFactory;
@@ -59,6 +55,8 @@ class TitleDef extends TypeDef {
 	public function validate( $name, $value, array $settings, array $options ) {
 		$mustExist = !empty( $settings[self::PARAM_MUST_EXIST] );
 		$returnObject = !empty( $settings[self::PARAM_RETURN_OBJECT] );
+
+		$this->failIfNotString( $name, $value, $settings, $options );
 
 		$title = $this->titleFactory->newFromText( $value );
 

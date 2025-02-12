@@ -17,7 +17,7 @@
  *
  * This file does:
  * - run-time environment checks,
- * - define MW_INSTALL_PATH, $IP, and $wgBaseDirectory,
+ * - define MW_INSTALL_PATH, and $IP,
  * - load autoloaders, constants, default settings, and global functions,
  * - load the site configuration (e.g. LocalSettings.php),
  * - load the enabled extensions (via ExtensionRegistry),
@@ -51,11 +51,20 @@
  */
 
 // phpcs:disable MediaWiki.Usage.DeprecatedGlobalVariables
+use MediaWiki\Config\SiteConfiguration;
+use MediaWiki\Context\RequestContext;
+use MediaWiki\Debug\MWDebug;
+use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\HookContainer\FauxGlobalHookArray;
+use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\Language\Language;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MainConfigSchema;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
+use MediaWiki\Registration\ExtensionRegistry;
+use MediaWiki\Registration\MissingExtensionException;
 use MediaWiki\Request\HeaderCallback;
 use MediaWiki\Settings\DynamicDefaultValues;
 use MediaWiki\Settings\LocalSettingsLoader;
@@ -66,8 +75,11 @@ use MediaWiki\Settings\WikiFarmSettingsLoader;
 use MediaWiki\StubObject\StubGlobalUser;
 use MediaWiki\StubObject\StubUserLang;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
 use Psr\Log\LoggerInterface;
 use Wikimedia\RequestTimeout\RequestTimeout;
+use Wikimedia\Telemetry\SpanInterface;
+use Wikimedia\Telemetry\TracerState;
 
 /**
  * Environment checks
@@ -102,11 +114,9 @@ if ( !defined( 'MW_ENTRY_POINT' ) ) {
 // The $IP variable is defined for use by LocalSettings.php.
 // It is made available as a global variable for backwards compatibility.
 //
-// Source code should instead use the MW_INSTALL_PATH constant, or the
-// MainConfigNames::BaseDirectory setting. The BaseDirectory setting is set further
-// down in Setup.php to the value of MW_INSTALL_PATH.
+// Source code should use the MW_INSTALL_PATH constant instead.
 global $IP;
-$IP = wfDetectInstallPath(); // ensure MW_INSTALL_PATH is defined
+$IP = wfDetectInstallPath(); // ensures MW_INSTALL_PATH is defined
 
 /**
  * Pre-config setup: Before loading LocalSettings.php
@@ -130,8 +140,9 @@ if ( !interface_exists( LoggerInterface::class ) ) {
 	trigger_error( $message, E_USER_ERROR );
 }
 
-// Set $wgCommandLineMode to false if it wasn't set to true.
-$wgCommandLineMode ??= false;
+// Deprecated global variable for backwards-compatibility.
+// New code should check MW_ENTRY_POINT directly.
+$wgCommandLineMode = MW_ENTRY_POINT === 'cli';
 
 /**
  * $wgConf hold the site configuration.
@@ -155,7 +166,14 @@ if ( defined( 'MW_USE_CONFIG_SCHEMA_CLASS' ) ) {
 
 require_once MW_INSTALL_PATH . '/includes/GlobalFunctions.php';
 
+// Install callback for normalizing headers.
 HeaderCallback::register();
+
+// Tell HttpStatus to use HeaderCallback for reporting warnings when
+// attempting to set headers after the headers have already been sent.
+HttpStatus::registerHeadersSentCallback(
+	[ HeaderCallback::class, 'warnIfHeadersSent' ]
+);
 
 // Set the encoding used by PHP for reading HTTP input, and writing output.
 // This is also the default for mbstring functions.
@@ -168,9 +186,9 @@ mb_internal_encoding( 'UTF-8' );
 // Initialize some config settings with dynamic defaults, and
 // make default settings available in globals for use in LocalSettings.php.
 $wgSettings->putConfigValues( [
-	MainConfigNames::BaseDirectory => MW_INSTALL_PATH,
 	MainConfigNames::ExtensionDirectory => MW_INSTALL_PATH . '/extensions',
 	MainConfigNames::StyleDirectory => MW_INSTALL_PATH . '/skins',
+	MainConfigNames::UploadDirectory => MW_INSTALL_PATH . '/images',
 	MainConfigNames::ServiceWiringFiles => [ MW_INSTALL_PATH . '/includes/ServiceWiring.php' ],
 	'Version' => MW_VERSION,
 ] );
@@ -259,15 +277,8 @@ if ( defined( 'MW_AUTOLOAD_TEST_CLASSES' ) ) {
 	require_once __DIR__ . '/../tests/common/TestsAutoLoader.php';
 }
 
-if ( $wgBaseDirectory !== MW_INSTALL_PATH ) {
-	throw new FatalError(
-		'$wgBaseDirectory must not be modified in settings files! ' .
-		'Use the MW_INSTALL_PATH environment variable to override the installation root directory.'
-	);
-}
-
 // Start time limit
-if ( $wgRequestTimeLimit && !$wgCommandLineMode ) {
+if ( $wgRequestTimeLimit && MW_ENTRY_POINT !== 'cli' ) {
 	RequestTimeout::singleton()->setWallTimeLimit( $wgRequestTimeLimit );
 }
 
@@ -320,8 +331,41 @@ MediaWikiServices::allowGlobalInstance();
 define( 'MW_SERVICE_BOOTSTRAP_COMPLETE', 1 );
 
 MWExceptionRenderer::setShowExceptionDetails( $wgShowExceptionDetails );
-MWExceptionHandler::installHandler( $wgLogExceptionBacktrace, $wgPropagateErrors );
+if ( !defined( 'MW_PHPUNIT_TEST' ) ) {
+	// Never install the handler in PHPUnit tests, otherwise PHPUnit's own handler will be unset and things
+	// like convertWarningsToExceptions won't work.
+	MWExceptionHandler::installHandler( $wgLogExceptionBacktrace, $wgPropagateErrors );
+}
 Profiler::init( $wgProfiler );
+
+// Initialize the root span for distributed tracing if we're in a web request context (T340552).
+// Do this here since subsequent setup code, e.g. session initialization or post-setup hooks,
+// may themselves create spans, so the root span needs to have been initialized by then.
+call_user_func( static function (): void {
+	if ( wfIsCLI() ) {
+		return;
+	}
+
+	$tracer = MediaWikiServices::getInstance()->getTracer();
+	$request = RequestContext::getMain()->getRequest();
+	// Backdate the start of the root span to the timestamp where PHP actually started working on this operation.
+	$startTimeNanos = (int)( 1e9 * $_SERVER['REQUEST_TIME_FLOAT'] );
+	// Avoid high cardinality URL path as root span name, instead safely use the HTTP method.
+	// Per OTEL Semantic Conventions, https://opentelemetry.io/docs/specs/semconv/http/http-spans/
+	$spanName = "EntryPoint " . MW_ENTRY_POINT . ".php HTTP {$request->getMethod()}";
+	global $wgAllowExternalReqID;
+	$rootSpan = $tracer->createRootSpanFromCarrier( $spanName, $wgAllowExternalReqID ? $request->getAllHeaders() : [] );
+	$rootSpan->setSpanKind( SpanInterface::SPAN_KIND_SERVER )
+			->setAttributes( array_filter( [
+				'http.request.method' => $request->getMethod(),
+				'url.path' => $request->getRequestURL(),
+				'server.name' => $_SERVER['SERVER_NAME'] ?? null,
+			] ) )
+			->start( $startTimeNanos );
+	$rootSpan->activate();
+
+	TracerState::getInstance()->setRootSpan( $rootSpan );
+} );
 
 // Non-trivial validation of: $wgServer
 // The FatalError page only renders cleanly after MWExceptionHandler is installed.
@@ -353,13 +397,11 @@ if ( $wgCanonicalServer === false ) {
 }
 $wgVirtualRestConfig['global']['domain'] = $wgCanonicalServer;
 
-$serverParts = wfParseUrl( $wgCanonicalServer );
 if ( $wgServerName !== false ) {
 	wfWarn( '$wgServerName should be derived from $wgCanonicalServer, '
 		. 'not customized. Overwriting $wgServerName.' );
 }
-$wgServerName = $serverParts['host'];
-unset( $serverParts );
+$wgServerName = parse_url( $wgCanonicalServer, PHP_URL_HOST );
 
 // $wgEmergencyContact and $wgPasswordSender may be false or empty string (T104142)
 if ( !$wgEmergencyContact ) {
@@ -419,9 +461,10 @@ if ( $wgRequest->getCookie( 'UseDC', '' ) === 'master' ) {
 
 // Useful debug output
 ( static function () {
-	global $wgCommandLineMode, $wgRequest;
+	global $wgRequest;
+
 	$logger = LoggerFactory::getInstance( 'wfDebug' );
-	if ( $wgCommandLineMode ) {
+	if ( MW_ENTRY_POINT === 'cli' ) {
 		$self = $_SERVER['PHP_SELF'] ?? '';
 		$logger->debug( "\n\nStart command line script $self" );
 	} else {
@@ -437,7 +480,7 @@ if ( $wgRequest->getCookie( 'UseDC', '' ) === 'master' ) {
 } )();
 
 // Most of the config is out, some might want to run hooks here.
-Hooks::runner()->onSetupAfterCache();
+( new HookRunner( MediaWikiServices::getInstance()->getHookContainer() ) )->onSetupAfterCache();
 
 // Now that variant lists may be available, parse any action paths and article paths
 // as query parameters.
@@ -456,7 +499,7 @@ if ( MW_ENTRY_POINT === 'index' ) {
  * @var MediaWiki\Session\SessionId|null $wgInitialSessionId The persistent session ID (if any) loaded at startup
  */
 $wgInitialSessionId = null;
-if ( !defined( 'MW_NO_SESSION' ) && !$wgCommandLineMode ) {
+if ( !defined( 'MW_NO_SESSION' ) && MW_ENTRY_POINT !== 'cli' ) {
 	// If session.auto_start is there, we can't touch session name
 	if ( $wgPHPSessionHandling !== 'disable' && !wfIniGetBool( 'session.auto_start' ) ) {
 		HeaderCallback::warnIfHeadersSent();
@@ -542,7 +585,7 @@ register_shutdown_function( static function () {
 $wgLang = new StubUserLang;
 
 /**
- * @var OutputPage $wgOut
+ * @var MediaWiki\Output\OutputPage $wgOut
  */
 $wgOut = RequestContext::getMain()->getOutput(); // BackCompat
 
@@ -565,27 +608,33 @@ unset( $func ); // no global pollution; destroy reference
 
 // If the session user has a 0 id but a valid name, that means we need to
 // autocreate it.
-if ( !defined( 'MW_NO_SESSION' ) && !$wgCommandLineMode ) {
+if ( !defined( 'MW_NO_SESSION' ) && MW_ENTRY_POINT !== 'cli' ) {
 	$sessionUser = MediaWiki\Session\SessionManager::getGlobalSession()->getUser();
 	if ( $sessionUser->getId() === 0 &&
 		MediaWikiServices::getInstance()->getUserNameUtils()->isValid( $sessionUser->getName() )
 	) {
-		$res = MediaWikiServices::getInstance()->getAuthManager()->autoCreateUser(
+		MediaWikiServices::getInstance()->getAuthManager()->autoCreateUser(
 			$sessionUser,
 			MediaWiki\Auth\AuthManager::AUTOCREATE_SOURCE_SESSION,
-			true
+			true,
+			true,
+			$sessionUser
 		);
-		\MediaWiki\Logger\LoggerFactory::getInstance( 'authevents' )->info( 'Autocreation attempt', [
-			'event' => 'autocreate',
-			'status' => strval( $res ),
-		] );
-		unset( $res );
 	}
 	unset( $sessionUser );
 }
 
-if ( !$wgCommandLineMode ) {
-	Pingback::schedulePingback();
+// Optimization: Avoid overhead from DeferredUpdates and Pingback deps when turned off.
+if ( MW_ENTRY_POINT !== 'cli' && $wgPingback ) {
+	// NOTE: Do not refactor to inject Config or otherwise make unconditional service call.
+	//
+	// On a plain install of MediaWiki, Pingback is likely the *only* feature
+	// involving DeferredUpdates or DB_PRIMARY on a regular page view.
+	// To allow for error recovery and fault isolation, let admins turn this
+	// off completely. (T269516)
+	DeferredUpdates::addCallableUpdate( static function () {
+		MediaWikiServices::getInstance()->getPingback()->run();
+	} );
 }
 
 $settingsWarnings = $wgSettings->getWarnings();
@@ -604,6 +653,6 @@ global $wgFullyInitialised;
 $wgFullyInitialised = true;
 
 // T264370
-if ( !defined( 'MW_NO_SESSION' ) && !$wgCommandLineMode ) {
+if ( !defined( 'MW_NO_SESSION' ) && MW_ENTRY_POINT !== 'cli' ) {
 	MediaWiki\Session\SessionManager::singleton()->logPotentialSessionLeakage();
 }

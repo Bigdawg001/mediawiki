@@ -1,7 +1,5 @@
 <?php
 /**
- * Base class for memcached clients.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,11 +16,17 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup Cache
  */
+namespace Wikimedia\ObjectCache;
+
+use Exception;
+use InvalidArgumentException;
+use RuntimeException;
 
 /**
- * Base class for memcached clients.
+ * Store data in a memcached server or memcached cluster.
+ *
+ * This is a base class for MemcachedPhpBagOStuff and MemcachedPeclBagOStuff.
  *
  * @ingroup Cache
  */
@@ -40,7 +44,7 @@ abstract class MemcachedBagOStuff extends MediumSpecificBagOStuff {
 	 *      unprefixed access. This can be used with mcrouter. [optional]
 	 */
 	public function __construct( array $params ) {
-		$params['segmentationSize'] ??= 917504; // < 1MiB
+		$params['segmentationSize'] ??= 917_504; // < 1MiB
 		parent::__construct( $params );
 
 		$this->routingPrefix = $params['routingPrefix'] ?? '';
@@ -50,11 +54,14 @@ abstract class MemcachedBagOStuff extends MediumSpecificBagOStuff {
 	}
 
 	/**
-	 * Construct a cache key.
+	 * Format a cache key.
 	 *
 	 * @since 1.27
+	 * @see BagOStuff::makeKeyInternal
+	 *
 	 * @param string $keyspace
-	 * @param array $components
+	 * @param string[]|int[]|null $components
+	 *
 	 * @return string
 	 */
 	protected function makeKeyInternal( $keyspace, $components ) {
@@ -65,7 +72,7 @@ abstract class MemcachedBagOStuff extends MediumSpecificBagOStuff {
 		$charsLeft = 205 - strlen( $keyspace ) - count( $components );
 
 		foreach ( $components as &$component ) {
-			$component = strtr( $component, ' ', '_' );
+			$component = strtr( $component ?? '', ' ', '_' );
 
 			// Make sure %, #, and non-ASCII chars are escaped
 			$component = preg_replace_callback(
@@ -83,6 +90,7 @@ abstract class MemcachedBagOStuff extends MediumSpecificBagOStuff {
 
 			$charsLeft -= strlen( $component );
 		}
+		unset( $component );
 
 		if ( $charsLeft < 0 ) {
 			return $keyspace . ':BagOStuff-long-key:##' . md5( implode( ':', $components ) );
@@ -91,17 +99,22 @@ abstract class MemcachedBagOStuff extends MediumSpecificBagOStuff {
 		return $keyspace . ':' . implode( ':', $components );
 	}
 
+	protected function requireConvertGenericKey(): bool {
+		return true;
+	}
+
 	/**
 	 * Ensure that a key is safe to use (contains no control characters and no
 	 * characters above the ASCII range.)
 	 *
 	 * @param string $key
+	 *
 	 * @return string
 	 * @throws Exception
 	 */
 	public function validateKeyEncoding( $key ) {
 		if ( preg_match( '/[^\x21-\x7e]+/', $key ) ) {
-			throw new Exception( "Key contains invalid characters: $key" );
+			throw new InvalidArgumentException( "Key contains invalid characters: $key" );
 		}
 
 		return $key;
@@ -109,6 +122,7 @@ abstract class MemcachedBagOStuff extends MediumSpecificBagOStuff {
 
 	/**
 	 * @param string $key
+	 *
 	 * @return string
 	 */
 	protected function validateKeyAndPrependRoute( $key ) {
@@ -127,6 +141,7 @@ abstract class MemcachedBagOStuff extends MediumSpecificBagOStuff {
 
 	/**
 	 * @param string $key
+	 *
 	 * @return string
 	 */
 	protected function stripRouteFromKey( $key ) {
@@ -134,9 +149,8 @@ abstract class MemcachedBagOStuff extends MediumSpecificBagOStuff {
 			return $key;
 		}
 
-		$prefixLength = strlen( $this->routingPrefix );
-		if ( substr( $key, 0, $prefixLength ) === $this->routingPrefix ) {
-			return substr( $key, $prefixLength );
+		if ( str_starts_with( $key, $this->routingPrefix ) ) {
+			return substr( $key, strlen( $this->routingPrefix ) );
 		}
 
 		return $key;
@@ -144,6 +158,7 @@ abstract class MemcachedBagOStuff extends MediumSpecificBagOStuff {
 
 	/**
 	 * @param int|float $exptime
+	 *
 	 * @return int
 	 */
 	protected function fixExpiry( $exptime ) {
@@ -177,6 +192,7 @@ abstract class MemcachedBagOStuff extends MediumSpecificBagOStuff {
 	 * @param int $exptime
 	 * @param int $step
 	 * @param int $init
+	 *
 	 * @return bool True on success, false on failure
 	 */
 	abstract protected function doIncrWithInitAsync( $key, $exptime, $step, $init );
@@ -186,7 +202,11 @@ abstract class MemcachedBagOStuff extends MediumSpecificBagOStuff {
 	 * @param int $exptime
 	 * @param int $step
 	 * @param int $init
+	 *
 	 * @return int|bool New value or false on failure
 	 */
 	abstract protected function doIncrWithInitSync( $key, $exptime, $step, $init );
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( MemcachedBagOStuff::class, 'MemcachedBagOStuff' );

@@ -18,7 +18,11 @@
  * @file
  */
 
+namespace MediaWiki\Pager;
+
+use DateTime;
 use MediaWiki\Html\Html;
+use MediaWiki\Utils\MWTimestamp;
 use Wikimedia\Timestamp\TimestampException;
 
 /**
@@ -43,10 +47,6 @@ abstract class ReverseChronologicalPager extends IndexPager {
 	/** @var string */
 	protected $endOffset;
 
-	/**
-	 * @param string $date
-	 * @return string
-	 */
 	protected function getHeaderRow( string $date ): string {
 		$headingClass = $this->isFirstHeaderRow() ?
 			// We use mw-index-pager- prefix here on the anticipation that this method will
@@ -169,7 +169,7 @@ abstract class ReverseChronologicalPager extends IndexPager {
 			return '';
 		}
 
-		if ( isset( $this->mNavigationBar ) ) {
+		if ( $this->mNavigationBar !== null ) {
 			return $this->mNavigationBar;
 		}
 
@@ -290,16 +290,7 @@ abstract class ReverseChronologicalPager extends IndexPager {
 			$year++;
 		}
 
-		// Y2K38 bug
-		if ( $year > 2032 ) {
-			$year = 2032;
-		}
-
 		$ymd = sprintf( "%04d%02d%02d", $year, $month, $day );
-
-		if ( $ymd > '20320101' ) {
-			$ymd = '20320101';
-		}
 
 		return MWTimestamp::getInstance( "{$ymd}000000" );
 	}
@@ -324,9 +315,12 @@ abstract class ReverseChronologicalPager extends IndexPager {
 			$order
 		);
 		if ( $this->endOffset ) {
-			$conds[] = $this->mDb->buildComparison( '<', [ $this->getTimestampField() => $this->endOffset ] );
+			$conds[] = $this->mDb->expr( $this->getTimestampField(), '<', $this->endOffset );
 		}
 
 		return [ $tables, $fields, $conds, $fname, $options, $join_conds ];
 	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( ReverseChronologicalPager::class, 'ReverseChronologicalPager' );

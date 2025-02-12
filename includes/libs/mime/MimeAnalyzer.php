@@ -1,7 +1,5 @@
 <?php
 /**
- * Module defining helper functions for detecting and dealing with MIME types.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -19,17 +17,26 @@
  *
  * @file
  */
+
+namespace Wikimedia\Mime;
+
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use UnexpectedValueException;
 use Wikimedia\AtEase\AtEase;
-use Wikimedia\Mime\MimeMap;
-use Wikimedia\Mime\MimeMapMinimal;
 
 /**
- * Implements functions related to MIME types such as detection and mapping to file extension
+ * @defgroup Mime Mime
+ *
+ * @ingroup Media
+ */
+
+/**
+ * Detect MIME types of a file by mapping file extensions or parsing file contents.
  *
  * @since 1.28
+ * @ingroup Mime
  */
 class MimeAnalyzer implements LoggerAwareInterface {
 	/** @var string */
@@ -100,7 +107,7 @@ class MimeAnalyzer implements LoggerAwareInterface {
 	protected function loadFiles(): void {
 		# Allow media handling extensions adding MIME-types and MIME-info
 		if ( $this->initCallback ) {
-			call_user_func( $this->initCallback, $this );
+			( $this->initCallback )( $this );
 		}
 
 		$rawTypes = $this->extraTypes;
@@ -154,10 +161,7 @@ class MimeAnalyzer implements LoggerAwareInterface {
 		$lines = explode( "\n", $rawMimeTypes );
 		foreach ( $lines as $s ) {
 			$s = trim( $s );
-			if ( empty( $s ) ) {
-				continue;
-			}
-			if ( strpos( $s, '#' ) === 0 ) {
+			if ( $s === '' || str_starts_with( $s, '#' ) ) {
 				continue;
 			}
 
@@ -170,7 +174,7 @@ class MimeAnalyzer implements LoggerAwareInterface {
 
 			$ext = trim( substr( $s, $i + 1 ) );
 
-			if ( empty( $ext ) ) {
+			if ( !$ext ) {
 				continue;
 			}
 
@@ -190,10 +194,7 @@ class MimeAnalyzer implements LoggerAwareInterface {
 		$lines = explode( "\n", $rawMimeInfo );
 		foreach ( $lines as $s ) {
 			$s = trim( $s );
-			if ( empty( $s ) ) {
-				continue;
-			}
-			if ( strpos( $s, '#' ) === 0 ) {
+			if ( $s === '' || str_starts_with( $s, '#' ) ) {
 				continue;
 			}
 
@@ -222,7 +223,7 @@ class MimeAnalyzer implements LoggerAwareInterface {
 
 			foreach ( $m as $mime ) {
 				$mime = trim( $mime );
-				if ( empty( $mime ) ) {
+				if ( !$mime ) {
 					continue;
 				}
 
@@ -249,8 +250,6 @@ class MimeAnalyzer implements LoggerAwareInterface {
 	 *
 	 * As an extension author, you are encouraged to submit patches to
 	 * MediaWiki's core to add new MIME types to MimeMap.php.
-	 *
-	 * @param string $types
 	 */
 	public function addExtraTypes( string $types ): void {
 		$this->extraTypes .= "\n" . $types;
@@ -261,8 +260,6 @@ class MimeAnalyzer implements LoggerAwareInterface {
 	 *
 	 * As an extension author, you are encouraged to submit patches to
 	 * MediaWiki's core to add new MIME info to MimeMap.php.
-	 *
-	 * @param string $info
 	 */
 	public function addExtraInfo( string $info ): void {
 		$this->extraInfo .= "\n" . $info;
@@ -387,10 +384,12 @@ class MimeAnalyzer implements LoggerAwareInterface {
 	 * Returns true if the MIME type is known to represent an image format
 	 * supported by the PHP GD library.
 	 *
+	 * @deprecated since 1.40
 	 * @param string $mime
 	 * @return bool
 	 */
 	public function isPHPImageType( string $mime ): bool {
+		wfDeprecated( __METHOD__, '1.40' );
 		// As defined by imagegetsize and image_type_to_mime
 		static $types = [
 			'image/gif', 'image/jpeg', 'image/png',
@@ -434,7 +433,7 @@ class MimeAnalyzer implements LoggerAwareInterface {
 			'svg',
 
 			// 3D formats
-			'stl',
+			'stl', 'glb',
 		];
 		return in_array( strtolower( $extension ), $types );
 	}
@@ -584,6 +583,9 @@ class MimeAnalyzer implements LoggerAwareInterface {
 			'%PDF'             => 'application/pdf',
 			'gimp xcf'         => 'image/x-xcf',
 
+			// 3D
+			"glTF"             => 'model/gltf-binary',
+
 			// Some forbidden fruit...
 			'MZ'               => 'application/octet-stream', // DOS/Windows executable
 			"\xca\xfe\xba\xbe" => 'application/octet-stream', // Mach-O binary
@@ -706,13 +708,13 @@ class MimeAnalyzer implements LoggerAwareInterface {
 		$script_type = null;
 
 		# detect by shebang
-		if ( substr( $head, 0, 2 ) == "#!" ) {
+		if ( str_starts_with( $head, "#!" ) ) {
 			$script_type = "ASCII";
-		} elseif ( substr( $head, 0, 5 ) == "\xef\xbb\xbf#!" ) {
+		} elseif ( str_starts_with( $head, "\xef\xbb\xbf#!" ) ) {
 			$script_type = "UTF-8";
-		} elseif ( substr( $head, 0, 7 ) == "\xfe\xff\x00#\x00!" ) {
+		} elseif ( str_starts_with( $head, "\xfe\xff\x00#\x00!" ) ) {
 			$script_type = "UTF-16BE";
-		} elseif ( substr( $head, 0, 7 ) == "\xff\xfe#\x00!" ) {
+		} elseif ( str_starts_with( $head, "\xff\xfe#\x00!" ) ) {
 			$script_type = "UTF-16LE";
 		}
 
@@ -948,7 +950,7 @@ class MimeAnalyzer implements LoggerAwareInterface {
 	 * @param string|null $mime MIME type. If null it will be guessed using guessMimeType.
 	 * @return string A value to be used with the MEDIATYPE_xxx constants.
 	 */
-	public function getMediaType( string $path = null, string $mime = null ): string {
+	public function getMediaType( ?string $path = null, ?string $mime = null ): string {
 		if ( !$mime && !$path ) {
 			return MEDIATYPE_UNKNOWN;
 		}
@@ -1072,4 +1074,33 @@ class MimeAnalyzer implements LoggerAwareInterface {
 	public function getMediaTypes(): array {
 		return array_keys( $this->mediaTypes );
 	}
+
+	/**
+	 * Check if major_mime has a value accepted by enum in a database schema.
+	 *
+	 * @since 1.42.0 (also backported to 1.39.7, 1.40.3 and 1.41.1)
+	 *
+	 * @param string $type
+	 * @return bool
+	 */
+	public function isValidMajorMimeType( string $type ): bool {
+		// See the definition of the `img_major_mime` enum in tables-generated.sql
+		$types = [
+			'unknown',
+			'application',
+			'audio',
+			'image',
+			'text',
+			'video',
+			'message',
+			'model',
+			'multipart',
+			'chemical',
+		];
+
+		return in_array( $type, $types );
+	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( MimeAnalyzer::class, 'MimeAnalyzer' );

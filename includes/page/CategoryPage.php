@@ -69,7 +69,7 @@ class CategoryPage extends Article {
 		$outputPage = $this->getContext()->getOutput();
 		$outputPage->adaptCdnTTL(
 			$this->getPage()->getTouched(),
-			IExpiringStore::TTL_MINUTE
+			60
 		);
 	}
 
@@ -83,7 +83,7 @@ class CategoryPage extends Article {
 		$oldFrom = $request->getVal( 'from' );
 		$oldUntil = $request->getVal( 'until' );
 
-		$reqArray = $request->getValues();
+		$reqArray = $request->getQueryValues();
 
 		$from = $until = [];
 		foreach ( [ 'page', 'subcat', 'file' ] as $type ) {

@@ -46,9 +46,11 @@ class AutoLoader {
 		'MediaWiki\\Block\\' => __DIR__ . '/block/',
 		'MediaWiki\\Cache\\' => __DIR__ . '/cache/',
 		'MediaWiki\\ChangeTags\\' => __DIR__ . '/changetags/',
+		'MediaWiki\\Composer\\' => __DIR__ . '/composer/',
 		'MediaWiki\\Config\\' => __DIR__ . '/config/',
 		'MediaWiki\\Content\\' => __DIR__ . '/content/',
 		'MediaWiki\\DB\\' => __DIR__ . '/db/',
+		'MediaWiki\\Deferred\\' => __DIR__ . '/deferred/',
 		'MediaWiki\\Deferred\\LinksUpdate\\' => __DIR__ . '/deferred/LinksUpdate/',
 		'MediaWiki\\Diff\\' => __DIR__ . '/diff/',
 		'MediaWiki\\EditPage\\' => __DIR__ . '/editpage/',
@@ -66,8 +68,10 @@ class AutoLoader {
 		'MediaWiki\\Mail\\' => __DIR__ . '/mail/',
 		'MediaWiki\\Page\\' => __DIR__ . '/page/',
 		'MediaWiki\\Parser\\' => __DIR__ . '/parser/',
+		'MediaWiki\\Password\\' => __DIR__ . '/password/',
 		'MediaWiki\\PoolCounter\\' => __DIR__ . '/poolcounter/',
 		'MediaWiki\\Preferences\\' => __DIR__ . '/preferences/',
+		'MediaWiki\\RCFeed\\' => __DIR__ . '/recentchanges/RCFeed/',
 		'MediaWiki\\Search\\' => __DIR__ . '/search/',
 		'MediaWiki\\Search\\SearchWidgets\\' => __DIR__ . '/search/searchwidgets/',
 		'MediaWiki\\Session\\' => __DIR__ . '/session/',
@@ -81,6 +85,7 @@ class AutoLoader {
 		'MediaWiki\\Utils\\' => __DIR__ . '/utils/',
 		'MediaWiki\\Widget\\' => __DIR__ . '/widget/',
 		'Wikimedia\\' => __DIR__ . '/libs/',
+		'Wikimedia\\Composer\\' => __DIR__ . '/libs/composer/',
 		'Wikimedia\\Http\\' => __DIR__ . '/libs/http/',
 		'Wikimedia\\Rdbms\\Platform\\' => __DIR__ . '/libs/rdbms/platform/',
 		'Wikimedia\\UUID\\' => __DIR__ . '/libs/uuid/',
@@ -88,9 +93,8 @@ class AutoLoader {
 
 	/**
 	 * @var string[] Namespace (ends with \) => Path (ends with /)
-	 * @internal Will become private in 1.40.
 	 */
-	public static $psr4Namespaces = self::CORE_NAMESPACES;
+	private static $psr4Namespaces = self::CORE_NAMESPACES;
 
 	/**
 	 * @var string[] Class => File
@@ -174,6 +178,7 @@ class AutoLoader {
 		if ( !$filename && strpos( $className, '\\' ) !== false ) {
 			// This class is namespaced, so look in the namespace map
 			$prefix = $className;
+			// phpcs:ignore Generic.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition
 			while ( ( $pos = strrpos( $prefix, '\\' ) ) !== false ) {
 				// Check to see if this namespace prefix is in the map
 				$prefix = substr( $className, 0, $pos + 1 );
@@ -218,7 +223,7 @@ class AutoLoader {
 		$filename = self::find( $className );
 
 		if ( $filename !== null ) {
-			require $filename;
+			require_once $filename;
 		}
 	}
 

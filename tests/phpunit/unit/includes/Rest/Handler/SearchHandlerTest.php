@@ -2,10 +2,13 @@
 
 namespace MediaWiki\Tests\Rest\Handler;
 
-use HashConfig;
 use InvalidArgumentException;
-use Language;
+use MediaWiki\Config\HashConfig;
+use MediaWiki\Config\ServiceOptions;
 use MediaWiki\HookContainer\HookContainer;
+use MediaWiki\Language\FormatterFactory;
+use MediaWiki\Language\Language;
+use MediaWiki\Language\RawMessage;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\PageIdentity;
@@ -19,25 +22,28 @@ use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\RequestData;
 use MediaWiki\Search\Entity\SearchResultThumbnail;
 use MediaWiki\Search\SearchResultThumbnailProvider;
+use MediaWiki\Status\Status;
+use MediaWiki\Status\StatusFormatter;
 use MediaWiki\Tests\Unit\DummyServicesTrait;
-use MediaWiki\User\UserOptionsLookup;
+use MediaWiki\Title\TitleFormatter;
+use MediaWiki\Title\TitleValue;
+use MediaWiki\User\Options\UserOptionsLookup;
+use MediaWikiUnitTestCase;
 use MockSearchResultSet;
 use PHPUnit\Framework\MockObject\MockObject;
 use SearchEngine;
+use SearchEngineConfig;
 use SearchEngineFactory;
 use SearchResult;
 use SearchResultSet;
 use SearchSuggestion;
 use SearchSuggestionSet;
-use Status;
-use TitleFormatter;
-use TitleValue;
 use Wikimedia\Message\MessageValue;
 
 /**
  * @covers \MediaWiki\Rest\Handler\SearchHandler
  */
-class SearchHandlerTest extends \MediaWikiUnitTestCase {
+class SearchHandlerTest extends MediaWikiUnitTestCase {
 
 	use DummyServicesTrait;
 	use MediaTestTrait;
@@ -69,22 +75,26 @@ class SearchHandlerTest extends \MediaWikiUnitTestCase {
 		$redirectLookup = null,
 		$pageStore = null,
 		$mockTitleFormatter = null,
-		HookContainer $hookContainer = null
+		?HookContainer $hookContainer = null
 	) {
-		$config = new HashConfig( [
+		$sources = [
 			MainConfigNames::SearchType => 'test',
 			MainConfigNames::SearchTypeAlternatives => [],
 			MainConfigNames::NamespacesToBeSearchedDefault => [ NS_MAIN => true ],
 			MainConfigNames::SearchSuggestCacheExpiry => 1200,
-		] );
+		];
+		$config = new HashConfig( $sources );
 
 		/** @var Language|MockObject $language */
 		$language = $this->createNoOpMock( Language::class );
 		$hookContainer ??= $this->createHookContainer();
 		/** @var UserOptionsLookup|MockObject $userOptionsLookup */
 		$userOptionsLookup = $this->createMock( UserOptionsLookup::class );
-		$searchEngineConfig = new \SearchEngineConfig(
-			$config,
+		$searchEngineConfig = new SearchEngineConfig(
+			new ServiceOptions(
+				SearchEngineConfig::CONSTRUCTOR_OPTIONS,
+				$sources
+			),
 			$language,
 			$hookContainer,
 			[],
@@ -137,6 +147,14 @@ class SearchHandlerTest extends \MediaWikiUnitTestCase {
 			$hookContainer
 		);
 
+		$mockStatusFormatter = $this->createNoOpMock( StatusFormatter::class, [ 'getMessage' ] );
+		$mockStatusFormatter->method( 'getMessage' )->willReturn(
+			new RawMessage( 'testing' )
+		);
+
+		$mockFormatterFactory = $this->createNoOpMock( FormatterFactory::class, [ 'getStatusFormatter' ] );
+		$mockFormatterFactory->method( 'getStatusFormatter' )->willReturn( $mockStatusFormatter );
+
 		return new SearchHandler(
 			$config,
 			$searchEngineFactory,
@@ -145,7 +163,8 @@ class SearchHandlerTest extends \MediaWikiUnitTestCase {
 			$permissionManager,
 			$redirectLookup,
 			$pageStore,
-			$mockTitleFormatter
+			$mockTitleFormatter,
+			$mockFormatterFactory,
 		);
 	}
 
@@ -477,7 +496,7 @@ class SearchHandlerTest extends \MediaWikiUnitTestCase {
 					foreach ( $pageIdentities as $pageId => $pageIdentity ) {
 						$result[ $pageId ] = new SearchResultThumbnail(
 							'image/png',
-							2250,
+							null,
 							100,
 							125,
 							500,
@@ -502,7 +521,6 @@ class SearchHandlerTest extends \MediaWikiUnitTestCase {
 		$this->assertSame( 125, $data['pages'][0][ 'thumbnail' ]['height'] );
 		$this->assertSame( 100, $data['pages'][0][ 'thumbnail' ]['width'] );
 		$this->assertSame( 'image/png', $data['pages'][0][ 'thumbnail' ]['mimetype'] );
-		$this->assertSame( 2250, $data['pages'][0][ 'thumbnail' ]['size'] );
 		$this->assertSame( 500, $data['pages'][0][ 'thumbnail' ]['duration'] );
 		$this->assertArrayHasKey( 'description', $data['pages'][0] );
 		$this->assertSame( 'Description_1', $data['pages'][0][ 'description' ] );

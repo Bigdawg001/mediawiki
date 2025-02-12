@@ -11,6 +11,7 @@ use GuzzleHttp\Psr7\Uri;
 use MediaWiki\Settings\Cache\CacheableSource;
 use MediaWiki\Settings\SettingsBuilderException;
 use MediaWiki\Settings\Source\Format\JsonFormat;
+use Stringable;
 use UnexpectedValueException;
 
 /**
@@ -18,7 +19,7 @@ use UnexpectedValueException;
  *
  * @since 1.38
  */
-class EtcdSource implements CacheableSource {
+class EtcdSource implements Stringable, CacheableSource {
 	/**
 	 * Default HTTP client connection and request timeout (2 seconds).
 	 */
@@ -143,8 +144,6 @@ class EtcdSource implements CacheableSource {
 	/**
 	 * Allow stale results from etcd sources in case all servers become
 	 * temporarily unavailable.
-	 *
-	 * @return bool
 	 */
 	public function allowsStaleLoad(): bool {
 		return true;
@@ -159,9 +158,7 @@ class EtcdSource implements CacheableSource {
 	public function load(): array {
 		$lastException = false;
 
-		foreach ( ( $this->resolver )() as $server ) {
-			[ $host, $port ] = $server;
-
+		foreach ( ( $this->resolver )() as [ $host, $port ] ) {
 			try {
 				return $this->loadFromEtcdServer( $host, $port );
 			} catch ( ConnectException | ServerException $e ) {
@@ -180,8 +177,6 @@ class EtcdSource implements CacheableSource {
 
 	/**
 	 * The cache expiry TTL (in seconds) for this source.
-	 *
-	 * @return int
 	 */
 	public function getExpiryTtl(): int {
 		return self::EXPIRY_TTL;
@@ -190,8 +185,6 @@ class EtcdSource implements CacheableSource {
 	/**
 	 * Coefficient used in determining early expiration of cached settings to
 	 * avoid stampedes.
-	 *
-	 * @return float
 	 */
 	public function getExpiryWeight(): float {
 		return self::EXPIRY_WEIGHT;
@@ -202,8 +195,6 @@ class EtcdSource implements CacheableSource {
 	 * URL constructed using the etcd request URL. In the case where SRV
 	 * discovery is performed, the host in the URL will be the SRV record
 	 * name.
-	 *
-	 * @return string
 	 */
 	public function getHashKey(): string {
 		return (string)$this->uri;
@@ -211,8 +202,6 @@ class EtcdSource implements CacheableSource {
 
 	/**
 	 * Returns this etcd source as a string.
-	 *
-	 * @return string
 	 */
 	public function __toString(): string {
 		return (string)$this->uri;
@@ -240,7 +229,7 @@ class EtcdSource implements CacheableSource {
 		$settings = [];
 
 		try {
-			$resp = $this->format->decode( $response->getBody() );
+			$resp = $this->format->decode( $response->getBody()->getContents() );
 
 			if (
 				!isset( $resp['node'] ) || !is_array( $resp['node'] )

@@ -2,7 +2,7 @@
 
 const { action, assert, utils } = require( 'api-testing' );
 
-describe( 'The usercontribs list query', function testUserContribsListQuery() {
+describe( 'The usercontribs list query', () => {
 	const titleX = utils.title( 'Contribs_' );
 	const titleY = utils.title( 'Talk:Contribs_' );
 
@@ -28,10 +28,10 @@ describe( 'The usercontribs list query', function testUserContribsListQuery() {
 	};
 
 	before( async () => {
-		// NOTE: we can't use Promise.all to create the users in parallel for now,
-		// since that can trigger T199393.
-		await fiona.account( 'Fiona_' );
-		await franky.account( 'Franky_' );
+		await Promise.all( [
+			fiona.account( 'Fiona_' ),
+			franky.account( 'Franky_' )
+		] );
 
 		// Fiona edits X, second edit is minor, first edit is creation
 		edits.fiona1 = await fiona.edit( titleX, { text: 'Fiona X ONE', summary: 'fiona x one' } );
@@ -48,7 +48,7 @@ describe( 'The usercontribs list query', function testUserContribsListQuery() {
 
 	it( 'can lists all contributions for a given set of users', async () => {
 		const contribs = await fiona.list( 'usercontribs', {
-			ucuser: `${fiona.username}|${franky.username}`,
+			ucuser: `${ fiona.username }|${ franky.username }`,
 			ucprop: 'ids|user|comment|timestamp'
 		} );
 
@@ -66,7 +66,7 @@ describe( 'The usercontribs list query', function testUserContribsListQuery() {
 
 	it( 'can filter by namespace', async () => {
 		const contribs = await fiona.list( 'usercontribs', {
-			ucuser: `${fiona.username}|${franky.username}`,
+			ucuser: `${ fiona.username }|${ franky.username }`,
 			ucprop: 'ids|user|comment|timestamp',
 			ucnamespace: 1 // NS_TALK = 1
 		} );
@@ -82,7 +82,7 @@ describe( 'The usercontribs list query', function testUserContribsListQuery() {
 
 	it( 'can list top only', async () => {
 		const contribs = await fiona.list( 'usercontribs', {
-			ucuser: `${fiona.username}|${franky.username}`,
+			ucuser: `${ fiona.username }|${ franky.username }`,
 			ucprop: 'ids|user|comment|timestamp',
 			uctoponly: true
 		} );
@@ -97,7 +97,7 @@ describe( 'The usercontribs list query', function testUserContribsListQuery() {
 
 	it( 'can list creation only', async () => {
 		const contribs = await fiona.list( 'usercontribs', {
-			ucuser: `${fiona.username}|${franky.username}`,
+			ucuser: `${ fiona.username }|${ franky.username }`,
 			ucprop: 'ids|user|comment|timestamp',
 			ucshow: 'new'
 		} );

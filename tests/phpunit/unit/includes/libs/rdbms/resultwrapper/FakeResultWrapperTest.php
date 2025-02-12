@@ -21,12 +21,18 @@
  * @file
  */
 
+namespace Wikimedia\Tests\Rdbms;
+
+use MediaWikiCoversValidator;
+use PHPUnit\Framework\TestCase;
 use Wikimedia\Rdbms\FakeResultWrapper;
 
 /**
  * @covers \Wikimedia\Rdbms\FakeResultWrapper
  */
-class FakeResultWrapperTest extends PHPUnit\Framework\TestCase {
+class FakeResultWrapperTest extends TestCase {
+	use MediaWikiCoversValidator;
+
 	public function testIteration() {
 		$res = new FakeResultWrapper( [
 			[ 'colA' => 1, 'colB' => 'a' ],

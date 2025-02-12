@@ -1,16 +1,17 @@
 <?php
 
+use PHPUnit\Framework\TestCase;
 use Wikimedia\Rdbms\ServerInfo;
 
 /**
  * @covers \Wikimedia\Rdbms\ServerInfo
  */
-class ServerInfoTest extends \PHPUnit\Framework\TestCase {
+class ServerInfoTest extends TestCase {
 
 	use MediaWikiCoversValidator;
 
 	private function serverConfigs(
-		 $extra = [], $flags = DBO_DEFAULT
+		$extra = [], $flags = DBO_DEFAULT
 	) {
 		return [
 			// Primary DB

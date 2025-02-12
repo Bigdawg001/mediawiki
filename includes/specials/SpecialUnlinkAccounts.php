@@ -1,16 +1,24 @@
 <?php
 
+namespace MediaWiki\Specials;
+
+use ErrorPageError;
 use MediaWiki\Auth\AuthenticationResponse;
 use MediaWiki\Auth\AuthManager;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Session\SessionManager;
+use MediaWiki\SpecialPage\AuthManagerSpecialPage;
+use MediaWiki\Status\Status;
+use StatusValue;
 
+/**
+ * @ingroup SpecialPage
+ * @ingroup Auth
+ */
 class SpecialUnlinkAccounts extends AuthManagerSpecialPage {
+	/** @inheritDoc */
 	protected static $allowedActions = [ AuthManager::ACTION_UNLINK ];
 
-	/**
-	 * @param AuthManager $authManager
-	 */
 	public function __construct( AuthManager $authManager ) {
 		parent::__construct( 'UnlinkAccounts' );
 		$this->setAuthManager( $authManager );
@@ -97,3 +105,9 @@ class SpecialUnlinkAccounts extends AuthManagerSpecialPage {
 		return Status::newGood( $response );
 	}
 }
+
+/**
+ * Retain the old class name for backwards compatibility.
+ * @deprecated since 1.41
+ */
+class_alias( SpecialUnlinkAccounts::class, 'SpecialUnlinkAccounts' );

@@ -21,8 +21,6 @@ declare( strict_types=1 );
 
 namespace Wikimedia\Stats\Metrics;
 
-use InvalidArgumentException;
-use Psr\Log\LoggerInterface;
 use Wikimedia\Stats\Exceptions\IllegalOperationException;
 use Wikimedia\Stats\Sample;
 
@@ -36,136 +34,125 @@ use Wikimedia\Stats\Sample;
  * @since 1.38
  */
 class TimingMetric implements MetricInterface {
+	use MetricTrait;
 
 	/**
 	 * The StatsD protocol type indicator:
 	 * https://github.com/statsd/statsd/blob/v0.9.0/docs/metric_types.md
 	 * https://docs.datadoghq.com/developers/dogstatsd/datagram_shell/?tab=metrics
-	 *
-	 * @var string
 	 */
 	private const TYPE_INDICATOR = "ms";
 
-	/** @var string|null */
-	private ?string $statsdNamespace = null;
-
-	/** @var BaseMetricInterface */
-	private BaseMetricInterface $baseMetric;
-
-	/** @var LoggerInterface */
-	private LoggerInterface $logger;
-
-	/** @var float|null */
 	private ?float $startTime = null;
 
-	/** @inheritDoc */
-	public function __construct( $baseMetric, $logger ) {
-		$this->baseMetric = $baseMetric;
-		$this->logger = $logger;
-	}
-
 	/**
-	 * Starts a timer.
+	 * Start the timer.
 	 *
-	 * @return void
+	 * Example:
+	 *
+	 * ```php
+	 * $timer = StatsFactory->getTiming( 'example_seconds' )
+	 *     ->setLabel( 'foo', 'bar' )
+	 *     ->start();
+	 * # work to be measured...
+	 * $timer->stop();
+	 * ```
+	 *
+	 * @return $this
 	 */
-	public function start(): void {
-		$this->startTime = microtime( true );
+	public function start() {
+		$this->startTime = hrtime( true );
+		return $this;
 	}
 
 	/**
-	 * Stops a running timer.
-	 *
-	 * @return void
+	 * Stop the running timer.
 	 */
 	public function stop(): void {
 		if ( $this->startTime === null ) {
 			trigger_error( "Stats: stop() called before start() for metric '{$this->getName()}'", E_USER_WARNING );
 			return;
 		}
-		$this->observe( ( microtime( true ) - $this->startTime ) * 1000 );
+		$this->observeNanoseconds( hrtime( true ) - $this->startTime );
 		$this->startTime = null;
 	}
 
 	/**
-	 * Records a previously calculated observation.
+	 * Record a previously calculated observation in nanoseconds.
 	 *
-	 * @param float $value
+	 * Example:
+	 *
+	 * ```php
+	 * $startTime = hrtime( true )
+	 * # work to be measured...
+	 * $metric->observeNanoseconds( hrtime( true ) - $startTime )
+	 * ```
+	 *
+	 * @param float $nanoseconds
+	 * @return void
+	 * @since 1.43
+	 */
+	public function observeNanoseconds( float $nanoseconds ): void {
+		$this->addSample( $nanoseconds * 1e-6 );
+	}
+
+	/**
+	 * Record a previously calculated observation in seconds.
+	 *
+	 * This method is provided for tracking externally-generated values, timestamp deltas, and
+	 * situations where the expected input value is the expected Prometheus graphed value.
+	 *
+	 * Performance measurements in process should be done with hrtime() and observeNanoseconds()
+	 * to ensure monotonic time is used and not wall-clock time.
+	 *
+	 * Example:
+	 *
+	 * ```php
+	 * $startTime = microtime( true )
+	 * # work to be measured...
+	 * $metric->observeSeconds( microtime( true ) - $startTime )
+	 * ```
+	 *
+	 * @param float $seconds
+	 * @return void
+	 * @since 1.43
+	 */
+	public function observeSeconds( float $seconds ): void {
+		$this->addSample( $seconds * 1000 );
+	}
+
+	/**
+	 * Record a previously calculated observation in milliseconds.
+	 *
+	 * NOTE: You MUST pass values converted to milliseconds.
+	 *
+	 * This method is discouraged in new code, because PHP does not measure
+	 * time in milliseconds. It will be less error-prone if you use start()
+	 * and stop(), or pass values from hrtime() directly to observeNanoseconds()
+	 * without manual multiplication to another unit.
+	 *
+	 * @param float $milliseconds
 	 * @return void
 	 */
-	public function observe( float $value ): void {
-		if ( $this->statsdNamespace !== null ) {
-			$this->baseMetric->getStatsdDataFactory()->timing( $this->statsdNamespace, $value );
-			$this->statsdNamespace = null;
+	public function observe( float $milliseconds ): void {
+		$this->addSample( $milliseconds );
+	}
+
+	private function addSample( float $milliseconds ): void {
+		foreach ( $this->baseMetric->getStatsdNamespaces() as $namespace ) {
+			$this->baseMetric->getStatsdDataFactory()->timing( $namespace, $milliseconds );
 		}
-		$this->baseMetric->addSample( new Sample( $this->baseMetric->getLabelValues(), $value ) );
-	}
 
-	/** @inheritDoc */
-	public function getName(): string {
-		return $this->baseMetric->getName();
-	}
-
-	/** @inheritDoc */
-	public function getComponent(): string {
-		return $this->baseMetric->getComponent();
+		try {
+			$this->baseMetric->addSample( new Sample( $this->baseMetric->getLabelValues(), $milliseconds ) );
+		} catch ( IllegalOperationException $ex ) {
+			// Log the condition and give the caller something that will absorb calls.
+			trigger_error( $ex->getMessage(), E_USER_WARNING );
+		}
 	}
 
 	/** @inheritDoc */
 	public function getTypeIndicator(): string {
 		return self::TYPE_INDICATOR;
-	}
-
-	/** @inheritDoc */
-	public function getSamples(): array {
-		return $this->baseMetric->getSamples();
-	}
-
-	/** @inheritDoc */
-	public function getSampleRate(): float {
-		return $this->baseMetric->getSampleRate();
-	}
-
-	/** @inheritDoc */
-	public function withSampleRate( float $sampleRate ) {
-		try {
-			$this->baseMetric->setSampleRate( $sampleRate );
-		} catch ( IllegalOperationException | InvalidArgumentException $ex ) {
-			// Log the condition and give the caller something that will absorb calls.
-			trigger_error( $ex->getMessage(), E_USER_WARNING );
-			return new NullMetric;
-		}
-		return $this;
-	}
-
-	/** @inheritDoc */
-	public function getLabelKeys(): array {
-		return $this->baseMetric->getLabelKeys();
-	}
-
-	/** @inheritDoc */
-	public function withLabel( string $key, string $value ) {
-		try {
-			$this->baseMetric->addLabel( $key, $value );
-		} catch ( IllegalOperationException | InvalidArgumentException $ex ) {
-			// Log the condition and give the caller something that will absorb calls.
-			trigger_error( $ex->getMessage(), E_USER_WARNING );
-			return new NullMetric;
-		}
-		return $this;
-	}
-
-	/** @inheritDoc */
-	public function copyToStatsdAt( string $statsdNamespace ) {
-		if ( $this->baseMetric->getStatsdDataFactory() !== null ) {
-			$this->statsdNamespace = $statsdNamespace;
-		}
-		return $this;
-	}
-
-	/** @inheritDoc */
-	public function fresh(): TimingMetric {
-		$this->baseMetric->clearLabels();
-		return $this;
 	}
 }

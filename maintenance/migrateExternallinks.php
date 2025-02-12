@@ -1,8 +1,11 @@
 <?php
 
 use MediaWiki\ExternalLinks\LinkFilter;
+use MediaWiki\Maintenance\LoggedUpdateMaintenance;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script that migrates externallinks data
@@ -69,16 +72,17 @@ class MigrateExternallinks extends LoggedUpdateMaintenance {
 
 	private function handleBatch( $lowId ) {
 		$batchSize = $this->getBatchSize();
-		// BETWEEN is inclusive, let's subtract one.
+		// range is inclusive, let's subtract one.
 		$highId = $lowId + $batchSize - 1;
-		$dbw = $this->getDB( DB_PRIMARY );
+		$dbw = $this->getPrimaryDB();
 		$updated = 0;
 		$res = $dbw->newSelectQueryBuilder()
 			->select( [ 'el_id', 'el_to' ] )
 			->from( 'externallinks' )
 			->where( [
 				'el_to_domain_index' => '',
-				"el_id BETWEEN $lowId AND $highId"
+				$dbw->expr( 'el_id', '>=', $lowId ),
+				$dbw->expr( 'el_id', '<=', $highId ),
 			] )
 			->limit( $batchSize )
 			->caller( __METHOD__ )
@@ -92,12 +96,16 @@ class MigrateExternallinks extends LoggedUpdateMaintenance {
 			if ( !$paths ) {
 				continue;
 			}
-			// just take the first one, we are not sending proto-relative to LinkFilter
-			$update = [
-				'el_to_domain_index' => substr( $paths[0][0], 0, 255 ),
-				'el_to_path' => $paths[0][1]
-			];
-			$dbw->update( 'externallinks', $update, [ 'el_id' => $row->el_id ], __METHOD__ );
+			$dbw->newUpdateQueryBuilder()
+				->update( 'externallinks' )
+				// just take the first one, we are not sending proto-relative to LinkFilter
+				->set( [
+					'el_to_domain_index' => substr( $paths[0][0], 0, 255 ),
+					'el_to_path' => $paths[0][1]
+				] )
+				->where( [ 'el_id' => $row->el_id ] )
+				->caller( __METHOD__ )->execute();
+
 			$updated += $dbw->affectedRows();
 		}
 		$this->output( "Updated $updated rows\n" );
@@ -112,5 +120,7 @@ class MigrateExternallinks extends LoggedUpdateMaintenance {
 
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = MigrateExternallinks::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

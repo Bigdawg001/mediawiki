@@ -36,6 +36,8 @@ use Wikimedia\Assert\Assert;
  * stored, and later read and unserialized on another wiki, the value of the Wiki ID
  * must be adjusted to refer to the original wiki.
  *
+ * @see https://www.mediawiki.org/wiki/Manual:Modeling_pages
+ *
  * @since 1.36
  */
 class PageIdentityValue extends PageReferenceValue implements ProperPageIdentity {
@@ -117,7 +119,6 @@ class PageIdentityValue extends PageReferenceValue implements ProperPageIdentity
 	/**
 	 * Returns whether the page currently exists.
 	 * Returns true if getId() returns a value greater than zero.
-	 * @return bool
 	 */
 	public function exists(): bool {
 		return $this->getId( $this->getWikiId() ) > 0;

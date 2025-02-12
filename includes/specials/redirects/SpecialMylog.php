@@ -16,19 +16,30 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
  */
 
+namespace MediaWiki\Specials\Redirects;
+
+use LogPage;
+use MediaWiki\SpecialPage\RedirectSpecialPage;
+use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Title\Title;
+use MediaWiki\User\TempUser\TempUserConfig;
 
 /**
- * Special page pointing to current user's Special:Log.
+ * Redirect to Special:Log for the current user's name or IP.
  *
  * @ingroup SpecialPage
  */
 class SpecialMylog extends RedirectSpecialPage {
-	public function __construct() {
+
+	private TempUserConfig $tempUserConfig;
+
+	public function __construct( TempUserConfig $tempUserConfig ) {
 		parent::__construct( 'Mylog' );
+
+		$this->tempUserConfig = $tempUserConfig;
+
 		$this->mAllowedRedirectParams = [ 'type', 'subtype', 'page', 'pattern',
 			'tagfilter', 'tagInvert', 'offset', 'dir', 'offender',
 			'year', 'month', 'day' ];
@@ -39,9 +50,15 @@ class SpecialMylog extends RedirectSpecialPage {
 	 * @return Title
 	 */
 	public function getRedirect( $subpage ) {
+		// Redirect to login for anon users when temp accounts are enabled.
+		if ( $this->tempUserConfig->isEnabled() && $this->getUser()->isAnon() ) {
+			$this->requireLogin();
+		}
+
 		if ( $subpage === null || $subpage === '' ) {
 			return SpecialPage::getSafeTitleFor( 'Log', $this->getUser()->getName() );
 		}
+
 		return SpecialPage::getSafeTitleFor( 'Log', $subpage . '/' . $this->getUser()->getName() );
 	}
 
@@ -66,3 +83,9 @@ class SpecialMylog extends RedirectSpecialPage {
 		return $subpages;
 	}
 }
+
+/**
+ * Retain the old class name for backwards compatibility.
+ * @deprecated since 1.41
+ */
+class_alias( SpecialMylog::class, 'SpecialMylog' );

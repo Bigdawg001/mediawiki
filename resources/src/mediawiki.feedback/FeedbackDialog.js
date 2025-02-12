@@ -1,15 +1,17 @@
 /**
- * FeedbackDialog
- *
- * @class mw.Feedback.Dialog
+ * @class Dialog
+ * @classdesc Feedback dialog for use within the context mw.Feedback. Typically
+ * constructed using {@link mw.Feedback#launch} instead of directly using the constructor.
+ * @memberof mw.Feedback
  * @extends OO.ui.ProcessDialog
  *
  * @constructor
+ * @description Create an instance of `mw.Feedback.Dialog`.
  * @param {Object} config Configuration object
  */
 function FeedbackDialog( config ) {
 	// Parent constructor
-	FeedbackDialog.parent.call( this, config );
+	FeedbackDialog.super.call( this, config );
 
 	this.status = '';
 	this.feedbackPageTitle = null;
@@ -42,14 +44,14 @@ FeedbackDialog.static.actions = [
 ];
 
 /**
+ * Initializes the dialog.
+ *
+ * @ignore
  * @inheritdoc
  */
 FeedbackDialog.prototype.initialize = function () {
-	var feedbackSubjectFieldLayout, feedbackMessageFieldLayout,
-		feedbackFieldsetLayout, termsOfUseLabel;
-
 	// Parent method
-	FeedbackDialog.parent.prototype.initialize.call( this );
+	FeedbackDialog.super.prototype.initialize.call( this );
 
 	this.feedbackPanel = new OO.ui.PanelLayout( {
 		scrollable: false,
@@ -67,13 +69,13 @@ FeedbackDialog.prototype.initialize = function () {
 	this.feedbackMessageInput = new OO.ui.MultilineTextInputWidget( {
 		autosize: true
 	} );
-	feedbackSubjectFieldLayout = new OO.ui.FieldLayout( this.feedbackSubjectInput, {
+	const feedbackSubjectFieldLayout = new OO.ui.FieldLayout( this.feedbackSubjectInput, {
 		label: mw.msg( 'feedback-subject' )
 	} );
-	feedbackMessageFieldLayout = new OO.ui.FieldLayout( this.feedbackMessageInput, {
+	const feedbackMessageFieldLayout = new OO.ui.FieldLayout( this.feedbackMessageInput, {
 		label: mw.msg( 'feedback-message' )
 	} );
-	feedbackFieldsetLayout = new OO.ui.FieldsetLayout( {
+	const feedbackFieldsetLayout = new OO.ui.FieldsetLayout( {
 		items: [ feedbackSubjectFieldLayout, feedbackMessageFieldLayout ],
 		classes: [ 'mw-feedbackDialog-feedback-form' ]
 	} );
@@ -85,9 +87,11 @@ FeedbackDialog.prototype.initialize = function () {
 		align: 'inline'
 	} );
 
-	termsOfUseLabel = new OO.ui.LabelWidget( {
+	const $termsOfUseLabelText = $( '<p>' ).append( mw.message( 'feedback-termsofuse' ).parseDom() );
+	$termsOfUseLabelText.find( 'a' ).attr( 'target', '_blank' );
+	const termsOfUseLabel = new OO.ui.LabelWidget( {
 		classes: [ 'mw-feedbackDialog-feedback-termsofuse' ],
-		label: $( '<p>' ).append( mw.msg( 'feedback-termsofuse' ) )
+		label: $termsOfUseLabelText
 	} );
 
 	this.feedbackPanel.$element.append(
@@ -107,10 +111,13 @@ FeedbackDialog.prototype.initialize = function () {
 };
 
 /**
- * Validate the feedback form
+ * Validate the feedback form.
+ *
+ * @method validateFeedbackForm
+ * @memberof mw.Feedback.Dialog
  */
 FeedbackDialog.prototype.validateFeedbackForm = function () {
-	var isValid = (
+	const isValid = (
 		(
 			!this.useragentMandatory ||
 			this.useragentCheckbox.isSelected()
@@ -123,6 +130,7 @@ FeedbackDialog.prototype.validateFeedbackForm = function () {
 
 /**
  * @inheritdoc
+ * @ignore
  */
 FeedbackDialog.prototype.getBodyHeight = function () {
 	return this.feedbackPanel.$element.outerHeight( true );
@@ -130,13 +138,13 @@ FeedbackDialog.prototype.getBodyHeight = function () {
 
 /**
  * @inheritdoc
+ * @ignore
  */
 FeedbackDialog.prototype.getSetupProcess = function ( data ) {
-	return FeedbackDialog.parent.prototype.getSetupProcess.call( this, data )
-		.next( function () {
+	return FeedbackDialog.super.prototype.getSetupProcess.call( this, data )
+		.next( () => {
 			// Get the URL of the target page, we want to use that in links in the intro
 			// and in the success dialog
-			var dialog = this;
 			if ( data.foreignApi ) {
 				return data.foreignApi.get( {
 					action: 'query',
@@ -144,16 +152,15 @@ FeedbackDialog.prototype.getSetupProcess = function ( data ) {
 					inprop: 'url',
 					formatversion: 2,
 					titles: data.settings.title.getPrefixedText()
-				} ).then( function ( response ) {
-					dialog.feedbackPageUrl = OO.getProp( response, 'query', 'pages', 0, 'canonicalurl' );
+				} ).then( ( response ) => {
+					this.feedbackPageUrl = OO.getProp( response, 'query', 'pages', 0, 'canonicalurl' );
 				} );
 			} else {
 				this.feedbackPageUrl = data.settings.title.getUrl();
 			}
-		}, this )
-		.next( function () {
-			var $link,
-				settings = data.settings;
+		} )
+		.next( () => {
+			const settings = data.settings;
 			data.contents = data.contents || {};
 
 			// Prefill subject/message
@@ -174,7 +181,7 @@ FeedbackDialog.prototype.getSetupProcess = function ( data ) {
 			this.useragentMandatory = settings.useragentCheckbox.mandatory;
 			this.useragentFieldLayout.toggle( settings.useragentCheckbox.show );
 
-			$link = $( '<a>' )
+			const $link = $( '<a>' )
 				.attr( 'href', this.feedbackPageUrl )
 				.attr( 'target', '_blank' )
 				.text( this.feedbackPageName );
@@ -183,45 +190,46 @@ FeedbackDialog.prototype.getSetupProcess = function ( data ) {
 			);
 
 			this.validateFeedbackForm();
-		}, this );
+		} );
 };
 
 /**
  * @inheritdoc
+ * @ignore
  */
 FeedbackDialog.prototype.getReadyProcess = function ( data ) {
-	return FeedbackDialog.parent.prototype.getReadyProcess.call( this, data )
-		.next( function () {
+	return FeedbackDialog.super.prototype.getReadyProcess.call( this, data )
+		.next( () => {
 			this.feedbackSubjectInput.focus();
-		}, this );
+		} );
 };
 
 /**
  * @inheritdoc
+ * @ignore
  */
 FeedbackDialog.prototype.getActionProcess = function ( action ) {
 	if ( action === 'cancel' ) {
-		return new OO.ui.Process( function () {
+		return new OO.ui.Process( () => {
 			this.close( { action: action } );
-		}, this );
+		} );
 	} else if ( action === 'external' ) {
-		return new OO.ui.Process( function () {
+		return new OO.ui.Process( () => {
 			// Open in a new window
 			window.open( this.getBugReportLink(), '_blank' );
 			// Close the dialog
 			this.close();
-		}, this );
+		} );
 	} else if ( action === 'submit' ) {
-		return new OO.ui.Process( function () {
-			var fb = this,
-				userAgentMessage = ':' +
+		return new OO.ui.Process( () => {
+			const userAgentMessage = ':' +
 					'<small>' +
 					mw.msg( 'feedback-useragent' ) +
 					' ' +
 					mw.html.escape( navigator.userAgent ) +
 					'</small>\n\n',
-				subject = this.feedbackSubjectInput.getValue(),
-				message = this.feedbackMessageInput.getValue();
+				subject = this.feedbackSubjectInput.getValue();
+			let message = this.feedbackMessageInput.getValue();
 
 			// Add user agent if checkbox is selected
 			if ( this.useragentCheckbox.isSelected() ) {
@@ -229,20 +237,16 @@ FeedbackDialog.prototype.getActionProcess = function ( action ) {
 			}
 
 			// Post the message
-			return this.messagePosterPromise.then( function ( poster ) {
-				return fb.postMessage( poster, subject, message );
-			}, function () {
-				fb.status = 'error4';
+			return this.messagePosterPromise.then( ( poster ) => this.postMessage( poster, subject, message ), () => {
+				this.status = 'error4';
 				mw.log.warn( 'Feedback report failed because MessagePoster could not be fetched' );
-			} ).then( function () {
-				fb.close();
-			}, function () {
-				return fb.getErrorMessage();
-			} );
-		}, this );
+			} ).then( () => {
+				this.close();
+			}, () => this.getErrorMessage() );
+		} );
 	}
 	// Fallback to parent handler
-	return FeedbackDialog.parent.prototype.getActionProcess.call( this, action );
+	return FeedbackDialog.super.prototype.getActionProcess.call( this, action );
 };
 
 /**
@@ -273,36 +277,35 @@ FeedbackDialog.prototype.getErrorMessage = function () {
  * @return {jQuery.Promise} Promise representing success of message posting action
  */
 FeedbackDialog.prototype.postMessage = function ( poster, subject, message ) {
-	var fb = this;
-
 	return poster.post(
 		subject,
 		message
-	).then( function () {
-		fb.status = 'submitted';
-	}, function ( mainCode, secondaryCode, details ) {
+	).then( () => {
+		this.status = 'submitted';
+	}, ( mainCode, secondaryCode, details ) => {
 		if ( mainCode === 'api-fail' ) {
 			if ( secondaryCode === 'http' ) {
-				fb.status = 'error3';
+				this.status = 'error3';
 				// ajax request failed
 				mw.log.warn( 'Feedback report failed with HTTP error: ' + details.textStatus );
 			} else {
-				fb.status = 'error2';
+				this.status = 'error2';
 				mw.log.warn( 'Feedback report failed with API error: ' + secondaryCode );
 			}
-			fb.$statusFromApi = ( new mw.Api() ).getErrorMessage( details );
+			this.$statusFromApi = ( new mw.Api() ).getErrorMessage( details );
 		} else {
-			fb.status = 'error1';
+			this.status = 'error1';
 		}
 	} );
 };
 
 /**
+ * @ignore
  * @inheritdoc
  */
 FeedbackDialog.prototype.getTeardownProcess = function ( data ) {
-	return FeedbackDialog.parent.prototype.getTeardownProcess.call( this, data )
-		.first( function () {
+	return FeedbackDialog.super.prototype.getTeardownProcess.call( this, data )
+		.first( () => {
 			this.emit( 'submit', this.status, this.feedbackPageName, this.feedbackPageUrl );
 			// Cleanup
 			this.status = '';
@@ -310,22 +313,26 @@ FeedbackDialog.prototype.getTeardownProcess = function ( data ) {
 			this.feedbackSubjectInput.setValue( '' );
 			this.feedbackMessageInput.setValue( '' );
 			this.useragentCheckbox.setSelected( false );
-		}, this );
+		} );
 };
 
 /**
- * Set the bug report link
+ * Set the bug report link.
  *
+ * @method setBugReportLink
  * @param {string} link Link to the external bug report form
+ * @memberof mw.Feedback.Dialog
  */
 FeedbackDialog.prototype.setBugReportLink = function ( link ) {
 	this.bugReportLink = link;
 };
 
 /**
- * Get the bug report link
+ * Get the bug report link.
  *
+ * @method getBugReportLink
  * @return {string} Link to the external bug report form
+ * @memberof mw.Feedback.Dialog
  */
 FeedbackDialog.prototype.getBugReportLink = function () {
 	return this.bugReportLink;

@@ -25,12 +25,13 @@ use ChangeTags;
 use ManualLogEntry;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\Message\Message;
 use MediaWiki\Permissions\Authority;
+use MediaWiki\Status\Status;
+use MediaWiki\Title\TitleValue;
 use MediaWiki\User\UserFactory;
 use MediaWiki\User\UserIdentity;
 use RevisionDeleteUser;
-use Status;
-use TitleValue;
 
 /**
  * Backend class for unblocking users
@@ -38,20 +39,11 @@ use TitleValue;
  * @since 1.36
  */
 class UnblockUser {
-	/** @var BlockPermissionChecker */
-	private $blockPermissionChecker;
-
-	/** @var DatabaseBlockStore */
-	private $blockStore;
-
-	/** @var BlockUtils */
-	private $blockUtils;
-
-	/** @var UserFactory */
-	private $userFactory;
-
-	/** @var HookRunner */
-	private $hookRunner;
+	private BlockPermissionChecker $blockPermissionChecker;
+	private DatabaseBlockStore $blockStore;
+	private BlockUtils $blockUtils;
+	private UserFactory $userFactory;
+	private HookRunner $hookRunner;
 
 	/** @var UserIdentity|string */
 	private $target;
@@ -59,8 +51,9 @@ class UnblockUser {
 	/** @var int */
 	private $targetType;
 
-	/** @var DatabaseBlock|null */
-	private $block;
+	private ?DatabaseBlock $block;
+
+	private ?DatabaseBlock $blockToRemove = null;
 
 	/** @var Authority */
 	private $performer;
@@ -77,7 +70,8 @@ class UnblockUser {
 	 * @param BlockUtils $blockUtils
 	 * @param UserFactory $userFactory
 	 * @param HookContainer $hookContainer
-	 * @param UserIdentity|string $target
+	 * @param DatabaseBlock|null $blockToRemove
+	 * @param UserIdentity|string|null $target
 	 * @param Authority $performer
 	 * @param string $reason
 	 * @param string[] $tags
@@ -88,32 +82,41 @@ class UnblockUser {
 		BlockUtils $blockUtils,
 		UserFactory $userFactory,
 		HookContainer $hookContainer,
+		?DatabaseBlock $blockToRemove,
 		$target,
 		Authority $performer,
 		string $reason,
 		array $tags = []
 	) {
 		// Process dependencies
-		$this->blockPermissionChecker = $blockPermissionCheckerFactory
-			->newBlockPermissionChecker(
-				$target,
-				$performer
-			);
 		$this->blockStore = $blockStore;
 		$this->blockUtils = $blockUtils;
 		$this->userFactory = $userFactory;
 		$this->hookRunner = new HookRunner( $hookContainer );
 
 		// Process params
-		[ $this->target, $this->targetType ] = $this->blockUtils->parseBlockTarget( $target );
-		if (
-			$this->targetType === AbstractBlock::TYPE_AUTO &&
-			is_numeric( $this->target )
-		) {
-			// Needed, because BlockUtils::parseBlockTarget will strip the # from autoblocks.
-			$this->target = '#' . $this->target;
+		if ( $blockToRemove !== null ) {
+			$this->blockToRemove = $blockToRemove;
+			$this->target = $blockToRemove->getTargetUserIdentity()
+				?? $blockToRemove->getTargetName();
+			$this->targetType = $blockToRemove->getType() ?? -1;
+		} else {
+			[ $this->target, $this->targetType ] = $this->blockUtils->parseBlockTarget( $target );
+			if (
+				$this->targetType === AbstractBlock::TYPE_AUTO &&
+				is_numeric( $this->target )
+			) {
+				// Needed, because BlockUtils::parseBlockTarget will strip the # from autoblocks.
+				$this->target = '#' . $this->target;
+			}
 		}
-		$this->block = DatabaseBlock::newFromTarget( $this->target );
+
+		$this->blockPermissionChecker = $blockPermissionCheckerFactory
+			->newBlockPermissionChecker(
+				$this->target,
+				$performer
+			);
+
 		$this->performer = $performer;
 		$this->reason = $reason;
 		$this->tags = $tags;
@@ -121,22 +124,26 @@ class UnblockUser {
 
 	/**
 	 * Unblock user
-	 *
-	 * @return Status
 	 */
 	public function unblock(): Status {
 		$status = Status::newGood();
 
-		$basePermissionCheckResult = $this->blockPermissionChecker->checkBasePermissions(
-			$this->block instanceof DatabaseBlock && $this->block->getHideName()
-		);
-		if ( $basePermissionCheckResult !== true ) {
-			return $status->fatal( $basePermissionCheckResult );
+		$this->block = $this->getBlockToRemove( $status );
+		if ( !$status->isOK() ) {
+			return $status;
 		}
 
 		$blockPermissionCheckResult = $this->blockPermissionChecker->checkBlockPermissions();
 		if ( $blockPermissionCheckResult !== true ) {
 			return $status->fatal( $blockPermissionCheckResult );
+		}
+
+		$basePermissionCheckResult = $this->blockPermissionChecker->checkBasePermissions(
+			$this->block instanceof DatabaseBlock && $this->block->getHideName()
+		);
+
+		if ( $basePermissionCheckResult !== true ) {
+			return $status->fatal( $basePermissionCheckResult );
 		}
 
 		if ( count( $this->tags ) !== 0 ) {
@@ -151,6 +158,7 @@ class UnblockUser {
 		if ( !$status->isOK() ) {
 			return $status;
 		}
+
 		return $this->unblockUnsafe();
 	}
 
@@ -162,6 +170,11 @@ class UnblockUser {
 	 */
 	public function unblockUnsafe(): Status {
 		$status = Status::newGood();
+
+		$this->block ??= $this->getBlockToRemove( $status );
+		if ( !$status->isOK() ) {
+			return $status;
+		}
 
 		if ( $this->block === null ) {
 			return $status->fatal( 'ipb_cant_unblock', $this->target );
@@ -223,8 +236,34 @@ class UnblockUser {
 		$logEntry->setPerformer( $this->performer->getUser() );
 		$logEntry->addTags( $this->tags );
 		$logEntry->setRelations( [ 'ipb_id' => $this->block->getId() ] );
+		// Save the ID to log_params, since MW 1.44
+		$logEntry->addParameter( 'blockId', $this->block->getId() );
 		$logId = $logEntry->insert();
 		$logEntry->publish( $logId );
 	}
 
+	private function getBlockToRemove( Status $status ): ?DatabaseBlock {
+		if ( $this->blockToRemove !== null ) {
+			return $this->blockToRemove;
+		}
+
+		$activeBlocks = $this->blockStore->newListFromTarget( $this->target );
+		if ( !$activeBlocks ) {
+			$status->fatal( 'ipb_cant_unblock', $this->target );
+			return null;
+		}
+
+		if ( count( $activeBlocks ) > 1 ) {
+			$status->fatal( 'ipb_cant_unblock_multiple_blocks',
+				count( $activeBlocks ), Message::listParam(
+					array_map(
+						static function ( $block ) {
+							return $block->getId();
+						}, $activeBlocks )
+				)
+			);
+		}
+
+		return $activeBlocks[0];
+	}
 }

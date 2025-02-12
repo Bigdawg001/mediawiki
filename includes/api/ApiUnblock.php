@@ -20,14 +20,19 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
+use MediaWiki\Block\AbstractBlock;
+use MediaWiki\Block\Block;
 use MediaWiki\Block\BlockPermissionCheckerFactory;
-use MediaWiki\Block\DatabaseBlock;
+use MediaWiki\Block\DatabaseBlockStore;
 use MediaWiki\Block\UnblockUserFactory;
 use MediaWiki\MainConfigNames;
 use MediaWiki\ParamValidator\TypeDef\UserDef;
 use MediaWiki\Title\Title;
+use MediaWiki\User\Options\UserOptionsLookup;
 use MediaWiki\User\UserIdentityLookup;
-use MediaWiki\User\UserOptionsLookup;
+use MediaWiki\Watchlist\WatchedItemStoreInterface;
 use MediaWiki\Watchlist\WatchlistManager;
 use Wikimedia\ParamValidator\ParamValidator;
 use Wikimedia\ParamValidator\TypeDef\ExpiryDef;
@@ -43,27 +48,22 @@ class ApiUnblock extends ApiBase {
 	use ApiBlockInfoTrait;
 	use ApiWatchlistTrait;
 
-	/** @var BlockPermissionCheckerFactory */
-	private $permissionCheckerFactory;
-
-	/** @var UnblockUserFactory */
-	private $unblockUserFactory;
-
-	/** @var UserIdentityLookup */
-	private $userIdentityLookup;
-
-	/** @var WatchedItemStoreInterface */
-	private $watchedItemStore;
+	private BlockPermissionCheckerFactory $permissionCheckerFactory;
+	private UnblockUserFactory $unblockUserFactory;
+	private UserIdentityLookup $userIdentityLookup;
+	private WatchedItemStoreInterface $watchedItemStore;
+	private DatabaseBlockStore $blockStore;
 
 	public function __construct(
 		ApiMain $main,
-		$action,
+		string $action,
 		BlockPermissionCheckerFactory $permissionCheckerFactory,
 		UnblockUserFactory $unblockUserFactory,
 		UserIdentityLookup $userIdentityLookup,
 		WatchedItemStoreInterface $watchedItemStore,
 		WatchlistManager $watchlistManager,
-		UserOptionsLookup $userOptionsLookup
+		UserOptionsLookup $userOptionsLookup,
+		DatabaseBlockStore $blockStore
 	) {
 		parent::__construct( $main, $action );
 
@@ -78,6 +78,7 @@ class ApiUnblock extends ApiBase {
 			$this->getConfig()->get( MainConfigNames::WatchlistExpiryMaxDuration );
 		$this->watchlistManager = $watchlistManager;
 		$this->userOptionsLookup = $userOptionsLookup;
+		$this->blockStore = $blockStore;
 	}
 
 	/**
@@ -101,7 +102,24 @@ class ApiUnblock extends ApiBase {
 			$params['user'] = $identity->getName();
 		}
 
-		$target = $params['id'] === null ? $params['user'] : "#{$params['id']}";
+		$blockToRemove = null;
+		if ( $params['id'] !== null ) {
+			$blockToRemove = $this->blockStore->newFromID( $params['id'], true );
+			if ( !$blockToRemove ) {
+				$this->dieWithError(
+					[ 'apierror-nosuchblockid', $params['id'] ],
+					'nosuchblockid' );
+			}
+
+			if ( $blockToRemove->getType() === AbstractBlock::TYPE_AUTO ) {
+				$target = '#' . $params['id'];
+			} else {
+				$target = $blockToRemove->getTargetUserIdentity()
+					?? $blockToRemove->getTargetName();
+			}
+		} else {
+			$target = $params['user'];
+		}
 
 		# T17810: blocked admins should have limited access here
 		$status = $this->permissionCheckerFactory
@@ -109,6 +127,7 @@ class ApiUnblock extends ApiBase {
 				$target,
 				$this->getAuthority()
 			)->checkBlockPermissions();
+
 		if ( $status !== true ) {
 			$this->dieWithError(
 				$status,
@@ -118,12 +137,21 @@ class ApiUnblock extends ApiBase {
 			);
 		}
 
-		$status = $this->unblockUserFactory->newUnblockUser(
-			$target,
-			$this->getAuthority(),
-			$params['reason'],
-			$params['tags'] ?? []
-		)->unblock();
+		if ( $blockToRemove !== null ) {
+			$status = $this->unblockUserFactory->newRemoveBlock(
+				$blockToRemove,
+				$this->getAuthority(),
+				$params['reason'],
+				$params['tags'] ?? []
+			)->unblock();
+		} else {
+			$status = $this->unblockUserFactory->newUnblockUser(
+				$target,
+				$this->getAuthority(),
+				$params['reason'],
+				$params['tags'] ?? []
+			)->unblock();
+		}
 
 		if ( !$status->isOK() ) {
 			$this->dieStatus( $status );
@@ -131,13 +159,13 @@ class ApiUnblock extends ApiBase {
 
 		$block = $status->getValue();
 		$targetType = $block->getType();
-		$targetName = $targetType === DatabaseBlock::TYPE_AUTO ? '' : $block->getTargetName();
+		$targetName = $targetType === Block::TYPE_AUTO ? '' : $block->getTargetName();
 		$targetUserId = $block->getTargetUserIdentity() ? $block->getTargetUserIdentity()->getId() : 0;
 
 		$watchlistExpiry = $this->getExpiryFromParams( $params );
 		$watchuser = $params['watchuser'];
 		$userPage = Title::makeTitle( NS_USER, $targetName );
-		if ( $watchuser && $targetType !== DatabaseBlock::TYPE_RANGE && $targetType !== DatabaseBlock::TYPE_AUTO ) {
+		if ( $watchuser && $targetType !== Block::TYPE_RANGE && $targetType !== Block::TYPE_AUTO ) {
 			$this->setWatch( 'watch', $userPage, $this->getUser(), null, $watchlistExpiry );
 		} else {
 			$watchuser = false;
@@ -151,6 +179,7 @@ class ApiUnblock extends ApiBase {
 			'reason' => $params['reason'],
 			'watchuser' => $watchuser,
 		];
+
 		if ( $watchlistExpiry !== null ) {
 			$res['watchlistexpiry'] = $this->getWatchlistExpiry(
 				$this->watchedItemStore,
@@ -158,6 +187,7 @@ class ApiUnblock extends ApiBase {
 				$this->getUser()
 			);
 		}
+
 		$this->getResult()->addValue( null, $this->getModuleName(), $res );
 	}
 
@@ -176,7 +206,7 @@ class ApiUnblock extends ApiBase {
 			],
 			'user' => [
 				ParamValidator::PARAM_TYPE => 'user',
-				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'cidr', 'id' ],
+				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'temp', 'cidr', 'id' ],
 			],
 			'userid' => [
 				ParamValidator::PARAM_TYPE => 'integer',
@@ -223,3 +253,6 @@ class ApiUnblock extends ApiBase {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Block';
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiUnblock::class, 'ApiUnblock' );

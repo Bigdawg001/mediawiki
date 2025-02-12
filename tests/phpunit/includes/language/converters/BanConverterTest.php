@@ -2,22 +2,16 @@
 
 /**
  * @group Language
- * @covers BanConverter
+ * @covers \BanConverter
  */
 class BanConverterTest extends MediaWikiIntegrationTestCase {
 
 	use LanguageConverterTestTrait;
 
-	/**
-	 * @covers BanConverter::hasVariants
-	 */
 	public function testHasVariants() {
 		$this->assertTrue( $this->getLanguageConverter()->hasVariants(), 'ban has variants' );
 	}
 
-	/**
-	 * @covers BanConverter::hasVariant
-	 */
 	public function testHasVariantBogus() {
 		$variants = [
 			'ban-bali',
@@ -33,9 +27,6 @@ class BanConverterTest extends MediaWikiIntegrationTestCase {
 		}
 	}
 
-	/**
-	 * @covers BanConverter::convertTo
-	 */
 	public function testBalineseDetection() {
 		$this->assertBalinese(
 			'ᬫᬦ᭄ᬢ᭄ᬭ - abc',
@@ -43,9 +34,6 @@ class BanConverterTest extends MediaWikiIntegrationTestCase {
 		);
 	}
 
-	/**
-	 * @covers BanConverter::convertTo
-	 */
 	public function testConversionToLatin() {
 		// A simple conversion of Latin to Latin
 		$this->assertEquals( 'mantra',

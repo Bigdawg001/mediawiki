@@ -20,6 +20,8 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
 use MediaWiki\Linker\LinksMigration;
 use MediaWiki\Title\Title;
 use Wikimedia\ParamValidator\ParamValidator;
@@ -45,11 +47,20 @@ class ApiQueryBacklinks extends ApiQueryGeneratorBase {
 	 */
 	private $linksMigration;
 
+	/** @var array */
 	private $params;
 	/** @var array */
 	private $cont;
+	/** @var bool */
 	private $redirect;
-	private $bl_ns, $bl_from, $bl_from_ns, $bl_table, $bl_code, $bl_title, $hasNS;
+
+	private string $bl_ns;
+	private string $bl_from;
+	private string $bl_from_ns;
+	private string $bl_table;
+	private string $bl_code;
+	private string $bl_title;
+	private bool $hasNS;
 
 	/** @var string */
 	private $helpUrl;
@@ -60,9 +71,12 @@ class ApiQueryBacklinks extends ApiQueryGeneratorBase {
 	 * @var array
 	 */
 	private $pageMap = [];
+	/** @var array */
 	private $resultArr;
 
+	/** @var array */
 	private $redirTitles = [];
+	/** @var string|null */
 	private $continueStr = null;
 
 	/** @var string[][] output element name, database column field prefix, database table */
@@ -87,12 +101,7 @@ class ApiQueryBacklinks extends ApiQueryGeneratorBase {
 		]
 	];
 
-	/**
-	 * @param ApiQuery $query
-	 * @param string $moduleName
-	 * @param LinksMigration $linksMigration
-	 */
-	public function __construct( ApiQuery $query, $moduleName, LinksMigration $linksMigration ) {
+	public function __construct( ApiQuery $query, string $moduleName, LinksMigration $linksMigration ) {
 		$settings = $this->backlinksSettings[$moduleName];
 		$prefix = $settings['prefix'];
 		$code = $settings['code'];
@@ -230,15 +239,20 @@ class ApiQueryBacklinks extends ApiQueryGeneratorBase {
 	}
 
 	/**
-	 * @todo This should support links migration but since it's unreachable for templatelinks
-	 *     it's not needed right now.
 	 * @param ApiPageSet|null $resultPageSet
 	 * @return void
 	 */
 	private function runSecondQuery( $resultPageSet = null ) {
 		$db = $this->getDB();
-		$this->addTables( [ $this->bl_table, 'page' ] );
-		$this->addWhere( "{$this->bl_from}=page_id" );
+		if ( isset( $this->linksMigration::$mapping[$this->bl_table] ) ) {
+			$queryInfo = $this->linksMigration->getQueryInfo( $this->bl_table, $this->bl_table );
+			$this->addTables( $queryInfo['tables'] );
+			$this->addJoinConds( $queryInfo['joins'] );
+		} else {
+			$this->addTables( [ $this->bl_table ] );
+		}
+		$this->addTables( [ 'page' ] );
+		$this->addJoinConds( [ 'page' => [ 'JOIN', "{$this->bl_from}=page_id" ] ] );
 
 		if ( $resultPageSet === null ) {
 			$this->addFields( [ 'page_id', 'page_title', 'page_namespace', 'page_is_redirect' ] );
@@ -259,12 +273,15 @@ class ApiQueryBacklinks extends ApiQueryGeneratorBase {
 		foreach ( $this->redirTitles as $t ) {
 			$redirNs = $t->getNamespace();
 			$redirDBkey = $t->getDBkey();
-			$titleWhere[] = "{$this->bl_title} = " . $db->addQuotes( $redirDBkey ) .
-				( $this->hasNS ? " AND {$this->bl_ns} = {$redirNs}" : '' );
+			$expr = $db->expr( $this->bl_title, '=', $redirDBkey );
+			if ( $this->hasNS ) {
+				$expr = $expr->and( $this->bl_ns, '=', $redirNs );
+			}
+			$titleWhere[] = $expr;
 			$allRedirNs[$redirNs] = true;
 			$allRedirDBkey[$redirDBkey] = true;
 		}
-		$this->addWhere( $db->makeList( $titleWhere, LIST_OR ) );
+		$this->addWhere( $db->orExpr( $titleWhere ) );
 		$this->addWhereFld( 'page_namespace', $this->params['namespace'] );
 
 		if ( count( $this->cont ) >= 6 ) {
@@ -589,11 +606,13 @@ class ApiQueryBacklinks extends ApiQueryGeneratorBase {
 	}
 
 	protected function getExamplesMessages() {
-		static $examples = [
+		$title = Title::newMainPage()->getPrefixedText();
+		$mp = rawurlencode( $title );
+		$examples = [
 			'backlinks' => [
-				'action=query&list=backlinks&bltitle=Main%20Page'
+				"action=query&list=backlinks&bltitle={$mp}"
 					=> 'apihelp-query+backlinks-example-simple',
-				'action=query&generator=backlinks&gbltitle=Main%20Page&prop=info'
+				"action=query&generator=backlinks&gbltitle={$mp}&prop=info"
 					=> 'apihelp-query+backlinks-example-generator',
 			],
 			'embeddedin' => [
@@ -617,3 +636,6 @@ class ApiQueryBacklinks extends ApiQueryGeneratorBase {
 		return $this->helpUrl;
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiQueryBacklinks::class, 'ApiQueryBacklinks' );

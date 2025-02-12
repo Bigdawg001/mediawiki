@@ -2,14 +2,16 @@
 
 namespace MediaWiki\Tests\Rest\Handler;
 
-use HashBagOStuff;
+use InvalidArgumentException;
 use MediaWiki\Rest\RequestData;
+use MediaWiki\Rest\RequestInterface;
 use MediaWikiIntegrationTestCase;
+use Wikimedia\ObjectCache\HashBagOStuff;
 
 /**
  * @covers \MediaWiki\Rest\Handler\PageSourceHandler
  * @covers \MediaWiki\Rest\Handler\PageHTMLHandler
- * @covers \MediaWiki\Rest\Handler\PageRedirectHandlerTrait
+ * @covers \MediaWiki\Rest\Handler\Helper\PageRedirectHelper
  * @group Database
  */
 class PageRedirectHandlerTest extends MediaWikiIntegrationTestCase {
@@ -19,41 +21,31 @@ class PageRedirectHandlerTest extends MediaWikiIntegrationTestCase {
 
 	private const WIKITEXT = 'Hello \'\'\'World\'\'\'';
 
-	private const HTML = '<p>Hello <b>World</b></p>';
-
-	/** @var HashBagOStuff */
-	private $parserCacheBagOStuff;
-
-	private $handlers;
+	private HashBagOStuff $parserCacheBagOStuff;
 
 	protected function setUp(): void {
 		parent::setUp();
 
-		// Clean up these tables after each test
-		$this->tablesUsed = [
-			'page',
-			'revision',
-			'comment',
-			'text',
-			'content'
-		];
-
 		$this->parserCacheBagOStuff = new HashBagOStuff();
+	}
 
-		$pageSourceHandler = $this->newPageSourceHandler();
-		$pageHtmlHandler = $this->newPageHtmlHandler();
-		$pageHistoryHandler = $this->newPageHistoryHandler();
-		$pageHistoryCountHandler = $this->newPageHistoryCountHandler();
-		$languageLinksHandler = $this->newLanguageLinksHandler();
-		$this->handlers = [
-			'source' => $pageSourceHandler,
-			'bare' => $pageSourceHandler,
-			'html' => $pageHtmlHandler,
-			'with_html' => $pageHtmlHandler,
-			'history' => $pageHistoryHandler,
-			'history_count' => $pageHistoryCountHandler,
-			'links_language' => $languageLinksHandler,
-		];
+	private function getHandler( $name, RequestInterface $request ) {
+		switch ( $name ) {
+			case 'source':
+			case 'bare':
+				return $this->newPageSourceHandler();
+			case 'html':
+			case 'with_html':
+				return $this->newPageHtmlHandler( $request );
+			case 'history':
+				return $this->newPageHistoryHandler();
+			case 'history_count':
+				return $this->newPageHistoryCountHandler();
+			case 'links_language':
+				return $this->newLanguageLinksHandler();
+			default:
+				throw new InvalidArgumentException( "Unknown handler: $name" );
+		}
 	}
 
 	/**
@@ -62,8 +54,6 @@ class PageRedirectHandlerTest extends MediaWikiIntegrationTestCase {
 	public function testTemporaryRedirect(
 		$format, $path, $queryParams, $expectedStatus, $hasBodyRedirectTarget = true
 	) {
-		$this->markTestSkippedIfExtensionNotLoaded( 'Parsoid' );
-
 		$targetPageTitle = 'PageEndpointTestPage';
 		$redirectPageTitle = 'RedirectPage';
 		$this->getExistingTestPage( $targetPageTitle );
@@ -76,7 +66,7 @@ class PageRedirectHandlerTest extends MediaWikiIntegrationTestCase {
 				'queryParams' => $queryParams
 			]
 		);
-		$handler = $this->handlers[$format];
+		$handler = $this->getHandler( $format, $request );
 		$response = $this->executeHandler( $handler, $request, [
 			'format' => $format,
 			'path' => $path,
@@ -155,10 +145,8 @@ class PageRedirectHandlerTest extends MediaWikiIntegrationTestCase {
 	 * @dataProvider permanentRedirectProvider
 	 */
 	public function testPermanentRedirect( $format, $path, $extraPathParams = [], $queryParams = [] ) {
-		$this->markTestSkippedIfExtensionNotLoaded( 'Parsoid' );
 		$page = $this->getExistingTestPage( 'SourceEndpointTestPage with spaces' );
-		$this->assertTrue(
-			$this->editPage( $page, self::WIKITEXT )->isGood(),
+		$this->assertStatusGood( $this->editPage( $page, self::WIKITEXT ),
 			'Edited a page'
 		);
 
@@ -170,7 +158,7 @@ class PageRedirectHandlerTest extends MediaWikiIntegrationTestCase {
 			]
 		);
 
-		$handler = $this->handlers[$format];
+		$handler = $this->getHandler( $format, $request );
 		$response = $this->executeHandler( $handler, $request, [
 			'format' => $format,
 			'path' => $path
@@ -181,7 +169,7 @@ class PageRedirectHandlerTest extends MediaWikiIntegrationTestCase {
 		$this->assertUrlQueryParameters( $headerLocation, $queryParams );
 	}
 
-	public function permanentRedirectProvider() {
+	public static function permanentRedirectProvider() {
 		yield [ 'source', '/page/{title}', [], [ 'flavor' => 'edit', 'dummy' => 'test' ] ];
 		yield [ 'bare', '/page/{title}/bare' ];
 		yield [ 'html', '/page/{title}/html' ];
@@ -197,15 +185,10 @@ class PageRedirectHandlerTest extends MediaWikiIntegrationTestCase {
 	 * @return void
 	 */
 	private function assertUrlQueryParameters( string $url, array $queryParams ): void {
-		$parsedUrl = $this->getServiceContainer()->getUrlUtils()->parse( $url );
-		$urlParameters = [];
-
-		if ( is_array( $parsedUrl ) ) {
-			if ( array_key_exists( 'query', $parsedUrl ) ) {
-				$urlParameters = wfCgiToArray(
-					$parsedUrl['query']
-				);
-			}
+		if ( preg_match( '/\?(.*?)(#.*)?$/', $url, $m ) ) {
+			$urlParameters = wfCgiToArray( $m[1] );
+		} else {
+			$urlParameters = [];
 		}
 		$this->assertArrayEquals( $queryParams, $urlParameters );
 	}

@@ -21,7 +21,9 @@
  * @ingroup MaintenanceLanguage
  */
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/../Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script that check digit transformation.
@@ -47,7 +49,7 @@ class Digit2Html extends Maintenance {
 	}
 
 	public function execute() {
-		$languageNameUtils = MediaWikiServices::getInstance()->getLanguageNameUtils();
+		$languageNameUtils = $this->getServiceContainer()->getLanguageNameUtils();
 		foreach ( $this->mLangs as $code ) {
 			$filename = $languageNameUtils->getMessagesFileName( $code );
 			$this->output( "Loading language [$code] ..." );
@@ -68,5 +70,7 @@ class Digit2Html extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = Digit2Html::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

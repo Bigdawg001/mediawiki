@@ -19,45 +19,54 @@
  */
 namespace MediaWiki\Rest\Handler\Helper;
 
-use Content;
 use HttpError;
-use IBufferingStatsdDataFactory;
-use Language;
-use LanguageCode;
-use Liuggio\StatsdClient\Factory\StatsdDataFactoryInterface;
-use LogicException;
+use InvalidArgumentException;
+use MediaWiki\Content\Content;
 use MediaWiki\Content\IContentHandlerFactory;
 use MediaWiki\Edit\ParsoidOutputStash;
+use MediaWiki\Edit\ParsoidRenderID;
 use MediaWiki\Edit\SelserContext;
+use MediaWiki\Language\LanguageCode;
 use MediaWiki\Languages\LanguageFactory;
+use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\PageIdentity;
+use MediaWiki\Page\PageLookup;
+use MediaWiki\Page\PageRecord;
+use MediaWiki\Page\ParserOutputAccess;
+use MediaWiki\Parser\ParserOptions;
+use MediaWiki\Parser\ParserOutput;
+use MediaWiki\Parser\Parsoid\Config\SiteConfig as ParsoidSiteConfig;
 use MediaWiki\Parser\Parsoid\HtmlTransformFactory;
 use MediaWiki\Parser\Parsoid\PageBundleParserOutputConverter;
-use MediaWiki\Parser\Parsoid\ParsoidOutputAccess;
-use MediaWiki\Parser\Parsoid\ParsoidRenderID;
+use MediaWiki\Permissions\Authority;
 use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\HttpException;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\ResponseInterface;
 use MediaWiki\Revision\MutableRevisionRecord;
 use MediaWiki\Revision\RevisionAccessException;
+use MediaWiki\Revision\RevisionLookup;
 use MediaWiki\Revision\RevisionRecord;
+use MediaWiki\Revision\RevisionRenderer;
 use MediaWiki\Revision\SlotRecord;
+use MediaWiki\Status\Status;
+use MediaWiki\Title\Title;
 use MWUnknownContentModelException;
-use ParserOptions;
-use ParserOutput;
-use Status;
-use User;
 use Wikimedia\Assert\Assert;
 use Wikimedia\Bcp47Code\Bcp47Code;
 use Wikimedia\Bcp47Code\Bcp47CodeValue;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
+use Wikimedia\Parsoid\Core\ClientError;
 use Wikimedia\Parsoid\Core\PageBundle;
+use Wikimedia\Parsoid\Core\ResourceLimitExceededException;
+use Wikimedia\Parsoid\DOM\Element;
 use Wikimedia\Parsoid\Parsoid;
-use Wikimedia\Parsoid\Utils\ContentUtils;
+use Wikimedia\Parsoid\Utils\DOMCompat;
 use Wikimedia\Parsoid\Utils\DOMUtils;
+use Wikimedia\Parsoid\Utils\WTUtils;
+use Wikimedia\Stats\StatsFactory;
 
 /**
  * Helper for getting output of a given wikitext page rendered by parsoid.
@@ -67,19 +76,17 @@ use Wikimedia\Parsoid\Utils\DOMUtils;
  * @unstable Pending consolidation of the Parsoid extension with core code.
  */
 class HtmlOutputRendererHelper implements HtmlOutputHelper {
+	use RestAuthorizeTrait;
+	use RestStatusTrait;
+
 	/**
 	 * @internal
-	 * @var string[]
 	 */
 	public const CONSTRUCTOR_OPTIONS = [
 		MainConfigNames::ParsoidCacheConfig
 	];
 
-	/** @var string[] */
 	private const OUTPUT_FLAVORS = [ 'view', 'stash', 'fragment', 'edit' ];
-
-	/** @var ParsoidOutputStash */
-	private $parsoidOutputStash;
 
 	/** @var PageIdentity|null */
 	private $page = null;
@@ -87,7 +94,7 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	/** @var RevisionRecord|int|null */
 	private $revisionOrId = null;
 
-	/** @var Language|null */
+	/** @var Bcp47Code|null */
 	private $pageLanguage = null;
 
 	/** @var ?string One of the flavors from OUTPUT_FLAVORS */
@@ -96,29 +103,14 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	/** @var bool */
 	private $stash = false;
 
-	/** @var IBufferingStatsdDataFactory */
-	private $stats;
-
-	/** @var User */
-	private $user;
-
-	/** @var ParsoidOutputAccess */
-	private $parsoidOutputAccess;
+	/** @var Authority */
+	private $authority;
 
 	/** @var ParserOutput */
 	private $parserOutput;
 
 	/** @var ParserOutput */
 	private $processedParserOutput;
-
-	/** @var HtmlTransformFactory */
-	private $htmlTransformFactory;
-
-	/** @var IContentHandlerFactory */
-	private $contentHandlerFactory;
-
-	/** @var LanguageFactory */
-	private $languageFactory;
 
 	/** @var ?Bcp47Code */
 	private $sourceLanguage = null;
@@ -127,18 +119,26 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	private $targetLanguage = null;
 
 	/**
-	 * Flags to be passed as $options to ParsoidOutputAccess::getParserOutput,
+	 * Should we ignore mismatches between $page and the page that $revision belongs to?
+	 * Usually happens because of page moves. This should be set to true only for internal API calls.
+	 */
+	private bool $lenientRevHandling = false;
+
+	/**
+	 * Flags to be passed as $options to ParserOutputAccess::getParserOutput,
 	 * to control parser cache access.
 	 *
-	 * @var int Use ParsoidOutputAccess::OPT_*
+	 * @var int Use ParserOutputAccess::OPT_*
 	 */
-	private $parsoidOutputAccessOptions = 0;
+	private $parserOutputAccessOptions = 0;
 
 	/**
 	 * @see the $options parameter on Parsoid::wikitext2html
 	 * @var array
 	 */
 	private $parsoidOptions = [];
+
+	private ?ParserOptions $parserOptions = null;
 
 	/**
 	 * Whether the result can be cached in the parser cache and the web cache.
@@ -148,28 +148,77 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	 */
 	private $isCacheable = true;
 
+	private ParsoidOutputStash $parsoidOutputStash;
+	private StatsFactory $statsFactory;
+	private ParserOutputAccess $parserOutputAccess;
+	private PageLookup $pageLookup;
+	private RevisionLookup $revisionLookup;
+	private RevisionRenderer $revisionRenderer;
+	private ParsoidSiteConfig $parsoidSiteConfig;
+	private HtmlTransformFactory $htmlTransformFactory;
+	private IContentHandlerFactory $contentHandlerFactory;
+	private LanguageFactory $languageFactory;
+
 	/**
 	 * @param ParsoidOutputStash $parsoidOutputStash
-	 * @param StatsdDataFactoryInterface $statsDataFactory
-	 * @param ParsoidOutputAccess $parsoidOutputAccess
+	 * @param StatsFactory $statsFactory
+	 * @param ParserOutputAccess $parserOutputAccess
+	 * @param PageLookup $pageLookup
+	 * @param RevisionLookup $revisionLookup
+	 * @param RevisionRenderer $revisionRenderer
+	 * @param ParsoidSiteConfig $parsoidSiteConfig
 	 * @param HtmlTransformFactory $htmlTransformFactory
 	 * @param IContentHandlerFactory $contentHandlerFactory
 	 * @param LanguageFactory $languageFactory
+	 * @param PageIdentity|null $page
+	 * @param array $parameters
+	 * @param Authority|null $authority
+	 * @param RevisionRecord|int|null $revision
+	 * @param bool $lenientRevHandling Should we ignore mismatches between
+	 *    $page and the page that $revision belongs to? Usually happens
+	 *    because of page moves. This should be set to true only for
+	 *    internal API calls.
+	 * @param ParserOptions|null $parserOptions
+	 * @note Since 1.43, setting $page and $authority arguments to null
+	 *    has been deprecated.
 	 */
 	public function __construct(
 		ParsoidOutputStash $parsoidOutputStash,
-		StatsdDataFactoryInterface $statsDataFactory,
-		ParsoidOutputAccess $parsoidOutputAccess,
+		StatsFactory $statsFactory,
+		ParserOutputAccess $parserOutputAccess,
+		PageLookup $pageLookup,
+		RevisionLookup $revisionLookup,
+		RevisionRenderer $revisionRenderer,
+		ParsoidSiteConfig $parsoidSiteConfig,
 		HtmlTransformFactory $htmlTransformFactory,
 		IContentHandlerFactory $contentHandlerFactory,
-		LanguageFactory $languageFactory
+		LanguageFactory $languageFactory,
+		?PageIdentity $page = null,
+		array $parameters = [],
+		?Authority $authority = null,
+		$revision = null,
+		bool $lenientRevHandling = false,
+		?ParserOptions $parserOptions = null
 	) {
 		$this->parsoidOutputStash = $parsoidOutputStash;
-		$this->stats = $statsDataFactory;
-		$this->parsoidOutputAccess = $parsoidOutputAccess;
+		$this->statsFactory = $statsFactory;
+		$this->parserOutputAccess = $parserOutputAccess;
+		$this->pageLookup = $pageLookup;
+		$this->revisionLookup = $revisionLookup;
+		$this->revisionRenderer = $revisionRenderer;
+		$this->parsoidSiteConfig = $parsoidSiteConfig;
 		$this->htmlTransformFactory = $htmlTransformFactory;
 		$this->contentHandlerFactory = $contentHandlerFactory;
 		$this->languageFactory = $languageFactory;
+		$this->lenientRevHandling = $lenientRevHandling;
+		$this->parserOptions = $parserOptions;
+		if ( $page === null || $authority === null ) {
+			// Constructing without $page and $authority parameters
+			// is deprecated since 1.43.
+			wfDeprecated( __METHOD__ . ' without $page or $authority', '1.43' );
+		} else {
+			$this->initInternal( $page, $parameters, $authority, $revision );
+		}
 	}
 
 	/**
@@ -178,16 +227,34 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	 * Flavors may influence parser options, parsoid options, and DOM transformations.
 	 * They will be reflected by the ETag returned by getETag().
 	 *
+	 * @note This method should not be called if stashing mode is enabled.
+	 * @see setStashingEnabled
+	 * @see getFlavor()
+	 *
 	 * @param string $flavor
 	 *
 	 * @return void
 	 */
 	public function setFlavor( string $flavor ): void {
 		if ( !in_array( $flavor, self::OUTPUT_FLAVORS ) ) {
-			throw new LogicException( 'Invalid flavor supplied' );
+			throw new InvalidArgumentException( 'Invalid flavor supplied' );
+		}
+
+		if ( $this->stash ) {
+			// XXX: throw?
+			$flavor = 'stash';
 		}
 
 		$this->flavor = $flavor;
+	}
+
+	/**
+	 * Returns the flavor of HTML that will be generated.
+	 * @see setFlavor()
+	 * @return string
+	 */
+	public function getFlavor(): string {
+		return $this->flavor;
 	}
 
 	/**
@@ -205,30 +272,24 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 		$outputContentVersion = Parsoid::resolveContentVersion( $version );
 
 		if ( !$outputContentVersion ) {
-			throw new HttpException( "Unsupported profile version: $version", 406 );
+			throw new LocalizedHttpException(
+				new MessageValue( "rest-unsupported-profile-version", [ $version ] ), 406
+			);
 		}
 
 		// Only set the option if the value isn't the default!
 		if ( $outputContentVersion !== Parsoid::defaultHTMLVersion() ) {
-			// See Parsoid::wikitext2html
-			$this->parsoidOptions['outputContentVersion'] = $outputContentVersion;
-			$this->isCacheable = false;
-		}
-	}
+			throw new LocalizedHttpException(
+				new MessageValue( "rest-unsupported-profile-version", [ $version ] ), 406
+			);
 
-	/**
-	 * Set the desired offset type for data-parsoid attributes.
-	 *
-	 * @note Will disable caching if the given offset type is different from the default.
-	 *
-	 * @param string $offsetType One of the offset types accepted by Parsoid::wikitext2html.
-	 */
-	public function setOffsetType( $offsetType ) {
-		// Only set the option if the value isn't the default (see Wikimedia\Parsoid\Config\Env)!
-		// See Parsoid::wikitext2html for possible values.
-		if ( $offsetType !== 'byte' ) {
-			$this->parsoidOptions['offsetType'] = $offsetType;
-			$this->isCacheable = false;
+			// TODO: (T347426) At some later point, we may reintroduce support for
+			// non-default content versions as part of work on the content
+			// negotiation protocol.
+			//
+			// // See Parsoid::wikitext2html
+			// $this->parsoidOptions['outputContentVersion'] = $outputContentVersion;
+			// $this->isCacheable = false;
 		}
 	}
 
@@ -239,9 +300,9 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	 * @param bool $write Whether we should cache output after parsing
 	 */
 	public function setUseParserCache( bool $read, bool $write ) {
-		$this->parsoidOutputAccessOptions =
-			( $read ? 0 : ParsoidOutputAccess::OPT_FORCE_PARSE ) |
-			( $write ? 0 : ParsoidOutputAccess::OPT_NO_UPDATE_CACHE );
+		$this->parserOutputAccessOptions =
+			( $read ? 0 : ParserOutputAccess::OPT_FORCE_PARSE ) |
+			( $write ? 0 : ParserOutputAccess::OPT_NO_UPDATE_CACHE );
 	}
 
 	/**
@@ -313,7 +374,7 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	 * Set the content to render. Useful when rendering for previews
 	 * or when switching the editor from source mode to visual mode.
 	 *
-	 * This will create a fake revision for rendering, the revision ID will be 0.
+	 * This will create a fake revision for rendering. The revision ID will be 0.
 	 *
 	 * @param string $source The source data, e.g. wikitext
 	 * @param string $model The content model indicating how to interpret $source, e.g. CONTENT_MODEL_WIKITEXT
@@ -327,11 +388,15 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 			$content = $handler->unserializeContent( $source );
 			$this->setContent( $content );
 		} catch ( MWUnknownContentModelException $ex ) {
-			throw new HttpException( 'Bad content model: ' . $model, 400 );
+			throw new LocalizedHttpException( new MessageValue( "rest-bad-content-model", [ $model ] ), 400 );
 		}
 	}
 
 	/**
+	 * This is equivalent to 'pageLanguageOverride' in PageConfigFactory
+	 * For example, when clients call the REST API with the 'content-language'
+	 * header to affect language variant conversion.
+	 *
 	 * @param Bcp47Code|string $pageLanguage the page language, as a Bcp47Code
 	 *   or a BCP-47 string.
 	 */
@@ -349,27 +414,32 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	 *
 	 * @param PageIdentity $page
 	 * @param array $parameters
-	 * @param User $user
+	 * @param Authority $authority
 	 * @param RevisionRecord|int|null $revision
-	 * @param ?Bcp47Code $pageLanguage
+	 * @deprecated since 1.43, use parameters in constructor instead
 	 */
 	public function init(
 		PageIdentity $page,
 		array $parameters,
-		User $user,
-		$revision = null,
-		?Bcp47Code $pageLanguage = null
+		Authority $authority,
+		$revision = null
+	) {
+		wfDeprecated( __METHOD__, '1.43' );
+		$this->initInternal( $page, $parameters, $authority, $revision );
+	}
+
+	private function initInternal(
+		PageIdentity $page,
+		array $parameters,
+		Authority $authority,
+		$revision = null
 	) {
 		$this->page = $page;
-		$this->user = $user;
+		$this->authority = $authority;
 		$this->stash = $parameters['stash'] ?? false;
 
 		if ( $revision !== null ) {
 			$this->setRevision( $revision );
-		}
-
-		if ( $pageLanguage !== null ) {
-			$this->setPageLanguage( $pageLanguage );
 		}
 
 		if ( $this->stash ) {
@@ -377,6 +447,7 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 		} else {
 			$this->setFlavor( $parameters['flavor'] ?? 'view' );
 		}
+		$this->parserOptions ??= ParserOptions::newFromAnon();
 	}
 
 	/**
@@ -387,6 +458,7 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 		$sourceLanguage = null
 	): void {
 		if ( is_string( $targetLanguage ) ) {
+			$targetLanguage = $this->getAcceptedTargetLanguage( $targetLanguage );
 			$targetLanguage = LanguageCode::normalizeNonstandardCodeAndWarn(
 				$targetLanguage
 			);
@@ -401,6 +473,22 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	}
 
 	/**
+	 * Get a target language from an accept header
+	 */
+	private function getAcceptedTargetLanguage( string $targetLanguage ): string {
+		// We could try to identify the most desirable language here,
+		// following the rules for Accept-Language headers in RFC9100.
+		// For now, just take the first language code.
+
+		if ( preg_match( '/^\s*([-\w]+)/', $targetLanguage, $m ) ) {
+			return $m[1];
+		} else {
+			// "undetermined" per RFC5646
+			return 'und';
+		}
+	}
+
+	/**
 	 * @inheritDoc
 	 */
 	public function getHtml(): ParserOutput {
@@ -411,19 +499,10 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 		$parserOutput = $this->getParserOutput();
 
 		if ( $this->stash ) {
-			if ( $this->user->pingLimiter( 'stashbasehtml' ) ) {
-				throw new LocalizedHttpException(
-					MessageValue::new( 'parsoid-stash-rate-limit-error' ),
-					// See https://www.rfc-editor.org/rfc/rfc6585#section-4
-					429,
-					[ 'reason' => 'Rate limiter tripped, wait for a few minutes and try again' ]
-				);
-			}
+			$this->authorizeWriteOrThrow( $this->authority, 'stashbasehtml', $this->page );
 
 			$isFakeRevision = $this->getRevisionId() === null;
-			$parsoidStashKey = ParsoidRenderID::newFromKey(
-				$this->parsoidOutputAccess->getParsoidRenderID( $parserOutput )
-			);
+			$parsoidStashKey = ParsoidRenderID::newFromParserOutput( $parserOutput );
 			$stashSuccess = $this->parsoidOutputStash->set(
 				$parsoidStashKey,
 				new SelserContext(
@@ -433,24 +512,33 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 				)
 			);
 			if ( !$stashSuccess ) {
-				$this->stats->increment( 'htmloutputrendererhelper.stash.fail' );
+				$this->statsFactory->getCounter( 'htmloutputrendererhelper_stash_total' )
+					->setLabel( 'status', 'fail' )
+					->copyToStatsdAt( 'htmloutputrendererhelper.stash.fail' )
+					->increment();
+
+				$errorData = [ 'parsoid-stash-key' => $parsoidStashKey ];
+				LoggerFactory::getInstance( 'HtmlOutputRendererHelper' )->error(
+					"Parsoid stash failure",
+					$errorData
+				);
 				throw new LocalizedHttpException(
-					MessageValue::new( 'rest-html-backend-error' ),
+					MessageValue::new( 'rest-html-stash-failure' ),
 					500,
-					[ 'reason' => 'Failed to stash parser output' ]
+					$errorData
 				);
 			}
-			$this->stats->increment( 'htmloutputrendererhelper.stash.save' );
+			$this->statsFactory->getCounter( 'htmloutputrendererhelper_stash_total' )
+				->setLabel( 'status', 'save' )
+				->copyToStatsdAt( 'htmloutputrendererhelper.stash.save' )
+				->increment();
 		}
 
 		if ( $this->flavor === 'edit' ) {
 			$pb = $this->getPageBundle();
 
 			// Inject data-parsoid and data-mw attributes.
-			// XXX: Would be nice if we had a DOM handy.
-			$doc = DOMUtils::parseHTML( $parserOutput->getRawText() );
-			PageBundle::apply( $doc, $pb );
-			$parserOutput->setText( ContentUtils::toXML( $doc ) );
+			$parserOutput->setRawText( $pb->toInlineAttributeHtml() );
 		}
 
 		// Check if variant conversion has to be performed
@@ -474,7 +562,7 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	public function getETag( string $suffix = '' ): ?string {
 		$parserOutput = $this->getParserOutput();
 
-		$renderID = $this->parsoidOutputAccess->getParsoidRenderID( $parserOutput )->getKey();
+		$renderID = ParsoidRenderID::newFromParserOutput( $parserOutput )->getKey();
 
 		if ( $suffix !== '' ) {
 			$eTag = "$renderID/{$this->flavor}/$suffix";
@@ -499,37 +587,58 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	/**
 	 * @inheritDoc
 	 */
-	public function getParamSettings(): array {
+	public static function getParamSettings(): array {
 		return [
 			'stash' => [
 				Handler::PARAM_SOURCE => 'query',
 				ParamValidator::PARAM_TYPE => 'boolean',
 				ParamValidator::PARAM_DEFAULT => false,
 				ParamValidator::PARAM_REQUIRED => false,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-html-output-stash' )
 			],
 			'flavor' => [
 				Handler::PARAM_SOURCE => 'query',
 				ParamValidator::PARAM_TYPE => self::OUTPUT_FLAVORS,
 				ParamValidator::PARAM_DEFAULT => 'view',
 				ParamValidator::PARAM_REQUIRED => false,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-html-output-flavor' )
 			],
 		];
 	}
 
-	/**
-	 * @return ParserOutput
-	 */
+	private function getDefaultPageLanguage(): Bcp47Code {
+		// NOTE: keep in sync with Parser::getTargetLanguage!
+
+		// XXX: Inject a TitleFactory just for this?! We need a better way to determine the page language...
+		$title = Title::castFromPageIdentity( $this->page );
+
+		if ( $this->parserOptions->getInterfaceMessage() ) {
+			return $this->parserOptions->getUserLangObj();
+		}
+
+		return $title->getPageLanguage();
+	}
+
 	private function getParserOutput(): ParserOutput {
 		if ( !$this->parserOutput ) {
-			$parserOptions = ParserOptions::newFromAnon();
-			$parserOptions->setRenderReason( __METHOD__ );
+			$this->parserOptions->setRenderReason( __METHOD__ );
 
-			if ( $this->pageLanguage ) {
-				$parserOptions->setTargetLanguage( $this->pageLanguage );
+			$defaultLanguage = $this->getDefaultPageLanguage();
+
+			if ( $this->pageLanguage
+				&& $this->pageLanguage->toBcp47Code() !== $defaultLanguage->toBcp47Code()
+			) {
+				$languageObj = $this->languageFactory->getLanguage( $this->pageLanguage );
+				$this->parserOptions->setTargetLanguage( $languageObj );
+				// Ensure target language splits the parser cache, when
+				// non-default; targetLangauge is not in
+				// ParserOptions::$cacheVaryingOptionsHash for the legacy
+				// parser.
+				$this->parserOptions->addExtraKey( 'target=' . $languageObj->getCode() );
 			}
 
 			try {
-				$status = $this->getParserOutputInternal( $parserOptions );
+				$status = $this->getParserOutputInternal();
 			} catch ( RevisionAccessException $e ) {
 				throw new LocalizedHttpException(
 					MessageValue::new( 'rest-nonexistent-title' ),
@@ -540,29 +649,23 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 
 			if ( !$status->isOK() ) {
 				if ( $status->hasMessage( 'parsoid-client-error' ) ) {
-					throw new LocalizedHttpException(
-						MessageValue::new( 'rest-html-backend-error' ),
-						400,
-						[ 'reason' => $status->getErrors() ]
-					);
+					$this->throwExceptionForStatus( $status, 'rest-html-backend-error', 400 );
 				} elseif ( $status->hasMessage( 'parsoid-resource-limit-exceeded' ) ) {
-					throw new LocalizedHttpException(
-						MessageValue::new( 'rest-resource-limit-exceeded' ),
-						413,
-						[ 'reason' => $status->getErrors() ]
-					);
+					$this->throwExceptionForStatus( $status, 'rest-resource-limit-exceeded', 413 );
+				} elseif ( $status->hasMessage( 'missing-revision-permission' ) ) {
+					$this->throwExceptionForStatus( $status, 'rest-permission-denied-revision', 403 );
+				} elseif ( $status->hasMessage( 'parsoid-revision-access' ) ) {
+					$this->throwExceptionForStatus( $status, 'rest-specified-revision-unavailable', 404 );
 				} else {
-					throw new LocalizedHttpException(
-						MessageValue::new( 'rest-html-backend-error' ),
-						500,
-						[ 'reason' => $status->getErrors() ]
-					);
+					$this->logStatusError( $status, 'Parsoid backend error', 'HtmlOutputRendererHelper' );
+					$this->throwExceptionForStatus( $status, 'rest-html-backend-error', 500 );
 				}
 			}
 
 			$this->parserOutput = $status->getValue();
 		}
 
+		Assert::invariant( $this->parserOutput->getRenderId() !== null, "no render id" );
 		return $this->parserOutput;
 	}
 
@@ -572,20 +675,26 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	 * @return Bcp47Code The language, as a BCP-47 code
 	 */
 	public function getHtmlOutputContentLanguage(): Bcp47Code {
-		$pageBundleData = $this->getHtml()->getExtensionData(
-			PageBundleParserOutputConverter::PARSOID_PAGE_BUNDLE_KEY
-		);
+		$contentLanguage = $this->getHtml()->getLanguage();
 
-		// XXX: We need a canonical way of getting the output language from
-		//      ParserOutput since we may not be getting parser outputs from
-		//		Parsoid always in the future.
-		if ( !isset( $pageBundleData['headers']['content-language'] ) ) {
-			throw new LogicException( 'Failed to find content language in page bundle data' );
+		// This shouldn't happen, but don't crash if it does:
+		if ( !$contentLanguage ) {
+			if ( $this->pageLanguage ) {
+				LoggerFactory::getInstance( 'HtmlOutputRendererHelper' )->warning(
+					"ParserOutput does not specify a language"
+				);
+
+				$contentLanguage = $this->pageLanguage;
+			} else {
+				LoggerFactory::getInstance( 'HtmlOutputRendererHelper' )->warning(
+					"ParserOutput does not specify a language and no page language set in helper."
+				);
+
+				$title = Title::newFromPageIdentity( $this->page );
+				$contentLanguage = $title->getPageLanguage();
+			}
 		}
 
-		$contentLanguage = LanguageCode::normalizeNonstandardCodeAndWarn(
-			$pageBundleData['headers']['content-language']
-		);
 		return $contentLanguage;
 	}
 
@@ -594,7 +703,7 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	 */
 	public function putHeaders( ResponseInterface $response, bool $forHtml = true ): void {
 		if ( $forHtml ) {
-			// For HTML we want to set the Content-Language. For JSON, we probably don't.
+			// For HTML, we want to set the Content-Language. For JSON, we probably don't.
 			$response->setHeader( 'Content-Language', $this->getHtmlOutputContentLanguage()->toBcp47Code() );
 
 			$pb = $this->getPageBundle();
@@ -620,8 +729,6 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 
 	/**
 	 * Returns the rendered HTML as a PageBundle object.
-	 *
-	 * @return PageBundle
 	 */
 	public function getPageBundle(): PageBundle {
 		// XXX: converting between PageBundle and ParserOutput is inefficient!
@@ -650,17 +757,15 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	 *
 	 * This wil return null if RevisionRecord has been set but that RevisionRecord
 	 * does not have a revision ID, e.g. when rendering a preview.
-	 *
-	 * @return ?int
 	 */
 	public function getRevisionId(): ?int {
 		if ( !$this->revisionOrId ) {
-			// If we don't have a revision set or it's 0, we are rendering the current revision.
+			// If we don't have a revision set, or it's 0, we are rendering the current revision.
 			return 0;
 		}
 
-		if ( is_object( $this->revisionOrId ) ) {
-			// NOTE: return null even of getId() gave us 0
+		if ( $this->revisionOrId instanceof RevisionRecord ) {
+			// NOTE: return null even if getId() gave us 0
 			return $this->revisionOrId->getId() ?: null;
 		}
 
@@ -669,57 +774,193 @@ class HtmlOutputRendererHelper implements HtmlOutputHelper {
 	}
 
 	/**
-	 * @param ParserOptions $parserOptions
+	 * Strip Parsoid's section wrappers
 	 *
-	 * @return Status
+	 * TODO: Should we move this to Parsoid's ContentUtils class?
+	 * There already is a stripUnnecessaryWrappersAndSyntheticNodes but
+	 * it targets html2wt and does a lot more than just section unwrapping.
 	 */
-	private function getParserOutputInternal( ParserOptions $parserOptions ): Status {
-		// XXX: $parsoidOptions are really parser options, and they should be integrated with
-		//      the ParserOptions class. That would allow us to use the ParserCache with
-		//      various flavors.
-		$parsoidOptions = $this->parsoidOptions;
-
-		// NOTE: VisualEditor would set this flavor when transforming from Wikitext to HTML
-		//       for the purpose of editing when doing parsefragment (in body only mode).
-		if ( $this->flavor === 'fragment' ) {
-			$parsoidOptions += [
-				'body_only' => true,
-				'wrapSections' => false
-			];
+	private function stripParsoidSectionTags( Element $elt ): void {
+		$n = $elt->firstChild;
+		while ( $n ) {
+			$next = $n->nextSibling;
+			if ( $n instanceof Element ) {
+				// Recurse into subtree before stripping this
+				$this->stripParsoidSectionTags( $n );
+				// Strip <section> tags and synthetic extended-annotation-region wrappers
+				if ( WTUtils::isParsoidSectionTag( $n ) ) {
+					$parent = $n->parentNode;
+					// Help out phan
+					'@phan-var Element $parent';
+					DOMUtils::migrateChildren( $n, $parent, $n );
+					$parent->removeChild( $n );
+				}
+			}
+			$n = $next;
 		}
+	}
 
-		// NOTE: ParsoidOutputAccess::getParserOutput() should be used for revisions
-		//       that comes from the database. Either this revision is null to indicate
+	private function getParserOutputInternal(): Status {
+		// NOTE: ParserOutputAccess::getParserOutput() should be used for revisions
+		//       that come from the database. Either this revision is null to indicate
 		//       the current revision or the revision must have an ID.
 		// If we have a revision and the ID is 0 or null, then it's a fake revision
 		// representing a preview.
-		$isFakeRevision = $this->getRevisionId() === null;
+		$parsoidOptions = $this->parsoidOptions;
+		// NOTE: VisualEditor would set this flavor when transforming from Wikitext to HTML
+		//       for the purpose of editing when doing parsefragment (in body only mode).
+		if ( $this->flavor === 'fragment' || $this->getRevisionId() === null ) {
+			$this->isCacheable = false;
+		}
 
-		if ( !$isFakeRevision && !$parsoidOptions && $this->isCacheable ) {
-			// Always log lint info when generating cacheable output.
-			// We are not really interested in lint data for old revisions, but
-			// we don't have a good way to tell at this point.
-			$flags = $this->parsoidOutputAccessOptions | ParsoidOutputAccess::OPT_LOG_LINT_DATA;
+		// TODO: Decide whether we want to allow stale content for speed for the
+		// 'view' flavor. In that case, we would want to use PoolCounterWork,
+		// either directly or through ParserOutputAccess.
 
-			$status = $this->parsoidOutputAccess->getParserOutput(
-				$this->page,
-				$parserOptions,
-				$this->revisionOrId,
-				$flags
-			);
+		$flags = $this->parserOutputAccessOptions;
+		// Resolve revision
+		$page = $this->page;
+		$revision = $this->revisionOrId;
+		if ( $page === null ) {
+			throw new RevisionAccessException( "No page" );
+		}
+		// NOTE: If we have a RevisionRecord already and this is
+		//       not cacheable, just use it, there is no need to
+		//       resolve $page to a PageRecord (and it may not be
+		//       possible if the page doesn't exist).
+		if ( $this->isCacheable || !$revision instanceof RevisionRecord ) {
+			if ( !$page instanceof PageRecord ) {
+				$name = "$page";
+				$page = $this->pageLookup->getPageByReference( $page );
+				if ( !$page ) {
+					throw new RevisionAccessException(
+						'Page {name} not found',
+						[ 'name' => $name ]
+					);
+				}
+			}
+
+			$revision ??= $page->getLatest();
+
+			if ( is_int( $revision ) ) {
+				$revId = $revision;
+				$revision = $this->revisionLookup->getRevisionById( $revId );
+
+				if ( !$revision ) {
+					throw new RevisionAccessException(
+						'Revision {revId} not found',
+						[ 'revId' => $revId ]
+					);
+				}
+			}
+
+			if ( $page->getId() !== $revision->getPageId() ) {
+				if ( $this->lenientRevHandling ) {
+					$page = $this->pageLookup->getPageById( $revision->getPageId() );
+					if ( !$page ) {
+						// This should ideally never trigger!
+						throw new \RuntimeException(
+							"Unexpected NULL page for pageid " . $revision->getPageId() .
+							" from revision " . $revision->getId()
+						);
+					}
+					// Don't cache this!
+					$flags |= ParserOutputAccess::OPT_NO_UPDATE_CACHE;
+				} else {
+					throw new RevisionAccessException(
+						'Revision {revId} does not belong to page {name}',
+						[ 'name' => $page->getDBkey(), 'revId' => $revision->getId() ]
+					);
+				}
+			}
+		}
+
+		$mainSlot = $revision->getSlot( SlotRecord::MAIN );
+		$contentModel = $mainSlot->getModel();
+		if ( $this->parsoidSiteConfig->supportsContentModel( $contentModel ) ) {
+			$this->parserOptions->setUseParsoid();
+		}
+		if ( $this->isCacheable ) {
+			// phan can't tell that we must have used the block above to
+			// resolve $page to a PageRecord if we've made it to this block.
+			'@phan-var PageRecord $page';
+			try {
+				$status = $this->parserOutputAccess->getParserOutput(
+					$page, $this->parserOptions, $revision, $flags
+				);
+			} catch ( ClientError $e ) {
+				$status = Status::newFatal( 'parsoid-client-error', $e->getMessage() );
+			} catch ( ResourceLimitExceededException $e ) {
+				$status = Status::newFatal( 'parsoid-resource-limit-exceeded', $e->getMessage() );
+			}
+			Assert::invariant( $status->isOK() ? $status->getValue()->getRenderId() !== null : true, "no render id" );
 		} else {
-			$status = $this->parsoidOutputAccess->parse(
-				$this->page,
-				$parserOptions,
-				$parsoidOptions,
-				$this->revisionOrId
+			$status = $this->parseUncacheable(
+				$page,
+				$revision,
+				$this->lenientRevHandling
 			);
+
+			// @phan-suppress-next-line PhanSuspiciousValueComparison
+			if ( $status->isOK() && $this->flavor === 'fragment' ) {
+				// Unwrap sections and return body_only content
+				// NOTE: This introduces an extra html -> dom -> html roundtrip
+				// This will get addressed once HtmlHolder work is complete
+				$parserOutput = $status->getValue();
+				$body = DOMCompat::getBody( DOMUtils::parseHTML( $parserOutput->getRawText() ) );
+				if ( $body ) {
+					$this->stripParsoidSectionTags( $body );
+					$parserOutput->setText( DOMCompat::getInnerHTML( $body ) );
+				}
+			}
+			Assert::invariant( $status->isOK() ? $status->getValue()->getRenderId() !== null : true, "no render id" );
 		}
 
 		return $status;
 	}
 
-}
+	// See ParserOutputAccess::renderRevision() -- but of course this method
+	// bypasses any caching.
+	private function parseUncacheable(
+		PageIdentity $page,
+		RevisionRecord $revision,
+		bool $lenientRevHandling = false
+	): Status {
+		// Enforce caller expectation
+		$revId = $revision->getId();
+		if ( $revId !== 0 && $revId !== null ) {
+			return Status::newFatal( 'parsoid-revision-access',
+				"parseUncacheable should not be called for a real revision" );
+		}
+		try {
+			$renderedRev = $this->revisionRenderer->getRenderedRevision(
+				$revision,
+				$this->parserOptions,
+				// ParserOutputAccess uses 'null' for the authority and
+				// 'audience' => RevisionRecord::RAW, presumably because
+				// the access checks are already handled by the
+				// RestAuthorizeTrait
+				$this->authority,
+				[ 'audience' => RevisionRecord::RAW ]
+			);
+			if ( $renderedRev === null ) {
+				return Status::newFatal( 'parsoid-revision-access' );
+			}
+			$parserOutput = $renderedRev->getRevisionParserOutput();
+			// Ensure this isn't accidentally cached
+			$parserOutput->updateCacheExpiry( 0 );
+			return Status::newGood( $parserOutput );
+		} catch ( ClientError $e ) {
+			return Status::newFatal( 'parsoid-client-error', $e->getMessage() );
+		} catch ( ResourceLimitExceededException $e ) {
+			return Status::newFatal( 'parsoid-resource-limit-exceeded', $e->getMessage() );
+		}
+	}
 
-/** @deprecated since 1.40, remove in 1.41 */
-class_alias( HtmlOutputRendererHelper::class, "MediaWiki\\Rest\\Handler\\HtmlOutputRendererHelper" );
+	public function isParsoidContent(): bool {
+		return PageBundleParserOutputConverter::hasPageBundle(
+			$this->getParserOutput()
+		);
+	}
+
+}

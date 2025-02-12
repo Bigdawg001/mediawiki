@@ -18,6 +18,9 @@
  * @file
  */
 
+use MediaWiki\Message\Message;
+use MediaWiki\Title\MalformedTitleException;
+
 /**
  * Show an error page on a badtitle.
  *

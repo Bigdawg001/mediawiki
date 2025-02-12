@@ -2,9 +2,9 @@
 
 namespace MediaWiki\Tests\Structure;
 
-use ExtensionRegistry;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MainConfigSchema;
+use MediaWiki\Registration\ExtensionRegistry;
 use MediaWiki\Settings\Config\ArrayConfigBuilder;
 use MediaWiki\Settings\Config\PhpIniSink;
 use MediaWiki\Settings\SettingsBuilder;
@@ -24,8 +24,6 @@ class SettingsTest extends MediaWikiIntegrationTestCase {
 
 	/**
 	 * Returns the main configuration schema as a settings array.
-	 *
-	 * @return array
 	 */
 	private static function getSchemaData(): array {
 		$source = new ReflectionSchemaSource( MainConfigSchema::class, true );
@@ -33,9 +31,6 @@ class SettingsTest extends MediaWikiIntegrationTestCase {
 		return $settings;
 	}
 
-	/**
-	 * @return SettingsBuilder
-	 */
 	private function getSettingsBuilderWithSchema(): SettingsBuilder {
 		$configBuilder = new ArrayConfigBuilder();
 		$settingsBuilder = new SettingsBuilder(
@@ -102,7 +97,7 @@ class SettingsTest extends MediaWikiIntegrationTestCase {
 			'option' => '--schema',
 			'expectedFile' => MW_INSTALL_PATH . '/includes/config-schema.php',
 		];
-		yield 'includes/config-vars.php' => [
+		yield 'docs/config-vars.php' => [
 			'option' => '--vars',
 			'expectedFile' => MW_INSTALL_PATH . '/docs/config-vars.php',
 		];
@@ -120,8 +115,8 @@ class SettingsTest extends MediaWikiIntegrationTestCase {
 	 * @dataProvider provideConfigGeneration
 	 */
 	public function testConfigGeneration( string $option, string $expectedFile ) {
-		$script = MW_INSTALL_PATH . '/maintenance/run.php';
-		$schemaGenerator = Shell::makeScriptCommand( $script, [ 'GenerateConfigSchema', $option, 'php://stdout' ] );
+		$script = 'GenerateConfigSchema';
+		$schemaGenerator = Shell::makeScriptCommand( $script, [ $option, 'php://stdout' ] );
 		$result = $schemaGenerator->execute();
 		$this->assertSame(
 			0,
@@ -399,17 +394,6 @@ class SettingsTest extends MediaWikiIntegrationTestCase {
 	}
 
 	public static function provideConfigStructurePartialReplacement() {
-		yield 'ObjectCaches' => [
-			'ObjectCaches',
-			[ // the spec for each cache should be replaced entirely
-				1 => [ 'factory' => 'ObjectCache::newAnything' ],
-				'test' => [ 'factory' => 'Testing' ]
-			],
-			[
-				1 => [ 'factory' => 'ObjectCache::newAnything' ],
-				'test' => [ 'factory' => 'Testing' ]
-			],
-		];
 		yield 'GroupPermissions' => [
 			'GroupPermissions',
 			[ // permissions for each group should be merged
@@ -609,7 +593,7 @@ class SettingsTest extends MediaWikiIntegrationTestCase {
 	 */
 	public function testSetLocaltimezone(): void {
 		// Make sure the configured timezone ewas applied to the PHP runtime.
-		$tz = $this->getServiceContainer()->getMainConfig()->get( 'Localtimezone' );
+		$tz = $this->getConfVar( MainConfigNames::Localtimezone );
 		$this->assertSame( $tz, date_default_timezone_get() );
 	}
 }

@@ -3,6 +3,7 @@
 namespace MediaWiki\Settings\Source;
 
 use MediaWiki\Settings\SettingsBuilderException;
+use Stringable;
 use Wikimedia\AtEase\AtEase;
 
 /**
@@ -10,16 +11,13 @@ use Wikimedia\AtEase\AtEase;
  *
  * @since 1.38
  */
-class PhpSettingsSource implements SettingsSource, SettingsIncludeLocator {
+class PhpSettingsSource implements Stringable, SettingsSource, SettingsIncludeLocator {
 	/**
 	 * Path to the PHP file.
 	 * @var string
 	 */
 	private $path;
 
-	/**
-	 * @param string $path
-	 */
 	public function __construct( string $path ) {
 		$this->path = $path;
 	}
@@ -75,8 +73,6 @@ class PhpSettingsSource implements SettingsSource, SettingsIncludeLocator {
 
 	/**
 	 * Returns this file source as a string.
-	 *
-	 * @return string
 	 */
 	public function __toString(): string {
 		return $this->path;

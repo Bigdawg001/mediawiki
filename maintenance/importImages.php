@@ -32,12 +32,17 @@
  * @author Mij <mij@bitchx.it>
  */
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 use MediaWiki\MainConfigNames;
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\Specials\SpecialUpload;
 use MediaWiki\StubObject\StubGlobalUser;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
+use Wikimedia\FileBackend\FSFile\FSFile;
 
 class ImportImages extends Maintenance {
 
@@ -128,7 +133,7 @@ class ImportImages extends Maintenance {
 	}
 
 	public function execute() {
-		$services = MediaWikiServices::getInstance();
+		$services = $this->getServiceContainer();
 		$permissionManager = $services->getPermissionManager();
 
 		$found = 0;
@@ -199,7 +204,10 @@ class ImportImages extends Maintenance {
 		$license = $this->getOption( 'license', '' );
 		$sourceWikiUrl = $this->getOption( 'source-wiki-url' );
 
-		$tags = in_array( ChangeTags::TAG_SERVER_SIDE_UPLOAD, ChangeTags::getSoftwareTags() )
+		$tags = in_array(
+			ChangeTags::TAG_SERVER_SIDE_UPLOAD,
+			$this->getServiceContainer()->getChangeTagsStore()->getSoftwareTags()
+		)
 			? [ ChangeTags::TAG_SERVER_SIDE_UPLOAD ]
 			: [];
 
@@ -428,7 +436,7 @@ class ImportImages extends Maintenance {
 	 * @param string $dir Path to directory to search
 	 * @param array $exts Array of lowercase extensions to search for
 	 * @param bool $recurse Search subdirectories recursively
-	 * @return Generator<string> Generator that iterating filenames
+	 * @return \Generator<string> Generator that iterating filenames
 	 */
 	private function findFiles( $dir, $exts, $recurse = false ) {
 		$dhl = is_dir( $dir ) ? opendir( $dir ) : false;
@@ -436,6 +444,7 @@ class ImportImages extends Maintenance {
 			return;
 		}
 
+		// phpcs:ignore Generic.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition
 		while ( ( $file = readdir( $dhl ) ) !== false ) {
 			if ( is_file( $dir . '/' . $file ) ) {
 				$ext = pathinfo( $file, PATHINFO_EXTENSION );
@@ -483,7 +492,7 @@ class ImportImages extends Maintenance {
 			}
 
 			$n = substr( $n, 0, $idx );
-			$maxStrip -= 1;
+			$maxStrip--;
 		}
 
 		return false;
@@ -501,7 +510,7 @@ class ImportImages extends Maintenance {
 	private function getFileCommentFromSourceWiki( $wiki_host, $file ) {
 		$url = $wiki_host . '/api.php?action=query&format=xml&titles=File:'
 			. rawurlencode( $file ) . '&prop=imageinfo&&iiprop=comment';
-		$body = MediaWikiServices::getInstance()->getHttpRequestFactory()->get( $url, [], __METHOD__ );
+		$body = $this->getServiceContainer()->getHttpRequestFactory()->get( $url, [], __METHOD__ );
 		if ( preg_match( '#<ii comment="([^"]*)" />#', $body, $matches ) == 0 ) {
 			return false;
 		}
@@ -512,7 +521,7 @@ class ImportImages extends Maintenance {
 	private function getFileUserFromSourceWiki( $wiki_host, $file ) {
 		$url = $wiki_host . '/api.php?action=query&format=xml&titles=File:'
 			. rawurlencode( $file ) . '&prop=imageinfo&&iiprop=user';
-		$body = MediaWikiServices::getInstance()->getHttpRequestFactory()->get( $url, [], __METHOD__ );
+		$body = $this->getServiceContainer()->getHttpRequestFactory()->get( $url, [], __METHOD__ );
 		if ( preg_match( '#<ii user="([^"]*)" />#', $body, $matches ) == 0 ) {
 			return false;
 		}
@@ -522,5 +531,7 @@ class ImportImages extends Maintenance {
 
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = ImportImages::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

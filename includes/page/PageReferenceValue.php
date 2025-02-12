@@ -21,6 +21,7 @@
 namespace MediaWiki\Page;
 
 use MediaWiki\DAO\WikiAwareEntityTrait;
+use Stringable;
 use Wikimedia\Assert\Assert;
 use Wikimedia\NonSerializable\NonSerializableTrait;
 
@@ -39,7 +40,7 @@ use Wikimedia\NonSerializable\NonSerializableTrait;
  *
  * @since 1.37
  */
-class PageReferenceValue implements PageReference {
+class PageReferenceValue implements Stringable, PageReference {
 
 	/* Use JSON, but beware the note on serialization above. */
 	use NonSerializableTrait;
@@ -112,31 +113,19 @@ class PageReferenceValue implements PageReference {
 	}
 
 	/**
-	 * @param PageReference $other
-	 *
-	 * @return bool
+	 * @inheritDoc
 	 */
 	public function isSamePageAs( PageReference $other ): bool {
 		// NOTE: keep in sync with Title::isSamePageAs()!
 		// NOTE: keep in sync with WikiPage::isSamePageAs()!
-
-		if ( $other->getWikiId() !== $this->getWikiId() ) {
-			return false;
-		}
-
-		if ( $other->getNamespace() !== $this->getNamespace()
-			|| $other->getDBkey() !== $this->getDBkey() ) {
-			return false;
-		}
-
-		return true;
+		return $this->getWikiId() === $other->getWikiId()
+			&& $this->getNamespace() === $other->getNamespace()
+			&& $this->getDBkey() === $other->getDBkey();
 	}
 
 	/**
 	 * Returns a string representation of the title, for logging. This is purely informative
 	 * and must not be used programmatically.
-	 *
-	 * @return string
 	 */
 	public function __toString(): string {
 		$s = '[' . $this->namespace . ':' . $this->dbKey . ']';

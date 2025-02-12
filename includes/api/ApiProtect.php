@@ -20,11 +20,18 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
+use ChangeTags;
+use InvalidArgumentException;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Permissions\RestrictionStore;
-use MediaWiki\User\UserOptionsLookup;
+use MediaWiki\Title\Title;
+use MediaWiki\User\Options\UserOptionsLookup;
+use MediaWiki\Utils\MWTimestamp;
 use MediaWiki\Watchlist\WatchlistManager;
 use Wikimedia\ParamValidator\ParamValidator;
+use Wikimedia\ParamValidator\TypeDef\ExpiryDef;
 
 /**
  * @ingroup API
@@ -33,19 +40,11 @@ class ApiProtect extends ApiBase {
 
 	use ApiWatchlistTrait;
 
-	/** @var RestrictionStore */
-	private $restrictionStore;
+	private RestrictionStore $restrictionStore;
 
-	/**
-	 * @param ApiMain $mainModule
-	 * @param string $moduleName
-	 * @param WatchlistManager $watchlistManager
-	 * @param UserOptionsLookup $userOptionsLookup
-	 * @param RestrictionStore $restrictionStore
-	 */
 	public function __construct(
 		ApiMain $mainModule,
-		$moduleName,
+		string $moduleName,
 		WatchlistManager $watchlistManager,
 		UserOptionsLookup $userOptionsLookup,
 		RestrictionStore $restrictionStore
@@ -101,7 +100,7 @@ class ApiProtect extends ApiBase {
 		);
 
 		$protections = [];
-		$expiryarray = [];
+		$expiries = [];
 		$resultProtections = [];
 		foreach ( $params['protections'] as $i => $prot ) {
 			$p = explode( '=', $prot );
@@ -121,23 +120,18 @@ class ApiProtect extends ApiBase {
 				$this->dieWithError( [ 'apierror-protect-invalidlevel', wfEscapeWikiText( $p[1] ) ] );
 			}
 
-			if ( wfIsInfinity( $expiry[$i] ) ) {
-				$expiryarray[$p[0]] = 'infinity';
-			} else {
-				$exp = strtotime( $expiry[$i] );
-				if ( $exp < 0 || !$exp ) {
-					$this->dieWithError( [ 'apierror-invalidexpiry', wfEscapeWikiText( $expiry[$i] ) ] );
-				}
-
-				$exp = wfTimestamp( TS_MW, $exp );
-				if ( $exp < wfTimestampNow() ) {
-					$this->dieWithError( [ 'apierror-pastexpiry', wfEscapeWikiText( $expiry[$i] ) ] );
-				}
-				$expiryarray[$p[0]] = $exp;
+			try {
+				$expiries[$p[0]] = ExpiryDef::normalizeExpiry( $expiry[$i], TS_MW );
+			} catch ( InvalidArgumentException $e ) {
+				$this->dieWithError( [ 'apierror-invalidexpiry', wfEscapeWikiText( $expiry[$i] ) ] );
 			}
+			if ( $expiries[$p[0]] < MWTimestamp::now( TS_MW ) ) {
+				$this->dieWithError( [ 'apierror-pastexpiry', wfEscapeWikiText( $expiry[$i] ) ] );
+			}
+
 			$resultProtections[] = [
 				$p[0] => $protections[$p[0]],
-				'expiry' => ApiResult::formatExpiry( $expiryarray[$p[0]], 'infinite' ),
+				'expiry' => ApiResult::formatExpiry( $expiries[$p[0]], 'infinite' ),
 			];
 		}
 
@@ -149,7 +143,7 @@ class ApiProtect extends ApiBase {
 
 		$status = $pageObj->doUpdateRestrictions(
 			$protections,
-			$expiryarray,
+			$expiries,
 			$cascade,
 			$params['reason'],
 			$user,
@@ -215,14 +209,17 @@ class ApiProtect extends ApiBase {
 	}
 
 	protected function getExamplesMessages() {
+		$title = Title::newMainPage()->getPrefixedText();
+		$mp = rawurlencode( $title );
+
 		return [
-			'action=protect&title=Main%20Page&token=123ABC&' .
+			"action=protect&title={$mp}&token=123ABC&" .
 				'protections=edit=sysop|move=sysop&cascade=&expiry=20070901163000|never'
 				=> 'apihelp-protect-example-protect',
-			'action=protect&title=Main%20Page&token=123ABC&' .
+			"action=protect&title={$mp}&token=123ABC&" .
 				'protections=edit=all|move=all&reason=Lifting%20restrictions'
 				=> 'apihelp-protect-example-unprotect',
-			'action=protect&title=Main%20Page&token=123ABC&' .
+			"action=protect&title={$mp}&token=123ABC&" .
 				'protections=&reason=Lifting%20restrictions'
 				=> 'apihelp-protect-example-unprotect2',
 		];
@@ -232,3 +229,6 @@ class ApiProtect extends ApiBase {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Protect';
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiProtect::class, 'ApiProtect' );

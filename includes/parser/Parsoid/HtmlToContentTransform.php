@@ -3,21 +3,23 @@
 namespace MediaWiki\Parser\Parsoid;
 
 use Composer\Semver\Semver;
-use Content;
-use ContentHandler;
-use Liuggio\StatsdClient\Factory\StatsdDataFactoryInterface;
 use LogicException;
+use MediaWiki\Content\Content;
+use MediaWiki\Content\ContentHandler;
 use MediaWiki\Content\IContentHandlerFactory;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Parser\Parsoid\Config\PageConfigFactory;
 use MediaWiki\Rest\HttpException;
+use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Revision\MutableRevisionRecord;
 use MediaWiki\Revision\RevisionAccessException;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
 use Wikimedia\Bcp47Code\Bcp47Code;
+use Wikimedia\Message\MessageValue;
 use Wikimedia\Parsoid\Config\PageConfig;
 use Wikimedia\Parsoid\Core\ClientError;
+use Wikimedia\Parsoid\Core\DomPageBundle;
 use Wikimedia\Parsoid\Core\PageBundle;
 use Wikimedia\Parsoid\Core\ResourceLimitExceededException;
 use Wikimedia\Parsoid\Core\SelserData;
@@ -27,7 +29,7 @@ use Wikimedia\Parsoid\Parsoid;
 use Wikimedia\Parsoid\Utils\ContentUtils;
 use Wikimedia\Parsoid\Utils\DOMCompat;
 use Wikimedia\Parsoid\Utils\DOMUtils;
-use Wikimedia\Parsoid\Utils\Timing;
+use Wikimedia\Stats\StatsFactory;
 
 /**
  * This class allows HTML to be transformed to a page content source format such as wikitext.
@@ -36,60 +38,27 @@ use Wikimedia\Parsoid\Utils\Timing;
  * @unstable should be stable before 1.40 release
  */
 class HtmlToContentTransform {
-	/** @var array */
-	private $options = [];
-
-	/** @var ?int */
-	private $oldid = null;
-
-	/** @var ?Bcp47Code */
-	private $contentLanguage = null;
-
-	/** @var ?Content */
-	private $originalContent = null;
-
-	/** @var ?RevisionRecord */
-	private $originalRevision = null;
-
+	private array $options = [];
+	private ?int $oldid = null;
+	private ?Bcp47Code $contentLanguage = null;
+	private ?Content $originalContent = null;
+	private ?RevisionRecord $originalRevision = null;
 	/**
 	 * Whether $this->doc has had any necessary processing applied,
 	 * such as injecting data-parsoid attributes from a PageBundle.
-	 * @var bool
 	 */
-	private $docHasBeenProcessed = false;
-
-	/** @var ?Document */
-	private $doc = null;
-
-	/** @var ?Element */
-	private $originalBody = null;
-
-	/** @var ?StatsdDataFactoryInterface A statistics aggregator */
-	protected $metrics = null;
-
-	/** @var PageBundle */
-	private $modifiedPageBundle;
-
-	/** @var PageBundle */
-	private $originalPageBundle;
-
-	/** @var ?PageConfig */
-	private $pageConfig = null;
-
-	/** @var Parsoid */
-	private $parsoid;
-
-	/** @var array */
-	private $parsoidSettings;
-
-	/** @var PageIdentity */
-	private $page;
-
-	/** @var PageConfigFactory */
-	private $pageConfigFactory;
-
-	/** @var IContentHandlerFactory */
-	private $contentHandlerFactory;
+	private bool $docHasBeenProcessed = false;
+	private ?Document $doc = null;
+	private ?Element $originalBody = null;
+	protected ?StatsFactory $metrics = null;
+	private PageBundle $modifiedPageBundle;
+	private PageBundle $originalPageBundle;
+	private ?PageConfig $pageConfig = null;
+	private Parsoid $parsoid;
+	private array $parsoidSettings;
+	private PageIdentity $page;
+	private PageConfigFactory $pageConfigFactory;
+	private IContentHandlerFactory $contentHandlerFactory;
 
 	/**
 	 * @param string $modifiedHTML
@@ -117,25 +86,19 @@ class HtmlToContentTransform {
 	}
 
 	/**
-	 * @param StatsdDataFactoryInterface $metrics
+	 * Set metrics sink.
 	 */
-	public function setMetrics( StatsdDataFactoryInterface $metrics ): void {
+	public function setMetrics( StatsFactory $metrics ): void {
 		$this->metrics = $metrics;
 	}
 
-	private function startTiming(): Timing {
-		return Timing::start( $this->metrics );
-	}
-
-	private function incrementMetrics( string $key ) {
+	private function incrementMetrics( string $key, array $labels, ?string $statsdKey ) {
 		if ( $this->metrics ) {
-			$this->metrics->increment( $key );
-		}
-	}
-
-	private function timingMetrics( string $key, $value ) {
-		if ( $this->metrics ) {
-			$this->metrics->timing( $key, $value );
+			$counter = $this->metrics->getCounter( $key )->setLabels( $labels );
+			if ( $statsdKey ) {
+				$counter = $counter->copyToStatsdAt( $statsdKey );
+			}
+			$counter->increment();
 		}
 	}
 
@@ -143,9 +106,6 @@ class HtmlToContentTransform {
 		$this->options = $options;
 	}
 
-	/**
-	 * @param RevisionRecord $rev
-	 */
 	public function setOriginalRevision( RevisionRecord $rev ): void {
 		if ( $this->pageConfig ) {
 			throw new LogicException( 'Cannot set revision after using the PageConfig' );
@@ -158,9 +118,6 @@ class HtmlToContentTransform {
 		$this->oldid = $rev->getId();
 	}
 
-	/**
-	 * @param int $oldid
-	 */
 	public function setOriginalRevisionId( int $oldid ): void {
 		if ( $this->pageConfig ) {
 			throw new LogicException( 'Cannot set revision ID after using the PageConfig' );
@@ -172,9 +129,6 @@ class HtmlToContentTransform {
 		$this->oldid = $oldid;
 	}
 
-	/**
-	 * @param Bcp47Code $lang
-	 */
 	public function setContentLanguage( Bcp47Code $lang ): void {
 		if ( $this->pageConfig ) {
 			throw new LogicException( 'Cannot set content language after using the PageConfig' );
@@ -185,8 +139,6 @@ class HtmlToContentTransform {
 
 	/**
 	 * Sets the original source text (usually wikitext).
-	 *
-	 * @param string $text
 	 */
 	public function setOriginalText( string $text ): void {
 		$content = $this->getContentHandler()->unserializeContent( $text );
@@ -195,8 +147,6 @@ class HtmlToContentTransform {
 
 	/**
 	 * Sets the original content (such as wikitext).
-	 *
-	 * @param Content $content
 	 */
 	public function setOriginalContent( Content $content ): void {
 		if ( $this->pageConfig ) {
@@ -236,16 +186,10 @@ class HtmlToContentTransform {
 		$this->modifiedPageBundle->mw = $modifiedDataMW;
 	}
 
-	/**
-	 * @param string $originalSchemaVeraion
-	 */
 	public function setOriginalSchemaVersion( string $originalSchemaVeraion ): void {
 		$this->originalPageBundle->version = $originalSchemaVeraion;
 	}
 
-	/**
-	 * @param string $originalHtml
-	 */
 	public function setOriginalHtml( string $originalHtml ): void {
 		if ( $this->doc ) {
 			throw new LogicException( __FUNCTION__ . ' cannot be called after' .
@@ -255,9 +199,6 @@ class HtmlToContentTransform {
 		$this->originalPageBundle->html = $originalHtml;
 	}
 
-	/**
-	 * @param array $originalDataMW
-	 */
 	public function setOriginalDataMW( array $originalDataMW ): void {
 		if ( $this->doc ) {
 			throw new LogicException( __FUNCTION__ . ' cannot be called after getModifiedDocument()' );
@@ -272,9 +213,6 @@ class HtmlToContentTransform {
 		}
 	}
 
-	/**
-	 * @param array $originalDataParsoid
-	 */
 	public function setOriginalDataParsoid( array $originalDataParsoid ): void {
 		if ( $this->doc ) {
 			throw new LogicException( __FUNCTION__ . ' cannot be called after getModifiedDocument()' );
@@ -285,9 +223,6 @@ class HtmlToContentTransform {
 		$this->modifiedPageBundle->parsoid = $originalDataParsoid;
 	}
 
-	/**
-	 * @return PageConfig
-	 */
 	private function getPageConfig(): PageConfig {
 		if ( !$this->pageConfig ) {
 
@@ -317,13 +252,12 @@ class HtmlToContentTransform {
 					null,
 					$revision,
 					null,
-					$this->contentLanguage,
-					$this->parsoidSettings
+					$this->contentLanguage
 				);
 			} catch ( RevisionAccessException $exception ) {
 				// TODO: Throw a different exception, this class should not know
 				//       about HTTP status codes.
-				throw new HttpException( 'The specified revision is deleted or suppressed.', 404 );
+				throw new LocalizedHttpException( new MessageValue( "rest-specified-revision-unavailable" ), 404 );
 			}
 		}
 
@@ -332,8 +266,6 @@ class HtmlToContentTransform {
 
 	/**
 	 * The size of the modified HTML in characters.
-	 *
-	 * @return int
 	 */
 	public function getModifiedHtmlSize(): int {
 		return mb_strlen( $this->modifiedPageBundle->html );
@@ -363,18 +295,14 @@ class HtmlToContentTransform {
 	/**
 	 * NOTE: The return value of this method depends on
 	 *    setOriginalData() having been called first.
-	 *
-	 * @return bool
 	 */
 	public function hasOriginalHtml(): bool {
-		return $this->originalPageBundle->html !== null && $this->originalPageBundle->html !== '';
+		return $this->originalPageBundle->html !== '';
 	}
 
 	/**
 	 * NOTE: The return value of this method depends on
 	 *    setOriginalData() having been called first.
-	 *
-	 * @return bool
 	 */
 	public function hasOriginalDataParsoid(): bool {
 		return $this->originalPageBundle->parsoid !== null;
@@ -472,8 +400,6 @@ class HtmlToContentTransform {
 	/**
 	 * NOTE: The return value of this method depends on
 	 *    setOriginalData() having been called first.
-	 *
-	 * @return string
 	 */
 	public function getSchemaVersion(): string {
 		// Get the content version of the edited doc, if available.
@@ -482,7 +408,11 @@ class HtmlToContentTransform {
 		$inputContentVersion = $this->modifiedPageBundle->version;
 
 		if ( !$inputContentVersion ) {
-			$this->incrementMetrics( 'html2wt.original.version.notinline' );
+			$this->incrementMetrics(
+				'html2wt_original_version_total',
+				[ 'input_content_version' => 'none' ],
+				'html2wt.original.version.notinline'
+			);
 			$inputContentVersion = $this->originalPageBundle->version ?: Parsoid::defaultHTMLVersion();
 		}
 
@@ -497,12 +427,12 @@ class HtmlToContentTransform {
 		return $this->originalRevision || $this->oldid || $this->originalContent !== null;
 	}
 
-	public function getContentModel(): ?string {
-		return $this->options['contentmodel'] ?? null;
+	public function getContentModel(): string {
+		return $this->options['contentmodel'] ?? CONTENT_MODEL_WIKITEXT;
 	}
 
 	public function getOffsetType(): string {
-		return $this->options['offsetType'];
+		return $this->options['offsetType'] ?? 'byte';
 	}
 
 	private function needsDowngrade( PageBundle $pb ): bool {
@@ -548,12 +478,19 @@ class HtmlToContentTransform {
 		}
 
 		$this->incrementMetrics(
+			"downgrade_total",
+			[ 'from' => $downgrade['from'], 'to' => $downgrade['to'] ],
 			"downgrade.from.{$downgrade['from']}.to.{$downgrade['to']}"
 		);
-		$downgradeTiming = $this->startTiming();
-		Parsoid::downgrade( $downgrade, $pb );
-		$downgradeTiming->end( 'downgrade.time' );
 
+		$downgradeTime = microtime( true );
+		Parsoid::downgrade( $downgrade, $pb );
+		if ( $this->metrics ) {
+			$this->metrics
+				->getTiming( 'downgrade_time_ms' )
+				->copyToStatsdAt( 'downgrade.time' )
+				->observe( ( microtime( true ) - $downgradeTime ) * 1000 );
+		}
 		// NOTE: Set $this->originalBody to null so getOriginalBody() will re-generate it.
 		// XXX: Parsoid::downgrade operates on the parsed Document, would be nice
 		//      if we could get that instead of getting back HTML which we have to
@@ -586,21 +523,11 @@ class HtmlToContentTransform {
 		}
 
 		$this->validatePageBundle( $pb );
-
-		// TODO: HACK! Remove as soon as change I41e6c741a3e2e is in the version of Parsoid used by MW.
-		// @phan-suppress-next-line PhanTypeArraySuspiciousNullable
-		if ( isset( $pb->parsoid['ids'] ) && is_object( $pb->parsoid['ids'] ) ) {
-			// recursively convert stdClass objects to associative arrays.
-			$pb->parsoid = json_decode( json_encode( $pb->parsoid ), true );
-		}
-
-		// @phan-suppress-next-line PhanTypeArraySuspiciousNullable
-		if ( isset( $pb->mw['ids'] ) && is_object( $pb->mw['ids'] ) ) {
-			// recursively convert stdClass objects to associative arrays.
-			$pb->mw = json_decode( json_encode( $pb->mw ), true );
-		}
-
-		PageBundle::apply( $doc, $pb );
+		$dpb = new DomPageBundle(
+			$doc, $pb->parsoid, $pb->mw, $pb->version,
+			$pb->headers, $pb->contentmodel
+		);
+		$dpb->toDom( false );
 	}
 
 	/**
@@ -618,7 +545,7 @@ class HtmlToContentTransform {
 
 		if ( $knowsOriginal && !empty( $this->parsoidSettings['useSelser'] ) ) {
 			if ( !$this->getPageConfig()->getRevisionContent() ) {
-				throw new HttpException( 'Could not find previous revision. Has the page been locked / deleted?',
+				throw new LocalizedHttpException( new MessageValue( "rest-previous-revision-unavailable" ),
 					409 );
 			}
 
@@ -634,7 +561,7 @@ class HtmlToContentTransform {
 	}
 
 	private function getContentHandler(): ContentHandler {
-		$model = $this->getContentModel() ?: CONTENT_MODEL_WIKITEXT;
+		$model = $this->getContentModel();
 
 		return $this->contentHandlerFactory
 			->getContentHandler( $model );
@@ -642,8 +569,6 @@ class HtmlToContentTransform {
 
 	/**
 	 * Returns a Content object derived from the supplied HTML.
-	 *
-	 * @return Content
 	 */
 	public function htmlToContent(): Content {
 		$text = $this->htmlToText();
@@ -660,24 +585,10 @@ class HtmlToContentTransform {
 	 * @return string
 	 */
 	private function htmlToText(): string {
-		// Performance Timing options
-		$timing = $this->startTiming();
-
 		$doc = $this->getModifiedDocument();
 		$htmlSize = $this->getModifiedHtmlSize();
-
-		// Send input size to statsd/Graphite
-		$this->timingMetrics( 'html2wt.size.input', $htmlSize );
-
 		$inputContentVersion = $this->getSchemaVersion();
-
-		$this->incrementMetrics(
-			'html2wt.original.version.' . $inputContentVersion
-		);
-
 		$selserData = $this->getSelserData();
-
-		$timing->end( 'html2wt.init' );
 
 		try {
 			$text = $this->parsoid->dom2wikitext( $this->getPageConfig(), $doc, [
@@ -687,18 +598,11 @@ class HtmlToContentTransform {
 				'htmlSize' => $htmlSize, // used to trigger status 413 if the input is too big
 			], $selserData );
 		} catch ( ClientError $e ) {
-			throw new HttpException( $e->getMessage(), 400 );
+			throw new LocalizedHttpException( new MessageValue( "rest-parsoid-error", [ $e->getMessage() ] ), 400 );
 		} catch ( ResourceLimitExceededException $e ) {
-			throw new HttpException( $e->getMessage(), 413 );
-		}
-
-		$total = $timing->end( 'html2wt.total' );
-		$this->timingMetrics( 'html2wt.size.output', strlen( $text ) );
-
-		if ( $htmlSize ) {  // Avoid division by zero
-			// NOTE: the name timePerInputKB is misleading, since $htmlSize is
-			//       in characters, not bytes.
-			$this->timingMetrics( 'html2wt.timePerInputKB', $total * 1024 / $htmlSize );
+			throw new LocalizedHttpException(
+				new MessageValue( "rest-parsoid-resource-exceeded", [ $e->getMessage() ] ), 413
+			);
 		}
 
 		return $text;

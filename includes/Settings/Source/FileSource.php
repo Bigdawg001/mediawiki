@@ -7,6 +7,7 @@ use MediaWiki\Settings\SettingsBuilderException;
 use MediaWiki\Settings\Source\Format\JsonFormat;
 use MediaWiki\Settings\Source\Format\SettingsFormat;
 use MediaWiki\Settings\Source\Format\YamlFormat;
+use Stringable;
 use UnexpectedValueException;
 use Wikimedia\AtEase\AtEase;
 
@@ -15,7 +16,7 @@ use Wikimedia\AtEase\AtEase;
  *
  * @since 1.38
  */
-class FileSource implements CacheableSource, SettingsIncludeLocator {
+class FileSource implements Stringable, CacheableSource, SettingsIncludeLocator {
 	private const BUILT_IN_FORMATS = [
 		JsonFormat::class,
 		YamlFormat::class,
@@ -84,7 +85,7 @@ class FileSource implements CacheableSource, SettingsIncludeLocator {
 	 * @param string $path
 	 * @param SettingsFormat|null $format
 	 */
-	public function __construct( string $path, SettingsFormat $format = null ) {
+	public function __construct( string $path, ?SettingsFormat $format = null ) {
 		$this->path = $path;
 		$this->format = $format;
 	}
@@ -93,8 +94,6 @@ class FileSource implements CacheableSource, SettingsIncludeLocator {
 	 * Disallow stale results from file sources in the case of load failure as
 	 * failing to read from disk would be quite catastrophic and worthy of
 	 * propagation.
-	 *
-	 * @return bool
 	 */
 	public function allowsStaleLoad(): bool {
 		return false;
@@ -132,8 +131,6 @@ class FileSource implements CacheableSource, SettingsIncludeLocator {
 
 	/**
 	 * The cache expiry TTL (in seconds) for this file source.
-	 *
-	 * @return int
 	 */
 	public function getExpiryTtl(): int {
 		return self::EXPIRY_TTL;
@@ -142,8 +139,6 @@ class FileSource implements CacheableSource, SettingsIncludeLocator {
 	/**
 	 * Coefficient used in determining early expiration of cached settings to
 	 * avoid stampedes.
-	 *
-	 * @return float
 	 */
 	public function getExpiryWeight(): float {
 		return self::EXPIRY_WEIGHT;
@@ -152,8 +147,6 @@ class FileSource implements CacheableSource, SettingsIncludeLocator {
 	/**
 	 * Returns a hash key computed from the file's inode, size, and last
 	 * modified timestamp.
-	 *
-	 * @return string
 	 */
 	public function getHashKey(): string {
 		$stat = stat( $this->path );
@@ -170,8 +163,6 @@ class FileSource implements CacheableSource, SettingsIncludeLocator {
 
 	/**
 	 * Returns this file source as a string.
-	 *
-	 * @return string
 	 */
 	public function __toString(): string {
 		return $this->path;

@@ -1,7 +1,5 @@
 <?php
 /**
- * Implements Special:Newimages
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,16 +16,29 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
  */
 
+namespace MediaWiki\Specials;
+
 use MediaWiki\Cache\LinkBatchFactory;
+use MediaWiki\Context\DerivativeContext;
+use MediaWiki\Context\IContextSource;
 use MediaWiki\Html\FormOptions;
 use MediaWiki\Html\Html;
+use MediaWiki\HTMLForm\Field\HTMLUserTextField;
+use MediaWiki\HTMLForm\HTMLForm;
+use MediaWiki\Pager\NewFilesPager;
 use MediaWiki\Permissions\GroupPermissionsLookup;
 use MediaWiki\Request\DerivativeRequest;
-use Wikimedia\Rdbms\ILoadBalancer;
+use MediaWiki\SpecialPage\IncludableSpecialPage;
+use Wikimedia\Mime\MimeAnalyzer;
+use Wikimedia\Rdbms\IConnectionProvider;
 
+/**
+ * Implements Special:Newimages
+ *
+ * @ingroup SpecialPage
+ */
 class SpecialNewFiles extends IncludableSpecialPage {
 	/** @var FormOptions */
 	protected $opts;
@@ -35,30 +46,25 @@ class SpecialNewFiles extends IncludableSpecialPage {
 	/** @var string[] */
 	protected $mediaTypes;
 
-	/** @var GroupPermissionsLookup */
-	private $groupPermissionsLookup;
-
-	/** @var ILoadBalancer */
-	private $loadBalancer;
-
-	/** @var LinkBatchFactory */
-	private $linkBatchFactory;
+	private GroupPermissionsLookup $groupPermissionsLookup;
+	private IConnectionProvider $dbProvider;
+	private LinkBatchFactory $linkBatchFactory;
 
 	/**
 	 * @param MimeAnalyzer $mimeAnalyzer
 	 * @param GroupPermissionsLookup $groupPermissionsLookup
-	 * @param ILoadBalancer $loadBalancer
+	 * @param IConnectionProvider $dbProvider
 	 * @param LinkBatchFactory $linkBatchFactory
 	 */
 	public function __construct(
 		MimeAnalyzer $mimeAnalyzer,
 		GroupPermissionsLookup $groupPermissionsLookup,
-		ILoadBalancer $loadBalancer,
+		IConnectionProvider $dbProvider,
 		LinkBatchFactory $linkBatchFactory
 	) {
 		parent::__construct( 'Newimages' );
 		$this->groupPermissionsLookup = $groupPermissionsLookup;
-		$this->loadBalancer = $loadBalancer;
+		$this->dbProvider = $dbProvider;
 		$this->mediaTypes = $mimeAnalyzer->getMediaTypes();
 		$this->linkBatchFactory = $linkBatchFactory;
 	}
@@ -137,7 +143,7 @@ class SpecialNewFiles extends IncludableSpecialPage {
 			$this->groupPermissionsLookup,
 			$this->linkBatchFactory,
 			$this->getLinkRenderer(),
-			$this->loadBalancer,
+			$this->dbProvider,
 			$opts
 		);
 
@@ -250,3 +256,9 @@ class SpecialNewFiles extends IncludableSpecialPage {
 		}
 	}
 }
+
+/**
+ * Retain the old class name for backwards compatibility.
+ * @deprecated since 1.41
+ */
+class_alias( SpecialNewFiles::class, 'SpecialNewFiles' );

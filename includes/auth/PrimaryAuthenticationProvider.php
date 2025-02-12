@@ -23,8 +23,9 @@
 
 namespace MediaWiki\Auth;
 
+use MediaWiki\User\User;
 use StatusValue;
-use User;
+use Wikimedia\Rdbms\IDBAccessObject;
 
 /**
  * A primary authentication provider is responsible for associating the submitted
@@ -135,10 +136,10 @@ interface PrimaryAuthenticationProvider extends AuthenticationProvider {
 	 * Single-sign-on providers can use this to reserve a username for autocreation.
 	 *
 	 * @param string $username MediaWiki username
-	 * @param int $flags Bitfield of User:READ_* constants
+	 * @param int $flags Bitfield of IDBAccessObject::READ_* constants
 	 * @return bool
 	 */
-	public function testUserExists( $username, $flags = User::READ_NORMAL );
+	public function testUserExists( $username, $flags = IDBAccessObject::READ_NORMAL );
 
 	/**
 	 * Test whether the named user can authenticate with this provider
@@ -223,8 +224,6 @@ interface PrimaryAuthenticationProvider extends AuthenticationProvider {
 	 * It can be assumed that providerAllowsAuthenticationDataChange with $checkData === true
 	 * was called before this, and passed. This method should never fail (other than throwing an
 	 * exception).
-	 *
-	 * @param AuthenticationRequest $req
 	 */
 	public function providerChangeAuthenticationData( AuthenticationRequest $req );
 
@@ -331,13 +330,15 @@ interface PrimaryAuthenticationProvider extends AuthenticationProvider {
 	 * @param bool|string $autocreate False if this is not an auto-creation, or
 	 *  the source of the auto-creation passed to AuthManager::autoCreateUser().
 	 * @param array $options
-	 *  - flags: (int) Bitfield of User:READ_* constants, default User::READ_NORMAL
+	 *  - flags: (int) Bitfield of IDBAccessObject::READ_* constants, default IDBAccessObject::READ_NORMAL
 	 *  - creating: (bool) If false (or missing), this call is only testing if
-	 *    a user could be created. If set, this (non-autocreation) is for
-	 *    actually creating an account and will be followed by a call to
+	 *    a user could be created. If set, this is for actually creating an account.
+	 *    If set and $autocreate is false, it's guaranteed to be followed by a call to
 	 *    testForAccountCreation(). In this case, the provider might return
 	 *    StatusValue::newGood() here and let the later call to
 	 *    testForAccountCreation() do a more thorough test.
+	 *  - canAlwaysAutocreate: (bool) If true the session provider is exempt from
+	 *    autocreate user permissions checks.
 	 * @return StatusValue
 	 */
 	public function testUserForCreation( $user, $autocreate, array $options = [] );

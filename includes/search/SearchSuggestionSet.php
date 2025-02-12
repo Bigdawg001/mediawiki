@@ -104,8 +104,6 @@ class SearchSuggestionSet {
 	 * Add a new suggestion at the end.
 	 * If the score of the new suggestion is greater than the worst one,
 	 * the new suggestion score will be updated (worst - 1).
-	 *
-	 * @param SearchSuggestion $suggestion
 	 */
 	public function append( SearchSuggestion $suggestion ) {
 		$pageID = $suggestion->getSuggestedTitleID();
@@ -123,7 +121,6 @@ class SearchSuggestionSet {
 
 	/**
 	 * Add suggestion set to the end of the current one.
-	 * @param SearchSuggestionSet $set
 	 */
 	public function appendAll( SearchSuggestionSet $set ) {
 		foreach ( $set->getSuggestions() as $sugg ) {
@@ -144,7 +141,6 @@ class SearchSuggestionSet {
 	/**
 	 * Add a new suggestion at the top. If the new suggestion score
 	 * is lower than the best one its score will be updated (best + 1)
-	 * @param SearchSuggestion $suggestion
 	 */
 	public function prepend( SearchSuggestion $suggestion ) {
 		$pageID = $suggestion->getSuggestedTitleID();
@@ -161,10 +157,30 @@ class SearchSuggestionSet {
 	}
 
 	/**
+	 * Remove a suggestion from the set.
+	 * Removes the first suggestion that has the same article id or the same suggestion text.
+	 * @param SearchSuggestion $suggestion
+	 * @return bool true if something was removed
+	 */
+	public function remove( SearchSuggestion $suggestion ): bool {
+		foreach ( $this->suggestions as $k => $s ) {
+			$titleId = $s->getSuggestedTitleID();
+			if ( ( $titleId != null && $titleId === $suggestion->getSuggestedTitleID() )
+				|| $s->getText() === $suggestion->getText()
+			) {
+				array_splice( $this->suggestions, $k, 1 );
+				unset( $this->pageMap[$s->getSuggestedTitleID()] );
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * @return float the best score in this suggestion set
 	 */
 	public function getBestScore() {
-		if ( empty( $this->suggestions ) ) {
+		if ( !$this->suggestions ) {
 			return 0;
 		}
 		return $this->suggestions[0]->getScore();
@@ -174,7 +190,7 @@ class SearchSuggestionSet {
 	 * @return float the worst score in this set
 	 */
 	public function getWorstScore() {
-		if ( empty( $this->suggestions ) ) {
+		if ( !$this->suggestions ) {
 			return 0;
 		}
 		return end( $this->suggestions )->getScore();
@@ -194,8 +210,26 @@ class SearchSuggestionSet {
 	public function shrink( $limit ) {
 		if ( count( $this->suggestions ) > $limit ) {
 			$this->suggestions = array_slice( $this->suggestions, 0, $limit );
+			$this->pageMap = self::buildPageMap( $this->suggestions );
 			$this->hasMoreResults = true;
 		}
+	}
+
+	/**
+	 * Build an array of true with the page ids present in $suggestion as keys.
+	 *
+	 * @param array $suggestions
+	 * @return array<int,bool>
+	 */
+	private static function buildPageMap( array $suggestions ): array {
+		$pageMap = [];
+		foreach ( $suggestions as $suggestion ) {
+			$pageID = $suggestion->getSuggestedTitleID();
+			if ( $pageID ) {
+				$pageMap[$pageID] = true;
+			}
+		}
+		return $pageMap;
 	}
 
 	/**

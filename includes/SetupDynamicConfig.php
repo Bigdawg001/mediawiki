@@ -4,7 +4,9 @@
  * It's split into a separate file so it can be tested.
  */
 
+use MediaWiki\Language\LanguageCode;
 use MediaWiki\MainConfigSchema;
+use MediaWiki\Title\NamespaceInfo;
 use Wikimedia\AtEase\AtEase;
 
 // For backwards compatibility, the value of wgLogos is copied to wgLogo.
@@ -83,13 +85,21 @@ if ( isset( $wgFooterIcons['copyright']['copyright'] )
 
 if ( isset( $wgFooterIcons['poweredby'] )
 	&& isset( $wgFooterIcons['poweredby']['mediawiki'] )
+	&& is_array( $wgFooterIcons['poweredby']['mediawiki'] )
 	&& $wgFooterIcons['poweredby']['mediawiki']['src'] === null
 ) {
-	$wgFooterIcons['poweredby']['mediawiki']['src'] =
-		"$wgResourceBasePath/resources/assets/poweredby_mediawiki_88x31.png";
-	$wgFooterIcons['poweredby']['mediawiki']['srcset'] =
-		"$wgResourceBasePath/resources/assets/poweredby_mediawiki_132x47.png 1.5x, " .
-		"$wgResourceBasePath/resources/assets/poweredby_mediawiki_176x62.png 2x";
+	$compactLogo = "$wgResourceBasePath/resources/assets/mediawiki_compact.svg";
+	$wgFooterIcons['poweredby']['mediawiki']['sources'] = [
+		[
+			"media" => "(min-width: 500px)",
+			"srcset" => "$wgResourceBasePath/resources/assets/poweredby_mediawiki.svg",
+			"width" => 88,
+			"height" => 31,
+		]
+	];
+	$wgFooterIcons['poweredby']['mediawiki']['src'] = $compactLogo;
+	$wgFooterIcons['poweredby']['mediawiki']['width'] = 25;
+	$wgFooterIcons['poweredby']['mediawiki']['height'] = 25;
 }
 
 // Unconditional protection for NS_MEDIAWIKI since otherwise it's too easy for a
@@ -269,6 +279,9 @@ foreach ( LanguageCode::getNonstandardLanguageCodeMapping() as $code => $bcp47 )
 }
 unset( $code ); // no global pollution; destroy reference
 unset( $bcp47 ); // no global pollution; destroy reference
+if ( $wgUseXssLanguage ) {
+	$wgDummyLanguageCodes['x-xss'] = 'x-xss'; // Used for testing
+}
 
 // Temporary backwards-compatibility reading of old replica lag settings as of MediaWiki 1.36,
 // to support sysadmins who fail to update their settings immediately:
@@ -323,16 +336,12 @@ if ( $wgPageCreationLog ) {
 
 if ( $wgPageLanguageUseDB ) {
 	$wgLogTypes[] = 'pagelang';
-	$wgLogActionsHandlers['pagelang/pagelang'] = PageLangLogFormatter::class;
-}
-
-// Backwards compatibility with old password limits
-if ( $wgMinimalPasswordLength !== false ) {
-	$wgPasswordPolicy['policies']['default']['MinimalPasswordLength'] = $wgMinimalPasswordLength;
-}
-
-if ( $wgMaximalPasswordLength !== false ) {
-	$wgPasswordPolicy['policies']['default']['MaximalPasswordLength'] = $wgMaximalPasswordLength;
+	$wgLogActionsHandlers['pagelang/pagelang'] = [
+		'class' => PageLangLogFormatter::class,
+		'services' => [
+			'LanguageNameUtils',
+		]
+	];
 }
 
 if ( $wgPHPSessionHandling !== 'enable' &&
@@ -345,4 +354,16 @@ if ( defined( 'MW_NO_SESSION' ) ) {
 	// If the entry point wants no session, force 'disable' here unless they
 	// specifically set it to the (undocumented) 'warn'.
 	$wgPHPSessionHandling = MW_NO_SESSION === 'warn' ? 'warn' : 'disable';
+}
+
+// Backwards compatibility with old bot passwords storage configs
+if ( !$wgVirtualDomainsMapping ) {
+	$wgVirtualDomainsMapping = [];
+}
+if ( $wgBotPasswordsCluster ) {
+	$wgVirtualDomainsMapping['virtual-botpasswords']['cluster'] = $wgBotPasswordsCluster;
+}
+
+if ( $wgBotPasswordsDatabase ) {
+	$wgVirtualDomainsMapping['virtual-botpasswords']['db'] = $wgBotPasswordsDatabase;
 }

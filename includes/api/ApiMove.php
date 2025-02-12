@@ -20,11 +20,16 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
+use LogicException;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\MovePageFactory;
+use MediaWiki\Status\Status;
 use MediaWiki\Title\Title;
-use MediaWiki\User\UserOptionsLookup;
+use MediaWiki\User\Options\UserOptionsLookup;
 use MediaWiki\Watchlist\WatchlistManager;
+use RepoGroup;
 use Wikimedia\ParamValidator\ParamValidator;
 
 /**
@@ -35,15 +40,12 @@ class ApiMove extends ApiBase {
 
 	use ApiWatchlistTrait;
 
-	/** @var MovePageFactory */
-	private $movePageFactory;
-
-	/** @var RepoGroup */
-	private $repoGroup;
+	private MovePageFactory $movePageFactory;
+	private RepoGroup $repoGroup;
 
 	public function __construct(
 		ApiMain $mainModule,
-		$moduleName,
+		string $moduleName,
 		MovePageFactory $movePageFactory,
 		RepoGroup $repoGroup,
 		WatchlistManager $watchlistManager,
@@ -105,11 +107,6 @@ class ApiMove extends ApiBase {
 			} elseif ( !$this->getAuthority()->isAllowed( 'reupload-shared' ) ) {
 				$this->dieWithError( 'apierror-cantoverwrite-sharedfile' );
 			}
-		}
-
-		// Rate limit
-		if ( $user->pingLimiter( 'move' ) ) {
-			$this->dieWithError( 'apierror-ratelimited' );
 		}
 
 		// Move the page
@@ -282,3 +279,6 @@ class ApiMove extends ApiBase {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Move';
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiMove::class, 'ApiMove' );

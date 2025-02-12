@@ -4,16 +4,19 @@ declare( strict_types=1 );
 
 namespace MediaWiki\Tests;
 
-use ApiMain;
-use ApiQuery;
-use ApiTestContext;
-use ContentHandler;
-use FauxRequest;
+use MediaWiki\Api\ApiMain;
+use MediaWiki\Api\ApiQuery;
+use MediaWiki\Auth\PreAuthenticationProvider;
+use MediaWiki\Auth\PrimaryAuthenticationProvider;
+use MediaWiki\Auth\SecondaryAuthenticationProvider;
+use MediaWiki\Content\ContentHandler;
 use MediaWiki\Http\HttpRequestFactory;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Request\FauxRequest;
+use MediaWiki\Tests\Api\ApiTestContext;
 use MediaWikiIntegrationTestCase;
-use MultiHttpClient;
-use Wikimedia\Rdbms\DBConnRef;
+use Wikimedia\Http\MultiHttpClient;
+use Wikimedia\Rdbms\IDatabase;
 use Wikimedia\Rdbms\ILoadBalancer;
 use Wikimedia\Rdbms\LBFactory;
 
@@ -62,6 +65,12 @@ abstract class ExtensionJsonTestBase extends MediaWikiIntegrationTestCase {
 	 */
 	protected ?string $serviceNamePrefix = null;
 
+	/**
+	 * @var array[] Cache for extension.json, shared between all tests.
+	 * Maps {@link $extensionJsonPath} values to parsed extension.json contents.
+	 */
+	private static array $extensionJsonCache = [];
+
 	protected function setUp(): void {
 		parent::setUp();
 
@@ -72,16 +81,15 @@ abstract class ExtensionJsonTestBase extends MediaWikiIntegrationTestCase {
 	}
 
 	final protected function getExtensionJson(): array {
-		static $extensionJson = null;
-		if ( $extensionJson === null ) {
-			$extensionJson = json_decode(
+		if ( !array_key_exists( $this->extensionJsonPath, self::$extensionJsonCache ) ) {
+			self::$extensionJsonCache[$this->extensionJsonPath] = json_decode(
 				file_get_contents( $this->extensionJsonPath ),
 				true,
 				512,
 				JSON_THROW_ON_ERROR
 			);
 		}
-		return $extensionJson;
+		return self::$extensionJsonCache[$this->extensionJsonPath];
 	}
 
 	/** @dataProvider provideHookHandlerNames */
@@ -166,8 +174,48 @@ abstract class ExtensionJsonTestBase extends MediaWikiIntegrationTestCase {
 	}
 
 	public function provideSpecialPageNames(): iterable {
-		foreach ( $this->getExtensionJson()['SpecialPages'] as $specialPageName => $specification ) {
+		foreach ( $this->getExtensionJson()['SpecialPages'] ?? [] as $specialPageName => $specification ) {
 			yield [ $specialPageName ];
+		}
+	}
+
+	/** @dataProvider provideAuthenticationProviders */
+	public function testAuthenticationProviders( string $providerType, string $providerName, string $providerClass ): void {
+		$specification = $this->getExtensionJson()['AuthManagerAutoConfig'][$providerType][$providerName];
+		$objectFactory = MediaWikiServices::getInstance()->getObjectFactory();
+		$objectFactory->createObject( $specification, [
+			'assertClass' => $providerClass,
+		] );
+		$this->assertTrue( true );
+	}
+
+	public function provideAuthenticationProviders(): iterable {
+		$config = $this->getExtensionJson()['AuthManagerAutoConfig'] ?? [];
+
+		$types = [
+			'preauth'       => PreAuthenticationProvider::class,
+			'primaryauth'   => PrimaryAuthenticationProvider::class,
+			'secondaryauth' => SecondaryAuthenticationProvider::class,
+		];
+
+		foreach ( $types as $providerType => $providerClass ) {
+			foreach ( $config[$providerType] ?? [] as $providerName => $specification ) {
+				yield [ $providerType, $providerName, $providerClass ];
+			}
+		}
+	}
+
+	/** @dataProvider provideSessionProviders */
+	public function testSessionProviders( string $providerName ): void {
+		$specification = $this->getExtensionJson()['SessionProviders'][$providerName];
+		$objectFactory = MediaWikiServices::getInstance()->getObjectFactory();
+		$objectFactory->createObject( $specification );
+		$this->assertTrue( true );
+	}
+
+	public function provideSessionProviders(): iterable {
+		foreach ( $this->getExtensionJson()['SessionProviders'] ?? [] as $providerName => $specification ) {
+			yield [ $providerName ];
 		}
 	}
 
@@ -175,8 +223,8 @@ abstract class ExtensionJsonTestBase extends MediaWikiIntegrationTestCase {
 	public function testServicesSorted( array $services ): void {
 		$sortedServices = $services;
 		usort( $sortedServices, function ( $serviceA, $serviceB ) {
-			$isExtensionServiceA = strpos( $serviceA, $this->serviceNamePrefix ) === 0;
-			$isExtensionServiceB = strpos( $serviceB, $this->serviceNamePrefix ) === 0;
+			$isExtensionServiceA = str_starts_with( $serviceA, $this->serviceNamePrefix );
+			$isExtensionServiceB = str_starts_with( $serviceB, $this->serviceNamePrefix );
 			if ( $isExtensionServiceA !== $isExtensionServiceB ) {
 				return $isExtensionServiceA ? 1 : -1;
 			}
@@ -184,7 +232,8 @@ abstract class ExtensionJsonTestBase extends MediaWikiIntegrationTestCase {
 		} );
 
 		$this->assertSame( $sortedServices, $services,
-			'Services should be sorted: first all MediaWiki services, then all extension ones.' );
+			'Services should be sorted: first all MediaWiki services, ' .
+			"then all {$this->serviceNamePrefix}* ones." );
 	}
 
 	public function provideServicesLists(): iterable {
@@ -221,6 +270,14 @@ abstract class ExtensionJsonTestBase extends MediaWikiIntegrationTestCase {
 		foreach ( $this->provideSpecialPageNames() as [ $specialPageName ] ) {
 			yield "SpecialPages/$specialPageName" => $this->getExtensionJson()['SpecialPages'][$specialPageName];
 		}
+
+		foreach ( $this->provideAuthenticationProviders() as [ $providerType, $providerName, $providerClass ] ) {
+			yield "AuthManagerAutoConfig/$providerType/$providerName" => $this->getExtensionJson()['AuthManagerAutoConfig'][$providerType][$providerName];
+		}
+
+		foreach ( $this->provideSessionProviders() as [ $providerName ] ) {
+			yield "SessionProviders/$providerName" => $this->getExtensionJson()['SessionProviders'][$providerName];
+		}
 	}
 
 	private function disallowDBAccess() {
@@ -233,17 +290,10 @@ abstract class ExtensionJsonTestBase extends MediaWikiIntegrationTestCase {
 				$lb->method( 'getLocalDomainID' )
 					->willReturn( 'banana' );
 
-				// This LazyConnectionRef will use our mocked LoadBalancer when actually
-				// trying to connect, thus using it for DB queries will fail.
-				$lazyDb = new DBConnRef(
-					$lb,
-					[ 'dummy', 'dummy', 'dummy', 'dummy' ],
-					DB_REPLICA
-				);
-				$lb->method( 'getConnectionRef' )
-					->willReturn( $lazyDb );
+				// This IDatabase will fail when actually trying to do database actions
+				$db = $this->createNoOpMock( IDatabase::class );
 				$lb->method( 'getConnection' )
-					->willReturn( $lazyDb );
+					->willReturn( $db );
 
 				$lbFactory = $this->createMock( LBFactory::class );
 				$lbFactory->method( 'getMainLB' )

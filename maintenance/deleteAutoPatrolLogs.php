@@ -16,7 +16,11 @@
  * http://www.gnu.org/copyleft/gpl.html
  */
 
+use MediaWiki\Maintenance\Maintenance;
+
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Remove autopatrol logs in the logging table.
@@ -96,8 +100,7 @@ class DeleteAutoPatrolLogs extends Maintenance {
 	}
 
 	private function getRows( $fromId ) {
-		$lb = MediaWiki\MediaWikiServices::getInstance()->getDBLoadBalancer();
-		$dbr = $lb->getConnectionRef( DB_REPLICA );
+		$dbr = $this->getReplicaDB();
 		$before = $this->getOption( 'before', false );
 
 		$conds = [
@@ -106,11 +109,11 @@ class DeleteAutoPatrolLogs extends Maintenance {
 		];
 
 		if ( $fromId ) {
-			$conds[] = 'log_id > ' . $dbr->addQuotes( $fromId );
+			$conds[] = $dbr->expr( 'log_id', '>', $fromId );
 		}
 
 		if ( $before ) {
-			$conds[] = 'log_timestamp < ' . $dbr->addQuotes( $dbr->timestamp( $before ) );
+			$conds[] = $dbr->expr( 'log_timestamp', '<', $dbr->timestamp( $before ) );
 		}
 
 		return $dbr->newSelectQueryBuilder()
@@ -124,8 +127,7 @@ class DeleteAutoPatrolLogs extends Maintenance {
 	}
 
 	private function getRowsOld( $fromId ) {
-		$lb = MediaWiki\MediaWikiServices::getInstance()->getDBLoadBalancer();
-		$dbr = $lb->getConnectionRef( DB_REPLICA );
+		$dbr = $this->getReplicaDB();
 		$batchSize = $this->getBatchSize();
 		$before = $this->getOption( 'before', false );
 
@@ -135,11 +137,11 @@ class DeleteAutoPatrolLogs extends Maintenance {
 		];
 
 		if ( $fromId ) {
-			$conds[] = 'log_id > ' . $dbr->addQuotes( $fromId );
+			$conds[] = $dbr->expr( 'log_id', '>', $fromId );
 		}
 
 		if ( $before ) {
-			$conds[] = 'log_timestamp < ' . $dbr->addQuotes( $dbr->timestamp( $before ) );
+			$conds[] = $dbr->expr( 'log_timestamp', '<', $dbr->timestamp( $before ) );
 		}
 
 		$result = $dbr->newSelectQueryBuilder()
@@ -188,19 +190,19 @@ class DeleteAutoPatrolLogs extends Maintenance {
 	}
 
 	private function deleteRows( array $rows ) {
-		$lb = MediaWiki\MediaWikiServices::getInstance()->getDBLoadBalancer();
-		$dbw = $lb->getConnectionRef( DB_PRIMARY );
+		$dbw = $this->getPrimaryDB();
 
-		$dbw->delete(
-			'logging',
-			[ 'log_id' => $rows ],
-			__METHOD__
-		);
+		$dbw->newDeleteQueryBuilder()
+			->deleteFrom( 'logging' )
+			->where( [ 'log_id' => $rows ] )
+			->caller( __METHOD__ )->execute();
 
 		$this->waitForReplication();
 	}
 
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = DeleteAutoPatrolLogs::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

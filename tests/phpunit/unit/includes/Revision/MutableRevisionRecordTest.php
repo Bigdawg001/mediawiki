@@ -2,9 +2,9 @@
 
 namespace MediaWiki\Tests\Unit\Revision;
 
-use CommentStoreComment;
 use DummyContentForTesting;
 use InvalidArgumentException;
+use MediaWiki\CommentStore\CommentStoreComment;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageIdentityValue;
 use MediaWiki\Revision\BadRevisionException;
@@ -16,6 +16,7 @@ use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Storage\RevisionSlotsUpdate;
 use MediaWiki\User\UserIdentityValue;
 use MediaWikiUnitTestCase;
+use Title;
 use Wikimedia\Assert\PreconditionException;
 
 /**
@@ -25,9 +26,12 @@ use Wikimedia\Assert\PreconditionException;
 class MutableRevisionRecordTest extends MediaWikiUnitTestCase {
 	use RevisionRecordTests;
 
+	protected function expectedDefaultFieldVisibility( $field ): bool {
+		return true;
+	}
+
 	/**
 	 * @param array $rowOverrides
-	 *
 	 * @return MutableRevisionRecord
 	 */
 	protected function newRevision( array $rowOverrides = [] ) {
@@ -87,6 +91,17 @@ class MutableRevisionRecordTest extends MediaWikiUnitTestCase {
 	) {
 		$this->expectException( $expectedException );
 		new MutableRevisionRecord( $page, $wikiId );
+	}
+
+	/**
+	 * regression test for T381982
+	 */
+	public function testConstructorWithSpecialPage() {
+		$title = Title::makeTitle( NS_SPECIAL, 'Bad' );
+		$rev = new MutableRevisionRecord( $title );
+
+		$this->assertTrue( $title->isSamePageAs( $rev->getPage() ) );
+		$this->assertTrue( $title->isSameLinkAs( $rev->getPageAsLinkTarget() ) );
 	}
 
 	public function testSetGetId() {
@@ -394,9 +409,6 @@ class MutableRevisionRecordTest extends MediaWikiUnitTestCase {
 		$this->assertFalse( $rev->isReadyForInsertion() );
 	}
 
-	/**
-	 * @covers \MediaWiki\Revision\RevisionRecord::isCurrent
-	 */
 	public function testIsCurrent() {
 		$record = new MutableRevisionRecord(
 			new PageIdentityValue( 1, NS_MAIN, 'Foo', PageIdentity::LOCAL )
@@ -405,9 +417,6 @@ class MutableRevisionRecordTest extends MediaWikiUnitTestCase {
 			MutableRevisionRecord::class . ' cannot be stored current revision' );
 	}
 
-	/**
-	 * @covers \MediaWiki\Revision\RevisionRecord::hasSameContent
-	 */
 	public function testHasSameContent() {
 		$rev1 = new MutableRevisionRecord(
 			new PageIdentityValue( 1, NS_MAIN, 'Foo', PageIdentity::LOCAL )
@@ -422,9 +431,6 @@ class MutableRevisionRecordTest extends MediaWikiUnitTestCase {
 		$this->assertFalse( $rev1->hasSameContent( $rev2 ) );
 	}
 
-	/**
-	 * @covers \MediaWiki\Revision\RevisionRecord::audienceCan
-	 */
 	public function testAudienceCan() {
 		$record = new MutableRevisionRecord(
 			new PageIdentityValue( 1, NS_MAIN, 'Foo', PageIdentity::LOCAL )

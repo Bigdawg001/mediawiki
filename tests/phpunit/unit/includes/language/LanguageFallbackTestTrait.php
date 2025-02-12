@@ -3,12 +3,12 @@
 // phpcs:disable MediaWiki.Commenting.FunctionComment.ObjectTypeHintParam
 // phpcs:disable MediaWiki.Commenting.FunctionComment.ObjectTypeHintReturn
 
-use Wikimedia\Assert\PostconditionException;
-
 /**
  * Code to test the getFallbackFor, getFallbacksFor, and getFallbacksIncludingSiteLanguage methods
  * that have historically been static methods of the Language class. It can be used to test any
  * class or object that implements those three methods.
+ *
+ * @internal For LanguageFallbackTest and LanguageFallbackIntegrationTest
  */
 trait LanguageFallbackTestTrait {
 	/**
@@ -24,12 +24,12 @@ trait LanguageFallbackTestTrait {
 	abstract protected function getCallee( array $options = [] );
 
 	/**
-	 * @return int Value that was historically in Language::MESSAGES_FALLBACKS
+	 * @return int Value from LanguageFallback:MESSAGES
 	 */
 	abstract protected function getMessagesKey();
 
 	/**
-	 * @return int Value that was historically in Language::STRICT_FALLBACKS
+	 * @return int Value from LanguageFallback::STRICT
 	 */
 	abstract protected function getStrictKey();
 
@@ -73,15 +73,10 @@ trait LanguageFallbackTestTrait {
 	 * @param array $expected
 	 * @param array $options
 	 * @dataProvider provideGetAll
-	 * @covers MediaWiki\Languages\LanguageFallback::getFirst
-	 * @covers Language::getFallbackFor
 	 */
 	public function testGetFirst( $code, array $expected, array $options = [] ) {
 		$callee = $this->getCallee( $options );
-		// One behavior difference between the old static methods and the new instance methods:
-		// returning null instead of false.
-		$defaultExpected = is_object( $callee ) ? null : false;
-		$this->assertSame( $expected[0] ?? $defaultExpected,
+		$this->assertSame( $expected[0] ?? null,
 			$this->callMethod( $callee, 'getFirst', $code ) );
 	}
 
@@ -90,8 +85,6 @@ trait LanguageFallbackTestTrait {
 	 * @param array $expected
 	 * @param array $options
 	 * @dataProvider provideGetAll
-	 * @covers MediaWiki\Languages\LanguageFallback::getAll
-	 * @covers Language::getFallbacksFor
 	 */
 	public function testGetAll( $code, array $expected, array $options = [] ) {
 		$this->assertSame( $expected,
@@ -103,8 +96,6 @@ trait LanguageFallbackTestTrait {
 	 * @param array $expected
 	 * @param array $options
 	 * @dataProvider provideGetAll
-	 * @covers MediaWiki\Languages\LanguageFallback::getAll
-	 * @covers Language::getFallbacksFor
 	 */
 	public function testGetAll_messages( $code, array $expected, array $options = [] ) {
 		$this->assertSame( $expected,
@@ -128,8 +119,6 @@ trait LanguageFallbackTestTrait {
 	 * @param array $expected
 	 * @param array $options
 	 * @dataProvider provideGetAll_strict
-	 * @covers MediaWiki\Languages\LanguageFallback::getAll
-	 * @covers Language::getFallbacksFor
 	 */
 	public function testGetAll_strict( $code, array $expected, array $options = [] ) {
 		$this->assertSame( $expected,
@@ -148,10 +137,6 @@ trait LanguageFallbackTestTrait {
 		];
 	}
 
-	/**
-	 * @covers MediaWiki\Languages\LanguageFallback::getAll
-	 * @covers Language::getFallbacksFor
-	 */
 	public function testGetAll_invalidMode() {
 		$this->expectException( InvalidArgumentException::class );
 		$this->expectExceptionMessage( 'Invalid fallback mode "7"' );
@@ -168,37 +153,11 @@ trait LanguageFallbackTestTrait {
 	}
 
 	/**
-	 * @covers MediaWiki\Languages\LanguageFallback::getAll
-	 * @covers Language::getFallbacksFor
-	 */
-	public function testGetAll_invalidFallback() {
-		$callee = $this->getCallee( [ 'fallbackMap' => [ 'qqz' => [ 'fr', 'de', '!!!', 'hi' ] ] ] );
-
-		$this->expectException( PostconditionException::class );
-		$this->expectExceptionMessage( "Invalid fallback code '!!!' in fallback sequence for 'qqz'" );
-		$this->callMethod( $callee, 'getAll', 'qqz' );
-	}
-
-	/**
-	 * @covers MediaWiki\Languages\LanguageFallback::getAll
-	 * @covers Language::getFallbacksFor
-	 */
-	public function testGetAll_invalidFallback_strict() {
-		$callee = $this->getCallee( [ 'fallbackMap' => [ 'qqz' => [ 'fr', 'de', '!!!', 'hi' ] ] ] );
-
-		$this->expectException( PostconditionException::class );
-		$this->expectExceptionMessage( "Invalid fallback code '!!!' in fallback sequence for 'qqz'" );
-		$this->callMethod( $callee, 'getAll', 'qqz', $this->getStrictKey() );
-	}
-
-	/**
 	 * @param string $code
 	 * @param string $siteLangCode
 	 * @param array $expected
 	 * @param int $expectedGets
 	 * @dataProvider provideGetAllIncludingSiteLanguage
-	 * @covers MediaWiki\Languages\LanguageFallback::getAllIncludingSiteLanguage
-	 * @covers Language::getFallbacksIncludingSiteLanguage
 	 */
 	public function testGetAllIncludingSiteLanguage(
 		$code, $siteLangCode, array $expected, $expectedGets = 1

@@ -18,8 +18,11 @@
  * @file
  */
 
+use MediaWiki\FileRepo\File\FileSelectQueryBuilder;
+use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Revision\RevisionRecord;
+use MediaWiki\Status\Status;
 use MediaWiki\User\UserIdentity;
 use Wikimedia\ScopedCallback;
 
@@ -89,11 +92,11 @@ class LocalFileDeleteBatch {
 		$archiveNames = [];
 
 		$dbw = $this->file->repo->getPrimaryDB();
-		$result = $dbw->select( 'oldimage',
-			[ 'oi_archive_name' ],
-			[ 'oi_name' => $this->file->getName() ],
-			__METHOD__
-		);
+		$result = $dbw->newSelectQueryBuilder()
+			->select( [ 'oi_archive_name' ] )
+			->from( 'oldimage' )
+			->where( [ 'oi_name' => $this->file->getName() ] )
+			->caller( __METHOD__ )->fetchResultSet();
 
 		foreach ( $result as $row ) {
 			$this->addOld( $row->oi_archive_name );
@@ -133,15 +136,21 @@ class LocalFileDeleteBatch {
 
 		if ( count( $oldRels ) ) {
 			$dbw = $this->file->repo->getPrimaryDB();
-			$res = $dbw->select(
-				'oldimage',
-				[ 'oi_archive_name', 'oi_sha1' ],
-				[ 'oi_archive_name' => array_map( 'strval', array_keys( $oldRels ) ),
-					'oi_name' => $this->file->getName() ], // performance
-				__METHOD__
-			);
+			$res = $dbw->newSelectQueryBuilder()
+				->select( [ 'oi_archive_name', 'oi_sha1' ] )
+				->from( 'oldimage' )
+				->where( [
+					'oi_archive_name' => array_map( 'strval', array_keys( $oldRels ) ),
+					'oi_name' => $this->file->getName() // performance
+				] )
+				->caller( __METHOD__ )->fetchResultSet();
 
 			foreach ( $res as $row ) {
+				if ( $row->oi_archive_name === '' ) {
+					// File lost, the check simulates OldLocalFile::exists
+					$hashes[$row->oi_archive_name] = false;
+					continue;
+				}
 				if ( rtrim( $row->oi_sha1, "\0" ) === '' ) {
 					// Get the hash from the file
 					$oldUrl = $this->file->getArchiveVirtualUrl( $row->oi_archive_name );
@@ -149,10 +158,14 @@ class LocalFileDeleteBatch {
 
 					if ( $props['fileExists'] ) {
 						// Upgrade the oldimage row
-						$dbw->update( 'oldimage',
-							[ 'oi_sha1' => $props['sha1'] ],
-							[ 'oi_name' => $this->file->getName(), 'oi_archive_name' => $row->oi_archive_name ],
-							__METHOD__ );
+						$dbw->newUpdateQueryBuilder()
+							->update( 'oldimage' )
+							->set( [ 'oi_sha1' => $props['sha1'] ] )
+							->where( [
+								'oi_name' => $this->file->getName(),
+								'oi_archive_name' => $row->oi_archive_name,
+							] )
+							->caller( __METHOD__ )->execute();
 						$hashes[$row->oi_archive_name] = $props['sha1'];
 					} else {
 						$hashes[$row->oi_archive_name] = false;
@@ -235,25 +248,19 @@ class LocalFileDeleteBatch {
 			);
 
 			$dbw->insertSelect( 'filearchive', $tables, $fields,
-				[ 'img_name' => $this->file->getName() ], __METHOD__, [], [], $joins );
+				[ 'img_name' => $this->file->getName() ], __METHOD__, [ 'IGNORE' ], [], $joins );
 		}
 
 		if ( count( $oldRels ) ) {
-			$fileQuery = OldLocalFile::getQueryInfo();
-			$res = $dbw->select(
-				$fileQuery['tables'],
-				$fileQuery['fields'],
-				[
-					'oi_name' => $this->file->getName(),
-					'oi_archive_name' => array_map( 'strval', array_keys( $oldRels ) )
-				],
-				__METHOD__,
-				[ 'FOR UPDATE' ],
-				$fileQuery['joins']
-			);
-			$rowsInsert = [];
+			$queryBuilder = FileSelectQueryBuilder::newForOldFile( $dbw );
+			$queryBuilder
+				->forUpdate()
+				->where( [ 'oi_name' => $this->file->getName() ] )
+				->andWhere( [ 'oi_archive_name' => array_map( 'strval', array_keys( $oldRels ) ) ] );
+			$res = $queryBuilder->caller( __METHOD__ )->fetchResultSet();
 			if ( $res->numRows() ) {
 				$reason = $commentStore->createComment( $dbw, $this->reason );
+				$rowsInsert = [];
 				foreach ( $res as $row ) {
 					$comment = $commentStore->getComment( 'oi_description', $row );
 					$rowsInsert[] = [
@@ -282,26 +289,68 @@ class LocalFileDeleteBatch {
 					] + $commentStore->insert( $dbw, 'fa_deleted_reason', $reason )
 					+ $commentStore->insert( $dbw, 'fa_description', $comment );
 				}
+				$dbw->newInsertQueryBuilder()
+					->insertInto( 'filearchive' )
+					->ignore()
+					->rows( $rowsInsert )
+					->caller( __METHOD__ )->execute();
 			}
-
-			$dbw->insert( 'filearchive', $rowsInsert, __METHOD__ );
 		}
 	}
 
 	private function doDBDeletes() {
 		$dbw = $this->file->repo->getPrimaryDB();
+		$migrationStage = MediaWikiServices::getInstance()->getMainConfig()->get(
+			MainConfigNames::FileSchemaMigrationStage
+		);
+
 		[ $oldRels, $deleteCurrent ] = $this->getOldRels();
 
 		if ( count( $oldRels ) ) {
-			$dbw->delete( 'oldimage',
-				[
+			$dbw->newDeleteQueryBuilder()
+				->deleteFrom( 'oldimage' )
+				->where( [
 					'oi_name' => $this->file->getName(),
 					'oi_archive_name' => array_map( 'strval', array_keys( $oldRels ) )
-				], __METHOD__ );
+				] )
+				->caller( __METHOD__ )->execute();
+			if ( ( $migrationStage & SCHEMA_COMPAT_WRITE_NEW ) && $this->file->getFileIdFromName() ) {
+				$delete = $dbw->newDeleteQueryBuilder()
+					->deleteFrom( 'filerevision' )
+					->where( [ 'fr_file' => $this->file->getFileIdFromName() ] );
+				if ( !$deleteCurrent ) {
+					// It's not full page deletion.
+					$delete->andWhere( [ 'fr_archive_name' => array_map( 'strval', array_keys( $oldRels ) ) ] );
+				}
+				$delete->caller( __METHOD__ )->execute();
+
+			}
 		}
 
 		if ( $deleteCurrent ) {
-			$dbw->delete( 'image', [ 'img_name' => $this->file->getName() ], __METHOD__ );
+			$dbw->newDeleteQueryBuilder()
+				->deleteFrom( 'image' )
+				->where( [ 'img_name' => $this->file->getName() ] )
+				->caller( __METHOD__ )->execute();
+			if ( ( $migrationStage & SCHEMA_COMPAT_WRITE_NEW ) && $this->file->getFileIdFromName() ) {
+				$dbw->newUpdateQueryBuilder()
+					->update( 'file' )
+					->set( [
+						'file_deleted' => $this->suppress ? 3 : 1,
+						'file_latest' => 0
+					] )
+					->where( [ 'file_id' => $this->file->getFileIdFromName() ] )
+					->caller( __METHOD__ )->execute();
+				if ( !count( $oldRels ) ) {
+					// Only the current version is uploaded and then deleted
+					// TODO: After migration is done and old code is removed,
+					// this should be refactored to become much simpler
+					$dbw->newDeleteQueryBuilder()
+						->deleteFrom( 'filerevision' )
+						->where( [ 'fr_file' => $this->file->getFileIdFromName() ] )
+						->caller( __METHOD__ )->execute();
+				}
+			}
 		}
 	}
 

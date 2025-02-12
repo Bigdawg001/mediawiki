@@ -1,30 +1,39 @@
 <?php
 
+namespace MediaWiki\Specials;
+
+use LogicException;
 use MediaWiki\Auth\AuthenticationRequest;
 use MediaWiki\Auth\AuthenticationResponse;
 use MediaWiki\Auth\AuthManager;
 use MediaWiki\Auth\PasswordAuthenticationRequest;
 use MediaWiki\Html\Html;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Message\Message;
 use MediaWiki\Session\SessionManager;
+use MediaWiki\SpecialPage\AuthManagerSpecialPage;
+use MediaWiki\Status\Status;
 use MediaWiki\Title\Title;
 
 /**
- * Special change to change credentials (such as the password).
+ * Change user credentials, such as the password.
  *
- * Also does most of the work for SpecialRemoveCredentials.
+ * This is also powers most of the SpecialRemoveCredentials subclass.
+ *
+ * @see SpecialChangePassword
+ * @ingroup SpecialPage
+ * @ingroup Auth
  */
 class SpecialChangeCredentials extends AuthManagerSpecialPage {
+	/** @inheritDoc */
 	protected static $allowedActions = [ AuthManager::ACTION_CHANGE ];
 
+	/** @var string */
 	protected static $messagePrefix = 'changecredentials';
 
-	/** Change action needs user data; remove action does not */
+	/** @var bool Change action needs user data; remove action does not */
 	protected static $loadUserData = true;
 
-	/**
-	 * @param AuthManager $authManager
-	 */
 	public function __construct( AuthManager $authManager ) {
 		parent::__construct( 'ChangeCredentials', 'editmyprivateinfo' );
 		$this->setAuthManager( $authManager );
@@ -45,16 +54,6 @@ class SpecialChangeCredentials extends AuthManagerSpecialPage {
 
 	protected function getDefaultAction( $subPage ) {
 		return AuthManager::ACTION_CHANGE;
-	}
-
-	protected function getPreservedParams( $withToken = false ) {
-		$request = $this->getRequest();
-		$params = parent::getPreservedParams( $withToken );
-		$params += [
-			'returnto' => $request->getVal( 'returnto' ),
-			'returntoquery' => $request->getVal( 'returntoquery' ),
-		];
-		return $params;
 	}
 
 	public function execute( $subPage ) {
@@ -152,27 +151,28 @@ class SpecialChangeCredentials extends AuthManagerSpecialPage {
 	protected function getAuthFormDescriptor( $requests, $action ) {
 		if ( !static::$loadUserData ) {
 			return [];
-		} else {
-			$descriptor = parent::getAuthFormDescriptor( $requests, $action );
+		}
 
-			$any = false;
-			foreach ( $descriptor as &$field ) {
-				if ( $field['type'] === 'password' && $field['name'] !== 'retype' ) {
-					$any = true;
-					if ( isset( $field['cssclass'] ) ) {
-						$field['cssclass'] .= ' mw-changecredentials-validate-password';
-					} else {
-						$field['cssclass'] = 'mw-changecredentials-validate-password';
-					}
+		$descriptor = parent::getAuthFormDescriptor( $requests, $action );
+
+		$any = false;
+		foreach ( $descriptor as &$field ) {
+			if ( $field['type'] === 'password' && $field['name'] !== 'retype' ) {
+				$any = true;
+				if ( isset( $field['cssclass'] ) ) {
+					$field['cssclass'] .= ' mw-changecredentials-validate-password';
+				} else {
+					$field['cssclass'] = 'mw-changecredentials-validate-password';
 				}
 			}
-
-			if ( $any ) {
-				$this->getOutput()->addModules( 'mediawiki.misc-authed-ooui' );
-			}
-
-			return $descriptor;
 		}
+		unset( $field );
+
+		if ( $any ) {
+			$this->getOutput()->addModules( 'mediawiki.misc-authed-ooui' );
+		}
+
+		return $descriptor;
 	}
 
 	protected function getAuthForm( array $requests, $action ) {
@@ -285,11 +285,13 @@ class SpecialChangeCredentials extends AuthManagerSpecialPage {
 			return null;
 		}
 
-		$title = Title::newFromText( $returnTo );
-		return $title->getFullUrlForRedirect( $returnToQuery );
+		return Title::newFromText( $returnTo )->getFullUrlForRedirect( $returnToQuery );
 	}
 
 	protected function getRequestBlacklist() {
 		return $this->getConfig()->get( MainConfigNames::ChangeCredentialsBlacklist );
 	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( SpecialChangeCredentials::class, 'SpecialChangeCredentials' );

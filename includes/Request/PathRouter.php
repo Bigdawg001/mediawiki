@@ -23,6 +23,7 @@
 namespace MediaWiki\Request;
 
 use FatalError;
+use MediaWiki\Utils\UrlUtils;
 use stdClass;
 
 /**
@@ -101,7 +102,7 @@ class PathRouter {
 		if ( !isset( $options['strict'] ) || !$options['strict'] ) {
 			// Unless this is a strict path make sure that the path has a $1
 			if ( strpos( $path, '$1' ) === false ) {
-				if ( substr( $path, -1 ) !== '/' ) {
+				if ( $path[-1] !== '/' ) {
 					$path .= '/';
 				}
 				$path .= '$1';
@@ -228,7 +229,7 @@ class PathRouter {
 		foreach ( $path as $piece ) {
 			if ( preg_match( '/^\$(\d+|key)$/u', $piece ) ) {
 				# For a piece that is only a $1 variable add 1 points of weight
-				$weight += 1;
+				$weight++;
 			} elseif ( preg_match( '/\$(\d+|key)/u', $piece ) ) {
 				# For a piece that simply contains a $1 variable add 2 points of weight
 				$weight += 2;
@@ -265,7 +266,7 @@ class PathRouter {
 		$matches = $this->internalParse( $path );
 		if ( $matches === null ) {
 			// Try with the normalized path (T100782)
-			$path = wfRemoveDotSegments( $path );
+			$path = UrlUtils::removeDotSegments( $path );
 			$path = preg_replace( '#/+#', '/', $path );
 			$matches = $this->internalParse( $path );
 		}
@@ -445,4 +446,5 @@ class PathRouter {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( PathRouter::class, 'PathRouter' );

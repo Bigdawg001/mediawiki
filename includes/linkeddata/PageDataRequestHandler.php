@@ -18,8 +18,14 @@
  * @file
  */
 
+namespace MediaWiki\LinkedData;
+
+use HttpError;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Output\OutputPage;
+use MediaWiki\Request\WebRequest;
 use MediaWiki\Revision\SlotRecord;
+use MediaWiki\Title\MalformedTitleException;
 use MediaWiki\Title\Title;
 use Wikimedia\Http\HttpAcceptNegotiator;
 use Wikimedia\Http\HttpAcceptParser;
@@ -92,11 +98,11 @@ class PageDataRequestHandler {
 
 		if ( $title === null || $title === '' ) {
 			// TODO: different error message?
-			throw new HttpError( 400, wfMessage( 'pagedata-bad-title', $title ) );
+			throw new HttpError( 400, wfMessage( 'pagedata-bad-title', (string)$title ) );
 		}
 
 		try {
-			$title = Title::newFromTextThrow( $title );
+			$title = MediaWikiServices::getInstance()->getTitleFactory()->newFromTextThrow( $title );
 		} catch ( MalformedTitleException $ex ) {
 			throw new HttpError( 400, wfMessage( 'pagedata-bad-title', $title ) );
 		}
@@ -180,3 +186,6 @@ class PageDataRequestHandler {
 	}
 
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( PageDataRequestHandler::class, 'PageDataRequestHandler' );

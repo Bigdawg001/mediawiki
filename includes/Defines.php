@@ -28,12 +28,13 @@ use Wikimedia\Rdbms\IDatabase;
 /**
  * The running version of MediaWiki.
  *
- * This replaces the $wgVersion global found in earlier versions. When updating,
- * remember to also bump the stand-alone duplicate of this in PHPVersionCheck.
+ * This replaces the $wgVersion global found in earlier versions. When updating
+ * the XX part of 1.XX.YY, please remember to also bump the stand-alone duplicate
+ * of this in PHPVersionCheck.
  *
  * @since 1.35 (also backported to 1.33.3 and 1.34.1)
  */
-define( 'MW_VERSION', '1.41.0-alpha' );
+define( 'MW_VERSION', '1.44.0-alpha' );
 
 /** @{
  * Obsolete IDatabase::makeList() constants
@@ -86,7 +87,7 @@ define( 'CACHE_ANYTHING', -1 ); // Use anything, as long as it works
 define( 'CACHE_NONE', 0 ); // Do not cache
 define( 'CACHE_DB', 1 ); // Store cache objects in the DB
 define( 'CACHE_MEMCACHED', 'memcached-php' ); // Backwards-compatability alias for Memcached
-define( 'CACHE_ACCEL', 3 ); // APC or WinCache
+define( 'CACHE_ACCEL', 3 ); // APC or APCu
 define( 'CACHE_HASH', 'hash' ); // A HashBagOStuff, mostly useful for testing. Not configurable
 /** @} */
 
@@ -145,6 +146,12 @@ define( 'MW_EDITFILTERMERGED_SUPPORTS_API', 1 );
 /** Support for $wgResourceModules */
 define( 'MW_SUPPORTS_RESOURCE_MODULES', 1 );
 
+/**
+ * Indicate that the Interwiki extension should not be loaded (it is now
+ * in core).
+ */
+define( 'MW_HAS_SPECIAL_INTERWIKI', 1 );
+
 /** @{
  * Allowed values for Parser::$mOutputType
  * Parameter to Parser::startExternalParse().
@@ -152,13 +159,11 @@ define( 'MW_SUPPORTS_RESOURCE_MODULES', 1 );
  * - Parser::OT_HTML
  * - Parser::OT_WIKI
  * - Parser::OT_PREPROCESS
- * - Parser::OT_MSG
  * - Parser::OT_PLAIN
  */
 define( 'OT_HTML', 1 );
 define( 'OT_WIKI', 2 );
 define( 'OT_PREPROCESS', 3 );
-define( 'OT_MSG', 3 );  // b/c alias for OT_PREPROCESS
 define( 'OT_PLAIN', 4 );
 /** @} */
 
@@ -184,6 +189,18 @@ define( 'APCOND_IPINRANGE', 6 );
 define( 'APCOND_AGE_FROM_EDIT', 7 );
 define( 'APCOND_BLOCKED', 8 );
 define( 'APCOND_ISBOT', 9 );
+/** @} */
+
+/** @{
+ * Conditional user defaults conditions
+ *
+ * Strings are used to make the values easier to use in extension.json
+ * @since 1.42
+ */
+define( 'CUDCOND_AFTER', 'registered-after' );
+define( 'CUDCOND_ANON', 'anonymous-user' );
+define( 'CUDCOND_NAMED', 'named-user' );
+define( 'CUDCOND_USERGROUP', 'usergroup' );
 /** @} */
 
 /** @{
@@ -288,6 +305,10 @@ define( 'SCHEMA_COMPAT_NEW', SCHEMA_COMPAT_WRITE_NEW | SCHEMA_COMPAT_READ_NEW );
  * schema to a new schema. The numeric values of these constants are compatible with the
  * SCHEMA_COMPAT_XXX bitfield semantics. High bits are used to ensure that the numeric
  * ordering follows the order in which the migration stages should be used.
+ *
+ * Do not use these constants to query the feature flag.  If you wish to check if your
+ * code should perform a particular kind of read or write operation, use the appropriate
+ * SCHEMA_COMPAT_XXX flag.  It is generally an error to use MIGRATION_XXX constants in a bitwise operation.
  *
  * - MIGRATION_OLD: Only read and write the old schema. The new schema need not
  *   even exist. This is used from when the patch is merged until the schema

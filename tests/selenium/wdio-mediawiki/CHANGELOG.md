@@ -1,6 +1,35 @@
+# Changelog
+
+## 2.7.0 / 2025-01-22
+* Api: Add `api.addUserToGroup()` to add user to a user group.
+
+## 2.6.0 / 2025-01-09
+* Skip wikitext-specific tests if NS_MAIN isn't wikitext. (T358530)
+* Add LoginPage.getActualUsername().
+* Wait for form submission in `LoginPage.login()`.
+* Wait for the page to be fully loaded in `Page.openTitle()`. (T381739)
+* Add random element to junit-reporter file name.
+
+## 2.5.0 / 2024-01-24
+
+* Screenshots no longer work with WebdriverIO v8, just with v7. (T347137)
+* Fix tests on macOS + Node.js v18. (T355556)
+
+## 2.4.0 / 2023-11-16
+
+* Screenshots work with both WebdriverIO v7 and v8
+
+## 2.3.0 / 2023-09-21
+
+* Refactor waitForModuleState and saveScreenshot to async/await. (T337463)
+* Upgrade mwbot from 2.0.0 to 2.1.3.
+* Delete automationProtocol setting.
+* Revert "Skip wikitext-specific tests if NS isn't wikitext". (T303737)
+* Revert "Default to larger window size". (T317879)
+
 ## 2.2.0 / 2022-07-29
 
-* selenium: Default to larger window size (T314115)
+* Default to larger window size (T314115)
 
 ## 2.1.0 / 2022-05-19
 
@@ -10,7 +39,7 @@
 
 The wdio-mediawiki library now requires WebdriverIO async mode.
 
-* Util: Added `getMWApiResponse()` and `isTargetNotWikitext()`.
+* Util: Added `isTargetNotWikitext()`.
 * CreateAccountPage: Added initial version.
 
 ## 1.2.0 / 2021-01-11

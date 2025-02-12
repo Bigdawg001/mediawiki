@@ -1,39 +1,43 @@
 <?php
+/**
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ * http://www.gnu.org/copyleft/gpl.html
+ *
+ * @file
+ */
 
 namespace MediaWiki\Specials\Contribute;
 
 use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Specials\Contribute\Card\ContributeCard;
 use MediaWiki\Specials\Contribute\Card\ContributeCardActionLink;
 use MediaWiki\User\UserIdentity;
 use MessageLocalizer;
 use Skin;
-use SpecialPage;
 
 class ContributeFactory {
 
-	/**
-	 * @var MessageLocalizer
-	 */
-	private $localizer;
+	private MessageLocalizer $localizer;
+	private HookRunner $hookRunner;
 
-	/**
-	 * @var HookRunner
-	 */
-	private $hookRunner;
-
-	/**
-	 * @param MessageLocalizer $localizer
-	 * @param HookRunner $hookRunner
-	 */
 	public function __construct( MessageLocalizer $localizer, HookRunner $hookRunner ) {
 		$this->localizer = $localizer;
 		$this->hookRunner = $hookRunner;
 	}
 
-	/**
-	 * @return array
-	 */
 	public function getCards(): array {
 		$cards = [];
 
@@ -54,6 +58,9 @@ class ContributeFactory {
 
 	/**
 	 * Check if the Special:Contribute page is enabled for the current skin
+	 * This can be removed when T323083 is resolved ie. the Special:Contribute feature
+	 * has been shipped by the WMF Language Team.
+	 *
 	 * @param Skin $skin
 	 * @param array $specialContributeSkinsEnabled
 	 *
@@ -63,11 +70,10 @@ class ContributeFactory {
 		Skin $skin,
 		array $specialContributeSkinsEnabled = []
 	): bool {
-		return $skin->supportsMenu( 'special-contribute' )
-			|| in_array(
-			$skin->getSkinName(),
-			$specialContributeSkinsEnabled
-		);
+		return in_array(
+				$skin->getSkinName(),
+				$specialContributeSkinsEnabled
+			);
 	}
 
 	/**

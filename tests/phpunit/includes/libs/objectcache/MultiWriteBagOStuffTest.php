@@ -1,10 +1,12 @@
 <?php
 
-use Wikimedia\LightweightObjectStore\StorageAwareness;
+use Wikimedia\ObjectCache\BagOStuff;
+use Wikimedia\ObjectCache\HashBagOStuff;
+use Wikimedia\ObjectCache\MultiWriteBagOStuff;
 use Wikimedia\TestingAccessWrapper;
 
 /**
- * @covers MultiWriteBagOStuff
+ * @covers \Wikimedia\ObjectCache\MultiWriteBagOStuff
  * @group BagOStuff
  * @group Database
  */
@@ -59,7 +61,7 @@ class MultiWriteBagOStuffTest extends MediaWikiIntegrationTestCase {
 		};
 
 		// XXX: DeferredUpdates bound to transactions in CLI mode
-		$dbw = wfGetDB( DB_PRIMARY );
+		$dbw = $this->getDb();
 		$dbw->begin();
 		$this->cache->merge( $key, $func );
 
@@ -69,6 +71,7 @@ class MultiWriteBagOStuffTest extends MediaWikiIntegrationTestCase {
 		$this->assertFalse( $this->cache2->get( $key ), 'Not written to tier 2' );
 
 		$dbw->commit();
+		$this->runDeferredUpdates();
 
 		// Set in tier 2
 		$this->assertEquals( $value, $this->cache2->get( $key ), 'Written to tier 2' );
@@ -88,7 +91,7 @@ class MultiWriteBagOStuffTest extends MediaWikiIntegrationTestCase {
 
 		$key = 'keyB';
 
-		$dbw = wfGetDB( DB_PRIMARY );
+		$dbw = $this->getDb();
 		$dbw->begin();
 		$cache->merge( $key, $func );
 
@@ -98,6 +101,7 @@ class MultiWriteBagOStuffTest extends MediaWikiIntegrationTestCase {
 		$this->assertEquals( $value, $cache2->get( $key ), 'Written to tier 2' );
 
 		$dbw->commit();
+		$this->runDeferredUpdates();
 	}
 
 	public function testSetDelayed() {
@@ -106,7 +110,7 @@ class MultiWriteBagOStuffTest extends MediaWikiIntegrationTestCase {
 		$expectValue = clone $value;
 
 		// XXX: DeferredUpdates bound to transactions in CLI mode
-		$dbw = wfGetDB( DB_PRIMARY );
+		$dbw = $this->getDb();
 		$dbw->begin();
 		$this->cache->set( $key, $value );
 
@@ -119,6 +123,7 @@ class MultiWriteBagOStuffTest extends MediaWikiIntegrationTestCase {
 		$this->assertFalse( $this->cache2->get( $key ), 'Not written to tier 2' );
 
 		$dbw->commit();
+		$this->runDeferredUpdates();
 
 		// Set in tier 2
 		$this->assertEquals( $expectValue, $this->cache2->get( $key ), 'Written to tier 2' );
@@ -139,6 +144,48 @@ class MultiWriteBagOStuffTest extends MediaWikiIntegrationTestCase {
 		] );
 
 		$this->assertSame( 'generic:a:b', $cache->makeKey( 'a', 'b' ) );
+	}
+
+	public function testConvertGenericKey() {
+		$cache1 = new class extends HashBagOStuff {
+			protected function makeKeyInternal( $keyspace, $components ) {
+				return $keyspace . ':short-one-way';
+			}
+
+			protected function requireConvertGenericKey(): bool {
+				return true;
+			}
+		};
+		$cache2 = new class extends HashBagOStuff {
+			protected function makeKeyInternal( $keyspace, $components ) {
+				return $keyspace . ':short-another-way';
+			}
+
+			protected function requireConvertGenericKey(): bool {
+				return true;
+			}
+		};
+
+		$cache = new MultiWriteBagOStuff( [
+			'caches' => [ $cache1, $cache2 ]
+		] );
+		$key = $cache->makeKey( 'a', 'b' );
+		$cache->set( $key, 'my_value' );
+
+		$this->assertSame(
+			'local:a:b',
+			$key
+		);
+		$this->assertSame(
+			[ 'local:short-one-way' ],
+			array_keys( TestingAccessWrapper::newFromObject( $cache1 )->bag ),
+			'key gets re-encoded for first backend'
+		);
+		$this->assertSame(
+			[ 'local:short-another-way' ],
+			array_keys( TestingAccessWrapper::newFromObject( $cache2 )->bag ),
+			'key gets re-encoded for second backend'
+		);
 	}
 
 	public function testMakeGlobalKey() {
@@ -180,10 +227,10 @@ class MultiWriteBagOStuffTest extends MediaWikiIntegrationTestCase {
 	public function testErrorHandling() {
 		$t1Cache = $this->createPartialMock( HashBagOStuff::class, [ 'set' ] );
 		$t1CacheWrapper = TestingAccessWrapper::newFromObject( $t1Cache );
-		$t1CacheNextError = StorageAwareness::ERR_NONE;
+		$t1CacheNextError = BagOStuff::ERR_NONE;
 		$t1Cache->method( 'set' )
 			->willReturnCallback( static function () use ( $t1CacheWrapper, &$t1CacheNextError ) {
-				if ( $t1CacheNextError !== StorageAwareness::ERR_NONE ) {
+				if ( $t1CacheNextError !== BagOStuff::ERR_NONE ) {
 					$t1CacheWrapper->setLastError( $t1CacheNextError );
 
 					return false;
@@ -193,10 +240,10 @@ class MultiWriteBagOStuffTest extends MediaWikiIntegrationTestCase {
 			} );
 		$t2Cache = $this->createPartialMock( HashBagOStuff::class, [ 'set' ] );
 		$t2CacheWrapper = TestingAccessWrapper::newFromObject( $t2Cache );
-		$t2CacheNextError = StorageAwareness::ERR_NONE;
+		$t2CacheNextError = BagOStuff::ERR_NONE;
 		$t2Cache->method( 'set' )
 			->willReturnCallback( static function () use ( $t2CacheWrapper, &$t2CacheNextError ) {
-				if ( $t2CacheNextError !== StorageAwareness::ERR_NONE ) {
+				if ( $t2CacheNextError !== BagOStuff::ERR_NONE ) {
 					$t2CacheWrapper->setLastError( $t2CacheNextError );
 
 					return false;
@@ -213,13 +260,13 @@ class MultiWriteBagOStuffTest extends MediaWikiIntegrationTestCase {
 
 		$wp1 = $cache->watchErrors();
 		$cache->set( $key, 'value', 3600 );
-		$this->assertSame( StorageAwareness::ERR_NONE, $t1Cache->getLastError() );
-		$this->assertSame( StorageAwareness::ERR_NONE, $t2Cache->getLastError() );
-		$this->assertSame( StorageAwareness::ERR_NONE, $cache->getLastError() );
-		$this->assertSame( StorageAwareness::ERR_NONE, $cache->getLastError( $wp1 ) );
+		$this->assertSame( BagOStuff::ERR_NONE, $t1Cache->getLastError() );
+		$this->assertSame( BagOStuff::ERR_NONE, $t2Cache->getLastError() );
+		$this->assertSame( BagOStuff::ERR_NONE, $cache->getLastError() );
+		$this->assertSame( BagOStuff::ERR_NONE, $cache->getLastError( $wp1 ) );
 
-		$t1CacheNextError = StorageAwareness::ERR_NO_RESPONSE;
-		$t2CacheNextError = StorageAwareness::ERR_UNREACHABLE;
+		$t1CacheNextError = BagOStuff::ERR_NO_RESPONSE;
+		$t2CacheNextError = BagOStuff::ERR_UNREACHABLE;
 
 		$cache->set( $key, 'value', 3600 );
 		$this->assertSame( $t1CacheNextError, $t1Cache->getLastError() );
@@ -227,8 +274,8 @@ class MultiWriteBagOStuffTest extends MediaWikiIntegrationTestCase {
 		$this->assertSame( $t2CacheNextError, $cache->getLastError() );
 		$this->assertSame( $t2CacheNextError, $cache->getLastError( $wp1 ) );
 
-		$t1CacheNextError = StorageAwareness::ERR_NO_RESPONSE;
-		$t2CacheNextError = StorageAwareness::ERR_UNEXPECTED;
+		$t1CacheNextError = BagOStuff::ERR_NO_RESPONSE;
+		$t2CacheNextError = BagOStuff::ERR_UNEXPECTED;
 
 		$wp2 = $cache->watchErrors();
 		$cache->set( $key, 'value', 3600 );
@@ -236,15 +283,15 @@ class MultiWriteBagOStuffTest extends MediaWikiIntegrationTestCase {
 		$this->assertSame( $t1CacheNextError, $t1Cache->getLastError() );
 		$this->assertSame( $t2CacheNextError, $t2Cache->getLastError() );
 		$this->assertSame( $t2CacheNextError, $cache->getLastError( $wp2 ) );
-		$this->assertSame( StorageAwareness::ERR_NONE, $cache->getLastError( $wp3 ) );
+		$this->assertSame( BagOStuff::ERR_NONE, $cache->getLastError( $wp3 ) );
 
-		$cacheWrapper->setLastError( StorageAwareness::ERR_UNEXPECTED );
+		$cacheWrapper->setLastError( BagOStuff::ERR_UNEXPECTED );
 		$wp4 = $cache->watchErrors();
-		$this->assertSame( StorageAwareness::ERR_UNEXPECTED, $cache->getLastError() );
-		$this->assertSame( StorageAwareness::ERR_UNEXPECTED, $cache->getLastError( $wp1 ) );
-		$this->assertSame( StorageAwareness::ERR_UNEXPECTED, $cache->getLastError( $wp2 ) );
-		$this->assertSame( StorageAwareness::ERR_UNEXPECTED, $cache->getLastError( $wp3 ) );
-		$this->assertSame( StorageAwareness::ERR_NONE, $cache->getLastError( $wp4 ) );
+		$this->assertSame( BagOStuff::ERR_UNEXPECTED, $cache->getLastError() );
+		$this->assertSame( BagOStuff::ERR_UNEXPECTED, $cache->getLastError( $wp1 ) );
+		$this->assertSame( BagOStuff::ERR_UNEXPECTED, $cache->getLastError( $wp2 ) );
+		$this->assertSame( BagOStuff::ERR_UNEXPECTED, $cache->getLastError( $wp3 ) );
+		$this->assertSame( BagOStuff::ERR_NONE, $cache->getLastError( $wp4 ) );
 		$this->assertSame( $t1CacheNextError, $t1Cache->getLastError() );
 		$this->assertSame( $t2CacheNextError, $t2Cache->getLastError() );
 	}

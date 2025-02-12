@@ -1,13 +1,12 @@
-var ItemMenuOptionWidget = require( './ItemMenuOptionWidget.js' ),
-	FilterMenuOptionWidget;
+const ItemMenuOptionWidget = require( './ItemMenuOptionWidget.js' );
 
 /**
- * A widget representing a single toggle filter
+ * A widget representing a single toggle filter.
  *
  * @class mw.rcfilters.ui.FilterMenuOptionWidget
+ * @ignore
  * @extends mw.rcfilters.ui.ItemMenuOptionWidget
  *
- * @constructor
  * @param {mw.rcfilters.Controller} controller RCFilters controller
  * @param {mw.rcfilters.dm.FiltersViewModel} filtersViewModel
  * @param {mw.rcfilters.dm.FilterItem|null} invertModel
@@ -15,7 +14,7 @@ var ItemMenuOptionWidget = require( './ItemMenuOptionWidget.js' ),
  * @param {mw.rcfilters.ui.HighlightPopupWidget} highlightPopup Shared highlight color picker popup
  * @param {Object} config Configuration object
  */
-FilterMenuOptionWidget = function MwRcfiltersUiFilterMenuOptionWidget(
+const FilterMenuOptionWidget = function MwRcfiltersUiFilterMenuOptionWidget(
 	controller, filtersViewModel, invertModel, itemModel, highlightPopup, config
 ) {
 	config = config || {};
@@ -25,7 +24,7 @@ FilterMenuOptionWidget = function MwRcfiltersUiFilterMenuOptionWidget(
 	this.model = itemModel;
 
 	// Parent
-	FilterMenuOptionWidget.parent.call( this, controller, filtersViewModel, this.invertModel, itemModel, highlightPopup, config );
+	FilterMenuOptionWidget.super.call( this, controller, filtersViewModel, this.invertModel, itemModel, highlightPopup, config );
 
 	// Event
 	this.model.getGroupModel().connect( this, { update: 'onGroupModelUpdate' } );
@@ -49,7 +48,7 @@ FilterMenuOptionWidget.static.scrollIntoViewOnSelect = false;
  */
 FilterMenuOptionWidget.prototype.updateUiBasedOnState = function () {
 	// Parent
-	FilterMenuOptionWidget.parent.prototype.updateUiBasedOnState.call( this );
+	FilterMenuOptionWidget.super.prototype.updateUiBasedOnState.call( this );
 
 	this.setCurrentMuteState();
 };

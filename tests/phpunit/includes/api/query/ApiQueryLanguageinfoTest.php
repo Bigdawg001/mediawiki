@@ -1,12 +1,15 @@
 <?php
 
+namespace MediaWiki\Tests\Api\Query;
+
+use MediaWiki\Tests\Api\ApiTestCase;
 use Wikimedia\Timestamp\ConvertibleTimestamp;
 
 /**
  * @group API
  * @group medium
  *
- * @covers ApiQueryLanguageinfo
+ * @covers \MediaWiki\Api\ApiQueryLanguageinfo
  */
 class ApiQueryLanguageinfoTest extends ApiTestCase {
 
@@ -51,7 +54,7 @@ class ApiQueryLanguageinfoTest extends ApiTestCase {
 				'bcp47' => 'sr',
 				'autonym' => 'српски / srpski',
 				'name' => 'српски / srpski',
-				'fallbacks' => [ 'sr-ec', 'sr-cyrl' ],
+				'fallbacks' => [ 'sr-ec', 'sr-cyrl', 'sr-el', 'sr-latn' ],
 				'dir' => 'ltr',
 				'variants' => [ 'sr', 'sr-ec', 'sr-el' ],
 				'variantnames' => [
@@ -110,7 +113,8 @@ class ApiQueryLanguageinfoTest extends ApiTestCase {
 	public function testContinuationNecessary() {
 		$time = 0;
 		ConvertibleTimestamp::setFakeTime( static function () use ( &$time ) {
-			return $time += 1;
+			$time++;
+			return $time;
 		} );
 
 		[ $response, $continue ] = $this->doQuery( [] );
@@ -130,7 +134,8 @@ class ApiQueryLanguageinfoTest extends ApiTestCase {
 	public function testContinuationNotNecessary() {
 		$time = 0;
 		ConvertibleTimestamp::setFakeTime( static function () use ( &$time ) {
-			return $time += 2;
+			$time += 2;
+			return $time;
 		} );
 
 		[ $response, $continue ] = $this->doQuery( [
@@ -143,7 +148,8 @@ class ApiQueryLanguageinfoTest extends ApiTestCase {
 	public function testContinuationInAlphabeticalOrderNotParameterOrder() {
 		$time = 0;
 		ConvertibleTimestamp::setFakeTime( static function () use ( &$time ) {
-			return $time += 1;
+			$time++;
+			return $time;
 		} );
 		$params = [ 'licode' => 'en|ru|zh|de|yue' ];
 

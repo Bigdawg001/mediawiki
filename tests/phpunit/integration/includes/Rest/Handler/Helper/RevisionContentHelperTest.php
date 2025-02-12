@@ -2,6 +2,7 @@
 
 namespace MediaWiki\Tests\Rest\Handler\Helper;
 
+use Exception;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Page\ExistingPageRecord;
@@ -24,28 +25,15 @@ class RevisionContentHelperTest extends MediaWikiIntegrationTestCase {
 
 	private const NO_REVISION_ETAG = '"b620cd7841f9ea8f545f11cc44ce794f848fa2d3"';
 
-	protected function setUp(): void {
-		parent::setUp();
-
-		// Clean up these tables after each test
-		$this->tablesUsed = [
-			'page',
-			'revision',
-			'comment',
-			'text',
-			'content'
-		];
-	}
-
 	/**
 	 * @param array $params
 	 * @param Authority|null $authority
 	 * @return RevisionContentHelper
-	 * @throws \Exception
+	 * @throws Exception
 	 */
 	private function newHelper(
 		array $params = [],
-		Authority $authority = null
+		?Authority $authority = null
 	): RevisionContentHelper {
 		$helper = new RevisionContentHelper(
 			new ServiceOptions(
@@ -57,7 +45,10 @@ class RevisionContentHelperTest extends MediaWikiIntegrationTestCase {
 			),
 			$this->getServiceContainer()->getRevisionLookup(),
 			$this->getServiceContainer()->getTitleFormatter(),
-			$this->getServiceContainer()->getPageStore()
+			$this->getServiceContainer()->getPageStore(),
+			$this->getServiceContainer()->getTitleFactory(),
+			$this->getServiceContainer()->getConnectionProvider(),
+			$this->getServiceContainer()->getChangeTagsStore()
 		);
 
 		$authority = $authority ?: $this->mockRegisteredUltimateAuthority();
@@ -78,7 +69,7 @@ class RevisionContentHelperTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getRole()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getRole()
 	 */
 	public function testGetRole() {
 		$helper = $this->newHelper();
@@ -86,8 +77,8 @@ class RevisionContentHelperTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getTitleText()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getPage()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getTitleText()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getPage()
 	 */
 	public function testGetPage() {
 		[ $page, $revisions ] = $this->getExistingPageWithRevisions( __METHOD__ );
@@ -100,8 +91,8 @@ class RevisionContentHelperTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getTargetRevision()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getContent()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getTargetRevision()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getContent()
 	 */
 	public function testGetTargetRevisionAndContent() {
 		[ $page, $revisions ] = $this->getExistingPageWithRevisions( __METHOD__ );
@@ -120,15 +111,15 @@ class RevisionContentHelperTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getTitleText()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getPage()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::isAccessible()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::hasContent()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getTargetRevision()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getContent()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getLastModified()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getETag()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::checkAccess()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getTitleText()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getPage()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::isAccessible()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::hasContent()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getTargetRevision()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getContent()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getLastModified()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getETag()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::checkAccess()
 	 */
 	public function testNoTitle() {
 		$helper = $this->newHelper();
@@ -160,15 +151,15 @@ class RevisionContentHelperTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getTitleText()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getPage()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::isAccessible()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::hasContent()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getTargetRevision()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getContent()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getLastModified()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getETag()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::checkAccess()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getTitleText()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getPage()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::isAccessible()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::hasContent()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getTargetRevision()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getContent()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getLastModified()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getETag()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::checkAccess()
 	 */
 	public function testNonExistingRevision() {
 		$helper = $this->newHelper( [ 'id' => 287436534 ] );
@@ -201,15 +192,15 @@ class RevisionContentHelperTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getTitleText()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getPage()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::isAccessible()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::hasContent()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getTargetRevision()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getContent()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getLastModified()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getETag()
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::checkAccess()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getTitleText()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getPage()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::isAccessible()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::hasContent()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getTargetRevision()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getContent()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getLastModified()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getETag()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::checkAccess()
 	 */
 	public function testForbidenPage() {
 		[ $page, $revisions ] = $this->getExistingPageWithRevisions( __METHOD__ );
@@ -236,7 +227,7 @@ class RevisionContentHelperTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::getParamSettings()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::getParamSettings()
 	 */
 	public function testParameterSettings() {
 		$helper = $this->newHelper();
@@ -245,7 +236,7 @@ class RevisionContentHelperTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::setCacheControl()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::setCacheControl()
 	 */
 	public function testCacheControl() {
 		$helper = $this->newHelper();
@@ -263,7 +254,7 @@ class RevisionContentHelperTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers \MediaWiki\Rest\Handler\RevisionContentHelper::constructMetadata()
+	 * @covers \MediaWiki\Rest\Handler\Helper\RevisionContentHelper::constructMetadata()
 	 */
 	public function testConstructMetadata() {
 		[ $page, $revisions ] = $this->getExistingPageWithRevisions( __METHOD__ );

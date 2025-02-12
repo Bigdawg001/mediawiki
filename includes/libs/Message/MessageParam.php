@@ -2,13 +2,17 @@
 
 namespace Wikimedia\Message;
 
+use Wikimedia\JsonCodec\JsonCodecable;
+
 /**
  * Value object representing a message parameter that consists of a list of values.
  *
- * Message parameter classes are pure value objects and are safely newable.
+ * Message parameter classes are pure value objects and are newable and (de)serializable.
  */
-abstract class MessageParam {
-	protected $type;
+abstract class MessageParam implements JsonCodecable {
+
+	protected string $type;
+	/** @var mixed */
 	protected $value;
 
 	/**
@@ -16,7 +20,7 @@ abstract class MessageParam {
 	 *
 	 * @return string One of the ParamType constants
 	 */
-	public function getType() {
+	public function getType(): string {
 		return $this->type;
 	}
 
@@ -34,5 +38,5 @@ abstract class MessageParam {
 	 *
 	 * @return string
 	 */
-	abstract public function dump();
+	abstract public function dump(): string;
 }

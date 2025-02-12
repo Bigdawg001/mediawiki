@@ -7,6 +7,7 @@ use PHPUnit\Framework\TestCase;
  * @covers \MediaWiki\Maintenance\MaintenanceParameters
  */
 class MaintenanceParametersTest extends TestCase {
+	use MediaWikiCoversValidator;
 
 	public function testOption() {
 		$params = new MaintenanceParameters();
@@ -321,7 +322,7 @@ class MaintenanceParametersTest extends TestCase {
 
 		yield 'Missing value short' => [
 			[ '-s', 'arg', '-v' ],
-			[ 'Option --value needs a value after it!' ]
+			[ 'Option -v needs a value after it!' ]
 		];
 	}
 
@@ -344,7 +345,7 @@ class MaintenanceParametersTest extends TestCase {
 
 	private function findInLines( array $lines, $regex, $start = 0 ) {
 		for ( $i = $start; $i < count( $lines ); $i++ ) {
-			if ( strpos( $lines[ $i ], $regex ) !== false ) {
+			if ( str_contains( $lines[ $i ], $regex ) ) {
 				return $i;
 			}
 		}
@@ -358,8 +359,12 @@ class MaintenanceParametersTest extends TestCase {
 		$params->setName( 'Foo' );
 		$params->setDescription( 'Frobs the foo' );
 
+		// Optional, no value
 		$params->addOption( 'flag', 'First flag', false, false, 'f' );
+		// Required, with value
 		$params->addOption( 'value', 'Some value', true, true );
+		// Required, with value, and with short name.
+		$params->addOption( 'thing', 'Words here', false, true, 't' );
 
 		$params->assignGroup( 'Test flags', [ 'flag' ] );
 
@@ -367,15 +372,16 @@ class MaintenanceParametersTest extends TestCase {
 		$lines = preg_split( '/\s*[\r\n]\s*/', $help );
 		$lines = array_values( array_filter( $lines ) );
 
-		$synopsisIndex = $this->findInLines( $lines, 'Usage: php Foo' );
+		$synopsisIndex = $this->findInLines( $lines, 'Usage: php maintenance/run.php Foo' );
 		$this->assertNotFalse( $synopsisIndex );
 		$synopsis = $lines[$synopsisIndex];
 
 		$this->assertStringContainsString( '[OPTION]... --value <VALUE>', $synopsis );
 
-		$this->assertNotFalse( $this->findInLines( $lines, 'Frobs the foo' ) );
-		$this->assertNotFalse( $this->findInLines( $lines, '--flag (-f): First flag' ) );
-		$this->assertNotFalse( $this->findInLines( $lines, '--value <VALUE>: Some value' ) );
+		$this->assertStringContainsString( 'Frobs the foo', $help );
+		$this->assertStringContainsString( '--flag (-f): First flag', $help );
+		$this->assertStringContainsString( '--value <VALUE>: Some value', $help );
+		$this->assertStringContainsString( '--thing (-t) <THING>: Words here', $help );
 		$this->assertNotFalse( $this->findInLines( $lines, 'Test flags' ) );
 		$this->assertNotFalse( $this->findInLines( $lines, 'Script specific options' ) );
 
@@ -429,7 +435,7 @@ class MaintenanceParametersTest extends TestCase {
 		$lines = preg_split( '/\s*[\r\n]\s*/', $help );
 		$lines = array_values( array_filter( $lines ) );
 
-		$synopsisIndex = $this->findInLines( $lines, 'Usage: php Foo' );
+		$synopsisIndex = $this->findInLines( $lines, 'Usage: php maintenance/run.php Foo' );
 		$this->assertNotFalse( $synopsisIndex );
 		$synopsis = $lines[$synopsisIndex];
 

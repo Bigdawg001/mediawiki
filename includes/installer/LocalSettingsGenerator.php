@@ -18,6 +18,10 @@
  * @file
  */
 
+namespace MediaWiki\Installer;
+
+use InvalidArgumentException;
+
 /**
  * Generate the LocalSettings.php file.
  *
@@ -26,11 +30,17 @@
  */
 class LocalSettingsGenerator {
 
+	/** @var string[] */
 	protected $extensions = [];
+	/** @var string[] */
 	protected $skins = [];
+	/** @var string[] */
 	protected $values = [];
+	/** @var bool[][] */
 	protected $groupPermissions = [];
+	/** @var string */
 	protected $dbSettings = '';
+	/** @var string */
 	protected $IP;
 
 	/**
@@ -38,9 +48,6 @@ class LocalSettingsGenerator {
 	 */
 	protected $installer;
 
-	/**
-	 * @param Installer $installer
-	 */
 	public function __construct( Installer $installer ) {
 		$this->installer = $installer;
 
@@ -63,7 +70,7 @@ class LocalSettingsGenerator {
 				'wgMetaNamespace', 'wgAuthenticationTokenVersion', 'wgPingback',
 				'_Logo1x', '_LogoTagline', '_LogoWordmark', '_LogoIcon',
 				'_LogoWordmarkWidth', '_LogoWordmarkHeight',
-				'_LogoTaglineWidth', '_LogoTaglineHeight'
+				'_LogoTaglineWidth', '_LogoTaglineHeight', '_WithDevelopmentSettings'
 			],
 			$db->getGlobalNames()
 		);
@@ -180,7 +187,6 @@ class LocalSettingsGenerator {
 	 *
 	 * @param string $dir Either "extensions" or "skins"
 	 * @param string $name Name of extension/skin
-	 * @throws InvalidArgumentException
 	 * @return string
 	 */
 	private function generateExtEnableLine( $dir, $name ) {
@@ -257,7 +263,7 @@ class LocalSettingsGenerator {
 				$group = self::escapePhpString( $group );
 				foreach ( $rightArr as $right => $perm ) {
 					$right = self::escapePhpString( $right );
-					$groupRights .= "\$wgGroupPermissions['$group']['$right'] = " .
+					$groupRights .= "\$wgGroupPermissions[\"$group\"][\"$right\"] = " .
 						wfBoolToStr( $perm ) . ";\n";
 				}
 			}
@@ -305,6 +311,12 @@ class LocalSettingsGenerator {
 			$platformSettings = '';
 		}
 
+		$developmentSettings = '';
+		if ( isset( $this->values['_WithDevelopmentSettings'] ) && $this->values['_WithDevelopmentSettings'] ) {
+			$developmentSettings = "\n## Include DevelopmentSettings.php";
+			$developmentSettings .= "\nrequire_once \"\$IP/includes/DevelopmentSettings.php\";";
+		}
+
 		$this->values['taglineConfig'] = $this->values['_LogoTagline'] ? "\n\t'tagline' => [
 		\"src\" => \"{$this->values['_LogoTagline']}\",
 		\"width\" => {$this->values['_LogoTaglineWidth']},
@@ -336,6 +348,8 @@ class LocalSettingsGenerator {
 if ( !defined( 'MEDIAWIKI' ) ) {
 	exit;
 }
+{$developmentSettings}
+
 {$platformSettings}
 
 ## Uncomment this to disable output compression

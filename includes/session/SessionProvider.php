@@ -23,15 +23,30 @@
 
 namespace MediaWiki\Session;
 
-use Config;
-use Language;
+use ErrorPageError;
+use InvalidArgumentException;
+use MediaWiki\Api\ApiUsageException;
+use MediaWiki\Config\Config;
+use MediaWiki\Context\RequestContext;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\Language\Language;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Message\Message;
+use MediaWiki\Request\WebRequest;
+use MediaWiki\Rest\Handler;
+use MediaWiki\Rest\HttpException;
+use MediaWiki\Rest\LocalizedHttpException;
+use MediaWiki\Rest\Module\Module;
+use MediaWiki\Rest\RequestInterface;
+use MediaWiki\User\User;
 use MediaWiki\User\UserNameUtils;
+use MWRestrictions;
 use Psr\Log\LoggerInterface;
-use User;
-use WebRequest;
+use Stringable;
+use Wikimedia\Message\MessageParam;
+use Wikimedia\Message\MessageSpecifier;
+use Wikimedia\Message\MessageValue;
 
 /**
  * A SessionProvider provides SessionInfo and support for Session
@@ -79,25 +94,14 @@ use WebRequest;
  * @since 1.27
  * @see https://www.mediawiki.org/wiki/Manual:SessionManager_and_AuthManager
  */
-abstract class SessionProvider implements SessionProviderInterface {
+abstract class SessionProvider implements Stringable, SessionProviderInterface {
 
-	/** @var LoggerInterface */
-	protected $logger;
-
-	/** @var Config */
-	protected $config;
-
-	/** @var SessionManager */
-	protected $manager;
-
-	/** @var HookContainer */
-	private $hookContainer;
-
-	/** @var HookRunner */
-	private $hookRunner;
-
-	/** @var UserNameUtils */
-	protected $userNameUtils;
+	protected LoggerInterface $logger;
+	protected Config $config;
+	protected SessionManager $manager;
+	private HookContainer $hookContainer;
+	private HookRunner $hookRunner;
+	protected UserNameUtils $userNameUtils;
 
 	/** @var int Session priority. Used for the default newSessionInfo(), but
 	 * could be used by subclasses too.
@@ -117,12 +121,6 @@ abstract class SessionProvider implements SessionProviderInterface {
 	 * @since 1.37
 	 * @internal In production code SessionManager will initialize the
 	 * SessionProvider, in tests SessionProviderTestTrait must be used.
-	 *
-	 * @param LoggerInterface $logger
-	 * @param Config $config
-	 * @param SessionManager $manager
-	 * @param HookContainer $hookContainer
-	 * @param UserNameUtils $userNameUtils
 	 */
 	public function init(
 		LoggerInterface $logger,
@@ -232,11 +230,6 @@ abstract class SessionProvider implements SessionProviderInterface {
 		$this->hookRunner = new HookRunner( $hookContainer );
 	}
 
-	/**
-	 * Get the HookContainer
-	 *
-	 * @return HookContainer
-	 */
 	protected function getHookContainer(): HookContainer {
 		return $this->hookContainer;
 	}
@@ -528,17 +521,14 @@ abstract class SessionProvider implements SessionProviderInterface {
 	 *
 	 * The return value is such that someone could theoretically do this:
 	 * @code
-	 * foreach ( $provider->getVaryHeaders() as $header => $options ) {
-	 *   $outputPage->addVaryHeader( $header, $options );
+	 * foreach ( $provider->getVaryHeaders() as $header => $_ ) {
+	 *   $outputPage->addVaryHeader( $header );
 	 * }
 	 * @endcode
 	 *
-	 * Note that the $options parameter to addVaryHeader has been deprecated
-	 * since 1.34, and should be `null` or an empty array.
-	 *
 	 * @stable to override
 	 * @note For use by \MediaWiki\Session\SessionManager only
-	 * @return array
+	 * @return array<string,null>
 	 */
 	public function getVaryHeaders() {
 		return [];
@@ -579,9 +569,21 @@ abstract class SessionProvider implements SessionProviderInterface {
 	public function getAllowedUserRights( SessionBackend $backend ) {
 		if ( $backend->getProvider() !== $this ) {
 			// Not that this should ever happen...
-			throw new \InvalidArgumentException( 'Backend\'s provider isn\'t $this' );
+			throw new InvalidArgumentException( 'Backend\'s provider isn\'t $this' );
 		}
 
+		return null;
+	}
+
+	/**
+	 * Fetch any restrictions imposed on logins or actions when this
+	 * session is active.
+	 *
+	 * @since 1.42
+	 * @stable to override
+	 * @return MWRestrictions|null
+	 */
+	public function getRestrictions( ?array $providerMetadata ): ?MWRestrictions {
 		return null;
 	}
 
@@ -610,7 +612,7 @@ abstract class SessionProvider implements SessionProviderInterface {
 	 * @warning This will be called early during MediaWiki startup. Do not
 	 *  use $wgUser, $wgLang, $wgOut, the global Parser, or their equivalents via
 	 *  RequestContext from this method!
-	 * @return \Message
+	 * @return Message
 	 */
 	protected function describeMessage() {
 		return wfMessage(
@@ -650,6 +652,21 @@ abstract class SessionProvider implements SessionProviderInterface {
 	}
 
 	/**
+	 * Returns true if this provider is exempt from autocreate user permissions check
+	 *
+	 * By default returns false, meaning this provider respects the normal rights
+	 * of anonymous user creation. When true the permission checks will be bypassed
+	 * and the user will always be created (subject to other limitations, like read
+	 * only db and such).
+	 *
+	 * @stable to override
+	 * @since 1.42
+	 */
+	public function canAlwaysAutocreate(): bool {
+		return false;
+	}
+
+	/**
 	 * Hash data as a session ID
 	 *
 	 * Generally this will only be used when self::persistsSessionId() is false and
@@ -664,13 +681,13 @@ abstract class SessionProvider implements SessionProviderInterface {
 	 */
 	final protected function hashToSessionId( $data, $key = null ) {
 		if ( !is_string( $data ) ) {
-			throw new \InvalidArgumentException(
-				'$data must be a string, ' . gettype( $data ) . ' was passed'
+			throw new InvalidArgumentException(
+				'$data must be a string, ' . get_debug_type( $data ) . ' was passed'
 			);
 		}
 		if ( $key !== null && !is_string( $key ) ) {
-			throw new \InvalidArgumentException(
-				'$key must be a string or null, ' . gettype( $key ) . ' was passed'
+			throw new InvalidArgumentException(
+				'$key must be a string or null, ' . get_debug_type( $key ) . ' was passed'
 			);
 		}
 
@@ -686,6 +703,71 @@ abstract class SessionProvider implements SessionProviderInterface {
 			$hash = \Wikimedia\base_convert( $hash, 16, 32, 32 );
 		}
 		return substr( $hash, -32 );
+	}
+
+	/**
+	 * Throw an exception, later. Needed because during session initialization the framework
+	 * isn't quite ready to handle an exception.
+	 *
+	 * This should be called from provideSessionInfo() to fail in
+	 * a user-friendly way when a session mechanism is used in a way it's not supposed to be used
+	 * (e.g. invalid credentials or a non-API request when the session provider only supports
+	 * API requests), and the returned SessionInfo should be returned by provideSessionInfo().
+	 *
+	 * @param string $key Key for the error message
+	 * @phpcs:ignore Generic.Files.LineLength
+	 * @param MessageParam|MessageSpecifier|string|int|float|list<MessageParam|MessageSpecifier|string|int|float> ...$params
+	 *   See Message::params()
+	 * @return SessionInfo An anonymous session info with maximum priority, to force an
+	 *   anonymous session in case throwing the exception doesn't happen.
+	 */
+	protected function makeException( $key, ...$params ): SessionInfo {
+		$msg = wfMessage( $key, $params );
+
+		if ( defined( 'MW_API' ) ) {
+			$this->hookContainer->register(
+				'ApiBeforeMain',
+				// @phan-suppress-next-line PhanPluginNeverReturnFunction Closures should not get doc
+				static function () use ( $msg ) {
+					throw ApiUsageException::newWithMessage( null, $msg );
+				}
+			);
+		} elseif ( defined( 'MW_REST_API' ) ) {
+			$this->hookContainer->register(
+				'RestCheckCanExecute',
+				static function ( Module $module, Handler $handler, string $path,
+					RequestInterface $request, ?HttpException &$error ) use ( $key, $params )
+				{
+					$msg = new MessageValue( $key, $params );
+					$error = new LocalizedHttpException( $msg, 403 );
+					return false;
+				}
+			);
+		} else {
+			$this->hookContainer->register(
+				'BeforeInitialize',
+				// @phan-suppress-next-line PhanPluginNeverReturnFunction Closures should not get doc
+				static function () use ( $msg ) {
+					RequestContext::getMain()->getOutput()->setStatusCode( 400 );
+					throw new ErrorPageError( 'errorpagetitle', $msg );
+				}
+			);
+			// Disable file cache, which would be looked up before the BeforeInitialize hook call.
+			$this->hookContainer->register(
+				'HTMLFileCache__useFileCache',
+				static function () {
+					return false;
+				}
+			);
+		}
+
+		$id = $this->hashToSessionId( 'bogus' );
+		return new SessionInfo( SessionInfo::MAX_PRIORITY, [
+			'provider' => $this,
+			'id' => $id,
+			'userInfo' => UserInfo::newAnonymous(),
+			'persisted' => false,
+		] );
 	}
 
 }

@@ -22,12 +22,12 @@
 
 namespace MediaWiki\ResourceLoader;
 
-use FormatJson;
+use MediaWiki\Json\FormatJson;
 use MediaWiki\MediaWikiServices;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
-use WANObjectCache;
+use Wikimedia\ObjectCache\WANObjectCache;
 use Wikimedia\Rdbms\Database;
 
 /**
@@ -128,8 +128,6 @@ class MessageBlobStore implements LoggerAwareInterface {
 	}
 
 	/**
-	 * Global check key for ::clear()
-	 *
 	 * @param WANObjectCache $cache
 	 * @return string Cache key
 	 */
@@ -173,10 +171,11 @@ class MessageBlobStore implements LoggerAwareInterface {
 	protected function recacheMessageBlob( $cacheKey, Module $module, $lang ) {
 		$blob = $this->generateMessageBlob( $module, $lang );
 		$cache = $this->wanCache;
+		$dbr = MediaWikiServices::getInstance()->getConnectionProvider()->getReplicaDatabase();
 		$cache->set( $cacheKey, $blob,
 			// Add part of a day to TTL to avoid all modules expiring at once
 			$cache::TTL_WEEK + mt_rand( 0, $cache::TTL_DAY ),
-			Database::getCacheSetOptions( wfGetDB( DB_REPLICA ) )
+			Database::getCacheSetOptions( $dbr )
 		);
 		return $blob;
 	}
@@ -199,18 +198,8 @@ class MessageBlobStore implements LoggerAwareInterface {
 	/**
 	 * Invalidate cache keys for all known modules.
 	 *
-	 * Used by purgeMessageBlobStore.php
-	 */
-	public function clear() {
-		self::clearGlobalCacheEntry( $this->wanCache );
-	}
-
-	/**
-	 * Invalidate cache keys for all known modules.
-	 *
-	 * Used by LocalisationCache and DatabaseUpdater after regenerating l10n cache.
-	 *
-	 * @param WANObjectCache $cache
+	 * Used by LocalisationCache, DatabaseUpdater and purgeMessageBlobStore.php script
+	 * after regenerating l10n cache.
 	 */
 	public static function clearGlobalCacheEntry( WANObjectCache $cache ) {
 		// Disable holdoff TTL because:
@@ -274,6 +263,3 @@ class MessageBlobStore implements LoggerAwareInterface {
 		return $json;
 	}
 }
-
-/** @deprecated since 1.39 */
-class_alias( MessageBlobStore::class, 'MessageBlobStore' );

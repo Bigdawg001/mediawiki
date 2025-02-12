@@ -1,8 +1,8 @@
 <?php
 
-namespace MediaWiki\Session;
+namespace MediaWiki\Tests\Session;
 
-use User;
+use MediaWiki\User\User;
 
 /**
  * Dummy session backend
@@ -16,11 +16,13 @@ use User;
  * for mocks.
  */
 class DummySessionBackend {
+	/** @var array */
 	public $data = [
 		'foo' => 1,
 		'bar' => 2,
 		0 => 'zero',
 	];
+	/** @var bool */
 	public $dirty = false;
 
 	public function &getData() {

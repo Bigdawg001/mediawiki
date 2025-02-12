@@ -23,29 +23,32 @@
 
 namespace MediaWiki\Page;
 
-use Content;
 use InvalidArgumentException;
 use ManualLogEntry;
 use MediaWiki;
 use MediaWiki\CommentStore\CommentStoreComment;
+use MediaWiki\Content\Content;
 use MediaWiki\Content\IContentHandlerFactory;
 use MediaWiki\EditPage\SpamChecker;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\Linker\LinkTargetLookup;
+use MediaWiki\MainConfigNames;
+use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
 use MediaWiki\Permissions\Authority;
 use MediaWiki\Permissions\PermissionStatus;
 use MediaWiki\Revision\MutableRevisionRecord;
 use MediaWiki\Revision\RevisionStore;
 use MediaWiki\Revision\SlotRecord;
+use MediaWiki\Status\Status;
 use MediaWiki\Title\TitleFactory;
-use MediaWiki\User\UserIdentity;
-use Message;
-use MWTimestamp;
-use Status;
-use TitleFormatter;
-use WatchedItemStoreInterface;
+use MediaWiki\Title\TitleFormatter;
+use MediaWiki\Title\TitleValue;
+use MediaWiki\Utils\MWTimestamp;
+use MediaWiki\Watchlist\WatchedItemStoreInterface;
+use Wikimedia\Rdbms\IConnectionProvider;
 use Wikimedia\Rdbms\IDatabase;
-use Wikimedia\Rdbms\ILoadBalancer;
 use Wikimedia\Timestamp\TimestampException;
 
 /**
@@ -89,38 +92,30 @@ class MergeHistory {
 	 */
 	protected $timestampLimit = false;
 
+	/**
+	 * @var string|null
+	 */
+	private $revidLimit = null;
+
 	/** @var int Number of revisions merged (for Special:MergeHistory success message) */
 	protected $revisionsMerged;
 
-	/** @var IContentHandlerFactory */
-	private $contentHandlerFactory;
-
-	/** @var RevisionStore */
-	private $revisionStore;
-
-	/** @var WatchedItemStoreInterface */
-	private $watchedItemStore;
-
-	/** @var SpamChecker */
-	private $spamChecker;
-
-	/** @var HookRunner */
-	private $hookRunner;
-
-	/** @var WikiPageFactory */
-	private $wikiPageFactory;
-
-	/** @var TitleFormatter */
-	private $titleFormatter;
-
-	/** @var TitleFactory */
-	private $titleFactory;
+	private IContentHandlerFactory $contentHandlerFactory;
+	private RevisionStore $revisionStore;
+	private WatchedItemStoreInterface $watchedItemStore;
+	private SpamChecker $spamChecker;
+	private HookRunner $hookRunner;
+	private WikiPageFactory $wikiPageFactory;
+	private TitleFormatter $titleFormatter;
+	private TitleFactory $titleFactory;
+	private LinkTargetLookup $linkTargetLookup;
+	private DeletePageFactory $deletePageFactory;
 
 	/**
 	 * @param PageIdentity $source Page from which history will be merged
 	 * @param PageIdentity $dest Page to which history will be merged
 	 * @param ?string $timestamp Timestamp up to which history from the source will be merged
-	 * @param ILoadBalancer $loadBalancer
+	 * @param IConnectionProvider $dbProvider
 	 * @param IContentHandlerFactory $contentHandlerFactory
 	 * @param RevisionStore $revisionStore
 	 * @param WatchedItemStoreInterface $watchedItemStore
@@ -129,12 +124,14 @@ class MergeHistory {
 	 * @param WikiPageFactory $wikiPageFactory
 	 * @param TitleFormatter $titleFormatter
 	 * @param TitleFactory $titleFactory
+	 * @param LinkTargetLookup $linkTargetLookup
+	 * @param DeletePageFactory $deletePageFactory
 	 */
 	public function __construct(
 		PageIdentity $source,
 		PageIdentity $dest,
 		?string $timestamp,
-		ILoadBalancer $loadBalancer,
+		IConnectionProvider $dbProvider,
 		IContentHandlerFactory $contentHandlerFactory,
 		RevisionStore $revisionStore,
 		WatchedItemStoreInterface $watchedItemStore,
@@ -142,7 +139,9 @@ class MergeHistory {
 		HookContainer $hookContainer,
 		WikiPageFactory $wikiPageFactory,
 		TitleFormatter $titleFormatter,
-		TitleFactory $titleFactory
+		TitleFactory $titleFactory,
+		LinkTargetLookup $linkTargetLookup,
+		DeletePageFactory $deletePageFactory
 	) {
 		// Save the parameters
 		$this->source = $source;
@@ -150,7 +149,7 @@ class MergeHistory {
 		$this->timestamp = $timestamp;
 
 		// Get the database
-		$this->dbw = $loadBalancer->getConnectionRef( DB_PRIMARY );
+		$this->dbw = $dbProvider->getPrimaryDatabase();
 
 		$this->contentHandlerFactory = $contentHandlerFactory;
 		$this->revisionStore = $revisionStore;
@@ -160,6 +159,8 @@ class MergeHistory {
 		$this->wikiPageFactory = $wikiPageFactory;
 		$this->titleFormatter = $titleFormatter;
 		$this->titleFactory = $titleFactory;
+		$this->linkTargetLookup = $linkTargetLookup;
+		$this->deletePageFactory = $deletePageFactory;
 	}
 
 	/**
@@ -167,13 +168,12 @@ class MergeHistory {
 	 * @return int
 	 */
 	public function getRevisionCount() {
-		$count = $this->dbw->selectRowCount(
-			'revision',
-			'1',
-			[ 'rev_page' => $this->source->getId(), $this->getTimeWhere() ],
-			__METHOD__,
-			[ 'LIMIT' => self::REVISION_LIMIT + 1 ]
-		);
+		$count = $this->dbw->newSelectQueryBuilder()
+			->select( '1' )
+			->from( 'revision' )
+			->where( [ 'rev_page' => $this->source->getId(), $this->getTimeWhere() ] )
+			->limit( self::REVISION_LIMIT + 1 )
+			->caller( __METHOD__ )->fetchRowCount();
 
 		return $count;
 	}
@@ -228,7 +228,7 @@ class MergeHistory {
 	 * @param string|null $reason
 	 * @return PermissionStatus
 	 */
-	public function probablyCanMerge( Authority $performer, string $reason = null ): PermissionStatus {
+	public function probablyCanMerge( Authority $performer, ?string $reason = null ): PermissionStatus {
 		return $this->authorizeInternal(
 			static function ( string $action, PageIdentity $target, PermissionStatus $status ) use ( $performer ) {
 				return $performer->probablyCan( $action, $target, $status );
@@ -249,7 +249,7 @@ class MergeHistory {
 	 * @param string|null $reason
 	 * @return PermissionStatus
 	 */
-	public function authorizeMerge( Authority $performer, string $reason = null ): PermissionStatus {
+	public function authorizeMerge( Authority $performer, ?string $reason = null ): PermissionStatus {
 		return $this->authorizeInternal(
 			static function ( string $action, PageIdentity $target, PermissionStatus $status ) use ( $performer ) {
 				return $performer->authorizeWrite( $action, $target, $status );
@@ -329,12 +329,11 @@ class MergeHistory {
 
 		$this->dbw->startAtomic( __METHOD__ );
 
-		$this->dbw->update(
-			'revision',
-			[ 'rev_page' => $this->dest->getId() ],
-			[ 'rev_page' => $this->source->getId(), $this->getTimeWhere() ],
-			__METHOD__
-		);
+		$this->dbw->newUpdateQueryBuilder()
+			->update( 'revision' )
+			->set( [ 'rev_page' => $this->dest->getId() ] )
+			->where( [ 'rev_page' => $this->source->getId(), $this->getTimeWhere() ] )
+			->caller( __METHOD__ )->execute();
 
 		// Check if this did anything
 		$this->revisionsMerged = $this->dbw->affectedRows();
@@ -350,27 +349,27 @@ class MergeHistory {
 			->caller( __METHOD__ )
 			->fetchRowCount();
 
-		$legacySource = $this->titleFactory->castFromPageIdentity( $this->source );
-		$legacyDest = $this->titleFactory->castFromPageIdentity( $this->dest );
+		$legacySource = $this->titleFactory->newFromPageIdentity( $this->source );
+		$legacyDest = $this->titleFactory->newFromPageIdentity( $this->dest );
 
 		// Update source page, histories and invalidate caches
 		if ( !$haveRevisions ) {
 			if ( $reason ) {
-				$reason = wfMessage(
+				$revisionComment = wfMessage(
 					'mergehistory-comment',
 					$this->titleFormatter->getPrefixedText( $this->source ),
 					$this->titleFormatter->getPrefixedText( $this->dest ),
 					$reason
 				)->inContentLanguage()->text();
 			} else {
-				$reason = wfMessage(
+				$revisionComment = wfMessage(
 					'mergehistory-autocomment',
 					$this->titleFormatter->getPrefixedText( $this->source ),
 					$this->titleFormatter->getPrefixedText( $this->dest )
 				)->inContentLanguage()->text();
 			}
 
-			$this->updateSourcePage( $status, $performer->getUser(), $reason );
+			$this->updateSourcePage( $status, $performer, $revisionComment );
 
 		} else {
 			$legacySource->invalidateCache();
@@ -387,12 +386,12 @@ class MergeHistory {
 		$logEntry->setTarget( $this->source );
 		$logEntry->setParameters( [
 			'4::dest' => $this->titleFormatter->getPrefixedText( $this->dest ),
-			'5::mergepoint' => $this->getTimestampLimit()->getTimestamp( TS_MW )
+			'5::mergepoint' => $this->getTimestampLimit()->getTimestamp( TS_MW ),
+			'6::mergerevid' => $this->revidLimit
 		] );
 		$logId = $logEntry->insert();
 		$logEntry->publish( $logId );
 
-		// @phan-suppress-next-line PhanTypeMismatchArgumentNullable castFrom does not return null here
 		$this->hookRunner->onArticleMergeComplete( $legacySource, $legacyDest );
 
 		$this->dbw->endAtomic( __METHOD__ );
@@ -408,24 +407,27 @@ class MergeHistory {
 	 * depending on whether the content model of the page supports redirects or not.
 	 *
 	 * @param Status $status
-	 * @param UserIdentity $user
-	 * @param string $reason
-	 *
-	 * @return Status
+	 * @param Authority $performer
+	 * @param string $revisionComment Edit summary for the redirect or empty revision
+	 *   to be created in place of the source page
 	 */
-	private function updateSourcePage( $status, $user, $reason ) {
+	private function updateSourcePage( $status, $performer, $revisionComment ): void {
 		$deleteSource = false;
-		$legacySourceTitle = $this->titleFactory->castFromPageIdentity( $this->source );
-		$legacyDestTitle = $this->titleFactory->castFromPageIdentity( $this->dest );
+		$legacySourceTitle = $this->titleFactory->newFromPageIdentity( $this->source );
+		$legacyDestTitle = $this->titleFactory->newFromPageIdentity( $this->dest );
 		$sourceModel = $legacySourceTitle->getContentModel();
 		$contentHandler = $this->contentHandlerFactory->getContentHandler( $sourceModel );
 
-		if ( !$contentHandler->supportsRedirects() ) {
+		if ( !$contentHandler->supportsRedirects() || (
+			// Do not create redirects for wikitext message overrides (T376399).
+			// Maybe one day they will have a custom content model and this special case won't be needed.
+			$legacySourceTitle->getNamespace() === NS_MEDIAWIKI &&
+			$legacySourceTitle->getContentModel() === CONTENT_MODEL_WIKITEXT
+		) ) {
 			$deleteSource = true;
 			$newContent = $contentHandler->makeEmptyContent();
 		} else {
 			$msg = wfMessage( 'mergehistory-redirect-text' )->inContentLanguage()->plain();
-			// @phan-suppress-next-line PhanTypeMismatchArgumentNullable castFrom does not return null here
 			$newContent = $contentHandler->makeRedirectContent( $legacyDestTitle, $msg );
 		}
 
@@ -444,7 +446,7 @@ class MergeHistory {
 				. 'to return Content object from ContentHandler::makeRedirectContent().'
 				. ' {value} returned instead.',
 				[
-					'value' => gettype( $newContent ),
+					'value' => get_debug_type( $newContent ),
 					'model' => $sourceModel
 				]
 			);
@@ -460,12 +462,12 @@ class MergeHistory {
 		// content model supports redirects, then it will be the redirect content.
 		// If the content model does not supports redirect, this content will aid
 		// proper deletion of the page below.
-		$comment = CommentStoreComment::newUnsavedComment( $reason );
+		$comment = CommentStoreComment::newUnsavedComment( $revisionComment );
 		$revRecord = new MutableRevisionRecord( $this->source );
 		$revRecord->setContent( SlotRecord::MAIN, $newContent )
 			->setPageId( $this->source->getId() )
 			->setComment( $comment )
-			->setUser( $user )
+			->setUser( $performer->getUser() )
 			->setTimestamp( wfTimestampNow() );
 
 		$insertedRevRecord = $this->revisionStore->insertRevisionOn( $revRecord, $this->dbw );
@@ -474,22 +476,35 @@ class MergeHistory {
 		$newPage->updateRevisionOn( $this->dbw, $insertedRevRecord );
 
 		if ( !$deleteSource ) {
+			// TODO: This doesn't belong here, it should be part of PageLinksTable.
 			// We have created a redirect page so let's
 			// record the link from the page to the new title.
 			// It should have no other outgoing links...
-			$this->dbw->delete(
-				'pagelinks',
-				[ 'pl_from' => $this->source->getId() ],
-				__METHOD__
+			$this->dbw->newDeleteQueryBuilder()
+				->deleteFrom( 'pagelinks' )
+				->where( [ 'pl_from' => $this->source->getId() ] )
+				->caller( __METHOD__ )->execute();
+			$migrationStage = MediaWikiServices::getInstance()->getMainConfig()->get(
+				MainConfigNames::PageLinksSchemaMigrationStage
 			);
-			$this->dbw->insert( 'pagelinks',
-				[
-					'pl_from' => $this->source->getId(),
-					'pl_from_namespace' => $this->source->getNamespace(),
-					'pl_namespace' => $this->dest->getNamespace(),
-					'pl_title' => $this->dest->getDBkey() ],
-				__METHOD__
-			);
+			$row = [
+				'pl_from' => $this->source->getId(),
+				'pl_from_namespace' => $this->source->getNamespace(),
+			];
+			if ( $migrationStage & SCHEMA_COMPAT_WRITE_OLD ) {
+				$row['pl_namespace'] = $this->dest->getNamespace();
+				$row['pl_title'] = $this->dest->getDBkey();
+			}
+			if ( $migrationStage & SCHEMA_COMPAT_WRITE_NEW ) {
+				$row['pl_target_id'] = $this->linkTargetLookup->acquireLinkTargetId(
+					new TitleValue( $this->dest->getNamespace(), $this->dest->getDBkey() ),
+					$this->dbw
+				);
+			}
+			$this->dbw->newInsertQueryBuilder()
+				->insertInto( 'pagelinks' )
+				->row( $row )
+				->caller( __METHOD__ )->execute();
 
 		} else {
 			// T263340/T93469: Delete the source page to prevent errors because its
@@ -498,19 +513,22 @@ class MergeHistory {
 			// This deletion does not depend on userright but may still fails. If it
 			// fails, it will be communicated in the status response.
 			$reason = wfMessage( 'mergehistory-source-deleted-reason' )->inContentLanguage()->plain();
-			$deletionStatus = $newPage->doDeleteArticleReal( $reason, $user );
+			$delPage = $this->deletePageFactory->newDeletePage( $newPage, $performer );
+			$deletionStatus = $delPage->deleteUnsafe( $reason );
+			if ( $deletionStatus->isGood() && $delPage->deletionsWereScheduled()[DeletePage::PAGE_BASE] ) {
+				$deletionStatus->warning(
+					'delete-scheduled',
+					wfEscapeWikiText( $newPage->getTitle()->getPrefixedText() )
+				);
+			}
 			// Notify callers that the source page has been deleted.
 			$status->value = 'source-deleted';
 			$status->merge( $deletionStatus );
 		}
-
-		return $status;
 	}
 
 	/**
 	 * Get the maximum timestamp that we can use (oldest timestamp of dest)
-	 *
-	 * @return MWTimestamp
 	 */
 	private function getMaxTimestamp(): MWTimestamp {
 		if ( $this->maxTimestamp === false ) {
@@ -522,8 +540,6 @@ class MergeHistory {
 	/**
 	 * Get the timestamp upto which history from the source will be merged,
 	 * or null if something went wrong
-	 *
-	 * @return ?MWTimestamp
 	 */
 	private function getTimestampLimit(): ?MWTimestamp {
 		if ( $this->timestampLimit === false ) {
@@ -535,8 +551,6 @@ class MergeHistory {
 	/**
 	 * Get the SQL WHERE condition that selects source revisions to insert into destination,
 	 * or null if something went wrong
-	 *
-	 * @return ?string
 	 */
 	private function getTimeWhere(): ?string {
 		if ( $this->timeWhere === false ) {
@@ -546,34 +560,39 @@ class MergeHistory {
 	}
 
 	/**
-	 * Lazily initializes timestamp limits and conditions.
+	 * Lazily initializes timestamp (and possibly revid) limits and conditions.
 	 */
 	private function initTimestampLimits() {
 		// Max timestamp should be min of destination page
-		$firstDestTimestamp = $this->dbw->selectField(
-			'revision',
-			'MIN(rev_timestamp)',
-			[ 'rev_page' => $this->dest->getId() ],
-			__METHOD__
-		);
+		$firstDestTimestamp = $this->dbw->newSelectQueryBuilder()
+			->select( 'MIN(rev_timestamp)' )
+			->from( 'revision' )
+			->where( [ 'rev_page' => $this->dest->getId() ] )
+			->caller( __METHOD__ )->fetchField();
 		$this->maxTimestamp = new MWTimestamp( $firstDestTimestamp );
-
+		$this->revidLimit = null;
 		// Get the timestamp pivot condition
 		try {
 			if ( $this->timestamp ) {
+				$parts = explode( '|', $this->timestamp );
+				if ( count( $parts ) == 2 ) {
+					$timestamp = $parts[0];
+					$this->revidLimit = $parts[1];
+				} else {
+					$timestamp = $this->timestamp;
+				}
 				// If we have a requested timestamp, use the
 				// latest revision up to that point as the insertion point
-				$mwTimestamp = new MWTimestamp( $this->timestamp );
-				$lastWorkingTimestamp = $this->dbw->selectField(
-					'revision',
-					'MAX(rev_timestamp)',
-					[
-						'rev_timestamp <= ' .
-							$this->dbw->addQuotes( $this->dbw->timestamp( $mwTimestamp ) ),
+				$mwTimestamp = new MWTimestamp( $timestamp );
+
+				$lastWorkingTimestamp = $this->dbw->newSelectQueryBuilder()
+					->select( 'MAX(rev_timestamp)' )
+					->from( 'revision' )
+					->where( [
+						$this->dbw->expr( 'rev_timestamp', '<=', $this->dbw->timestamp( $mwTimestamp ) ),
 						'rev_page' => $this->source->getId()
-					],
-					__METHOD__
-				);
+					] )
+					->caller( __METHOD__ )->fetchField();
 				$mwLastWorkingTimestamp = new MWTimestamp( $lastWorkingTimestamp );
 
 				$timeInsert = $mwLastWorkingTimestamp;
@@ -583,22 +602,31 @@ class MergeHistory {
 				// beginning of destination page history
 
 				// Get the latest timestamp of the source
-				$lastSourceTimestamp = $this->dbw->selectField(
-					[ 'page', 'revision' ],
-					'rev_timestamp',
-					[ 'page_id' => $this->source->getId(),
-						'page_latest = rev_id'
-					],
-					__METHOD__
-				);
-				$lasttimestamp = new MWTimestamp( $lastSourceTimestamp );
-
+				$row = $this->dbw->newSelectQueryBuilder()
+					->select( [ 'rev_timestamp', 'rev_id' ] )
+					->from( 'page' )
+					->join( 'revision', null, 'page_latest = rev_id' )
+					->where( [ 'page_id' => $this->source->getId() ] )
+					->caller( __METHOD__ )->fetchRow();
 				$timeInsert = $this->maxTimestamp;
-				$this->timestampLimit = $lasttimestamp;
+				if ( $row ) {
+					$lasttimestamp = new MWTimestamp( $row->rev_timestamp );
+					$this->timestampLimit = $lasttimestamp;
+					$this->revidLimit = $row->rev_id;
+				} else {
+					$this->timestampLimit = null;
+				}
 			}
-
-			$this->timeWhere = "rev_timestamp <= " .
-				$this->dbw->addQuotes( $this->dbw->timestamp( $timeInsert ) );
+			$dbLimit = $this->dbw->timestamp( $timeInsert );
+			if ( $this->revidLimit ) {
+				$this->timeWhere = $this->dbw->buildComparison( '<=',
+					[ 'rev_timestamp' => $dbLimit, 'rev_id' => $this->revidLimit ]
+				);
+			} else {
+				$this->timeWhere = $this->dbw->buildComparison( '<=',
+					[ 'rev_timestamp' => $dbLimit ]
+				);
+			}
 		} catch ( TimestampException $ex ) {
 			// The timestamp we got is screwed up and merge cannot continue
 			// This should be detected by $this->isValidMerge()
@@ -608,4 +636,5 @@ class MergeHistory {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( MergeHistory::class, 'MergeHistory' );

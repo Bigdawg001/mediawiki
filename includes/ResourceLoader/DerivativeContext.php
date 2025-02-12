@@ -22,10 +22,10 @@
 namespace MediaWiki\ResourceLoader;
 
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Request\WebRequest;
+use MediaWiki\User\User;
 use MediaWiki\User\UserIdentity;
 use MediaWiki\User\UserRigorOptions;
-use User;
-use WebRequest;
 
 /**
  * A mutable version of Context.
@@ -66,6 +66,8 @@ class DerivativeContext extends Context {
 	protected $version = self::INHERIT_VALUE;
 	/** @var int|bool */
 	protected $raw = self::INHERIT_VALUE;
+	/** @var int|bool */
+	protected $sourcemap = self::INHERIT_VALUE;
 	/** @var int|callable|null */
 	protected $contentOverrideCallback = self::INHERIT_VALUE;
 
@@ -162,18 +164,15 @@ class DerivativeContext extends Context {
 		}
 		if ( $this->userObj === null ) {
 			$username = $this->getUser();
+			$userFactory = MediaWikiServices::getInstance()->getUserFactory();
 			if ( $username ) {
-				$this->userObj = User::newFromName( $username ) ?: new User;
-			} else {
-				$this->userObj = new User;
+				$this->userObj = $userFactory->newFromName( $username, UserRigorOptions::RIGOR_VALID );
 			}
+			$this->userObj ??= $userFactory->newAnonymous();
 		}
 		return $this->userObj;
 	}
 
-	/**
-	 * @param string|null $user
-	 */
 	public function setUser( ?string $user ) {
 		$this->user = $user;
 		$this->hash = null;
@@ -201,9 +200,6 @@ class DerivativeContext extends Context {
 		return $this->only;
 	}
 
-	/**
-	 * @param string|null $only
-	 */
 	public function setOnly( ?string $only ) {
 		$this->only = $only;
 		$this->hash = null;
@@ -216,9 +212,6 @@ class DerivativeContext extends Context {
 		return $this->version;
 	}
 
-	/**
-	 * @param string|null $version
-	 */
 	public function setVersion( ?string $version ) {
 		$this->version = $version;
 		$this->hash = null;
@@ -233,6 +226,17 @@ class DerivativeContext extends Context {
 
 	public function setRaw( bool $raw ) {
 		$this->raw = $raw;
+	}
+
+	public function isSourceMap(): bool {
+		if ( $this->sourcemap === self::INHERIT_VALUE ) {
+			return $this->context->isSourceMap();
+		}
+		return $this->sourcemap;
+	}
+
+	public function setIsSourceMap( bool $sourcemap ) {
+		$this->sourcemap = $sourcemap;
 	}
 
 	public function getRequest(): WebRequest {
@@ -261,6 +265,3 @@ class DerivativeContext extends Context {
 	}
 
 }
-
-/** @deprecated since 1.39 */
-class_alias( DerivativeContext::class, 'DerivativeResourceLoaderContext' );

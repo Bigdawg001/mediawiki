@@ -5,13 +5,14 @@ namespace MediaWiki\Rest\Handler;
 use MediaFileTrait;
 use MediaWiki\Page\ExistingPageRecord;
 use MediaWiki\Page\PageLookup;
+use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\Response;
 use MediaWiki\Rest\SimpleHandler;
 use RepoGroup;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
-use Wikimedia\Rdbms\ILBFactory;
+use Wikimedia\Rdbms\IConnectionProvider;
 
 /**
  * Handler class for Core REST API endpoints that perform operations on revisions
@@ -22,38 +23,25 @@ class MediaLinksHandler extends SimpleHandler {
 	/** int The maximum number of media links to return */
 	private const MAX_NUM_LINKS = 100;
 
-	/** @var ILBFactory */
-	private $lbFactory;
-
-	/** @var RepoGroup */
-	private $repoGroup;
-
-	/** @var PageLookup */
-	private $pageLookup;
+	private IConnectionProvider $dbProvider;
+	private RepoGroup $repoGroup;
+	private PageLookup $pageLookup;
 
 	/**
 	 * @var ExistingPageRecord|false|null
 	 */
 	private $page = false;
 
-	/**
-	 * @param ILBFactory $lbFactory
-	 * @param RepoGroup $repoGroup
-	 * @param PageLookup $pageLookup
-	 */
 	public function __construct(
-		ILBFactory $lbFactory,
+		IConnectionProvider $dbProvider,
 		RepoGroup $repoGroup,
 		PageLookup $pageLookup
 	) {
-		$this->lbFactory = $lbFactory;
+		$this->dbProvider = $dbProvider;
 		$this->repoGroup = $repoGroup;
 		$this->pageLookup = $pageLookup;
 	}
 
-	/**
-	 * @return ExistingPageRecord|null
-	 */
 	private function getPage(): ?ExistingPageRecord {
 		if ( $this->page === false ) {
 			$this->page = $this->pageLookup->getExistingPageByText(
@@ -86,12 +74,12 @@ class MediaLinksHandler extends SimpleHandler {
 
 		// @todo: add continuation if too many links are found
 		$results = $this->getDbResults( $page->getId() );
-		if ( count( $results ) > self::MAX_NUM_LINKS ) {
+		if ( count( $results ) > $this->getMaxNumLinks() ) {
 			throw new LocalizedHttpException(
 				MessageValue::new( 'rest-media-too-many-links' )
 					->plaintextParams( $title )
-					->numParams( self::MAX_NUM_LINKS ),
-				500
+					->numParams( $this->getMaxNumLinks() ),
+				400
 			);
 		}
 		$response = $this->processDbResults( $results );
@@ -103,12 +91,12 @@ class MediaLinksHandler extends SimpleHandler {
 	 * @return array the results
 	 */
 	private function getDbResults( int $pageId ) {
-		return $this->lbFactory->getReplicaDatabase()->newSelectQueryBuilder()
+		return $this->dbProvider->getReplicaDatabase()->newSelectQueryBuilder()
 			->select( 'il_to' )
 			->from( 'imagelinks' )
 			->where( [ 'il_from' => $pageId ] )
 			->orderBy( 'il_to' )
-			->limit( self::MAX_NUM_LINKS + 1 )
+			->limit( $this->getMaxNumLinks() + 1 )
 			->caller( __METHOD__ )->fetchFieldValues();
 	}
 
@@ -160,6 +148,7 @@ class MediaLinksHandler extends SimpleHandler {
 				self::PARAM_SOURCE => 'path',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-media-links-title' ),
 			],
 		];
 	}
@@ -192,5 +181,18 @@ class MediaLinksHandler extends SimpleHandler {
 	 */
 	protected function hasRepresentation() {
 		return (bool)$this->getPage();
+	}
+
+	/**
+	 * For testing
+	 *
+	 * @unstable
+	 */
+	protected function getMaxNumLinks(): int {
+		return self::MAX_NUM_LINKS;
+	}
+
+	public function getResponseBodySchemaFileName( string $method ): ?string {
+		return 'includes/Rest/Handler/Schema/MediaLinks.json';
 	}
 }

@@ -328,8 +328,6 @@ class EditResultBuilderTest extends MediaWikiUnitTestCase {
 
 	/**
 	 * Returns an empty RevisionRecord
-	 *
-	 * @return MutableRevisionRecord
 	 */
 	private function getDummyRevision(): MutableRevisionRecord {
 		return new MutableRevisionRecord(
@@ -389,7 +387,7 @@ class EditResultBuilderTest extends MediaWikiUnitTestCase {
 	}
 
 	/**
-	 * Meant to reproduce the values provided by ChangeTags::getSoftwareTags.
+	 * Meant to reproduce the values provided by ChangeTagsStore->getSoftwareTags().
 	 *
 	 * @return string[]
 	 */

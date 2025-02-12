@@ -1,5 +1,6 @@
 <?php
 
+use MediaWiki\Content\WikitextContent;
 use MediaWiki\Title\Title;
 
 /**
@@ -12,14 +13,14 @@ class ArticleTablesTest extends MediaWikiLangTestCase {
 	 * templatelinks based on the user language when {{int:}} is used, only the
 	 * content language.
 	 *
-	 * @covers Title::getTemplateLinksFrom
-	 * @covers Title::getLinksFrom
+	 * @covers \MediaWiki\Title\Title::getTemplateLinksFrom
+	 * @covers \MediaWiki\Title\Title::getLinksFrom
 	 */
 	public function testTemplatelinksUsesContentLanguage() {
 		$title = Title::makeTitle( NS_MAIN, 'T16404' );
 		$wikiPageFactory = $this->getServiceContainer()->getWikiPageFactory();
 		$page = $wikiPageFactory->newFromTitle( $title );
-		$user = new User();
+		$user = $this->getTestUser()->getUser();
 		$this->overrideUserPermissions( $user, [ 'createpage', 'edit', 'purge' ] );
 		$this->setContentLang( 'es' );
 		$this->setUserLang( 'fr' );

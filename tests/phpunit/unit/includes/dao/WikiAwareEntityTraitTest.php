@@ -11,7 +11,6 @@ use Wikimedia\TestingAccessWrapper;
 
 /**
  * @covers \MediaWiki\DAO\WikiAwareEntityTrait
- * @package MediaWiki\Tests\Unit\DAO
  */
 class WikiAwareEntityTraitTest extends MediaWikiUnitTestCase {
 
@@ -95,7 +94,7 @@ class WikiAwareEntityTraitTest extends MediaWikiUnitTestCase {
 	 * @dataProvider provideMismatchingWikis
 	 */
 	public function testDeprecateInvalidCrossWikiMismatch( $entityWiki, $assertWiki ) {
-		$this->expectDeprecation();
+		$this->expectDeprecationAndContinue( '/Deprecated cross-wiki access/' );
 		TestingAccessWrapper::newFromObject( $this->getEntityInstance( $entityWiki ) )
 			->deprecateInvalidCrossWiki( $assertWiki, '1.99' );
 	}

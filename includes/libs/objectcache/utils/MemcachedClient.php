@@ -70,9 +70,8 @@ use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Wikimedia\AtEase\AtEase;
 use Wikimedia\IPUtils;
-use Wikimedia\LightweightObjectStore\StorageAwareness;
+use Wikimedia\ObjectCache\StorageAwareness;
 
-// {{{ class MemcachedClient
 /**
  * memcached client class implemented using (p)fsockopen()
  *
@@ -276,7 +275,7 @@ class MemcachedClient implements StorageAwareness {
 		$this->_host_dead = array();
 
 		$this->_timeout_seconds = 0;
-		$this->_timeout_microseconds = $args['timeout'] ?? 500000;
+		$this->_timeout_microseconds = $args['timeout'] ?? 500_000;
 
 		$this->_connect_timeout = $args['connect_timeout'] ?? 0.1;
 		$this->_connect_attempts = 2;
@@ -1389,5 +1388,3 @@ class MemcachedClient implements StorageAwareness {
 	// }}}
 	// }}}
 }
-
-// }}}

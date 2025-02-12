@@ -20,7 +20,7 @@ namespace MediaWiki\Skin;
 
 use MediaWiki\Html\Html;
 use MediaWiki\Linker\Linker;
-use Message;
+use MediaWiki\Message\Message;
 use MessageLocalizer;
 
 /**
@@ -50,10 +50,6 @@ class SkinComponentLink implements SkinComponent {
 		$this->options = $options;
 	}
 
-	/**
-	 * @param string $key
-	 * @return Message
-	 */
 	private function msg( string $key ): Message {
 		return $this->localizer->msg( $key );
 	}
@@ -69,7 +65,7 @@ class SkinComponentLink implements SkinComponent {
 	 * The text of the link will be generated either from the contents of the
 	 * "text" key in the $item array, if a "msg" key is present a message by
 	 * that name will be used, and if neither of those are set the $key will be
-	 * used as a message name.
+	 * used as a message name. Escaping is handled by this method.
 	 *
 	 * If a "href" key is not present makeLink will just output htmlescaped text.
 	 * The "href", "id", "class", "rel", and "type" keys are used as attributes
@@ -102,6 +98,8 @@ class SkinComponentLink implements SkinComponent {
 	 *
 	 * @param array $options Can be used to affect the output of a link.
 	 * Possible options are:
+	 *   - 'class-as-property' key to specify that class attribute should be
+	 *     not be included in array-attributes.
 	 *   - 'text-wrapper' key to specify a list of elements to wrap the text of
 	 *   a link in. This should be an array of arrays containing a 'tag' and
 	 *   optionally an 'attributes' key. If you only have one element you don't
@@ -119,10 +117,13 @@ class SkinComponentLink implements SkinComponent {
 	 * - array-attributes: HTML attributes as array of objects:
 	 * 		- key: Attribute name ex: 'href', 'class', 'id', ...
 	 * 		- value: Attribute value
+	 * 		NOTE: if options['class-as-property'] is set, class will not be included in the list.
 	 * - text: Text of the link
+	 * - class: Class of the link
 	 */
 	private function makeLink( $key, $item, $options = [] ) {
 		$html = $item['html'] ?? null;
+		$icon = $item['icon'] ?? null;
 		if ( $html ) {
 			return [
 				'html' => $html
@@ -158,13 +159,16 @@ class SkinComponentLink implements SkinComponent {
 
 		$attrs = [];
 		$linkHtmlAttributes = [];
+		$classAsProperty = $options['class-as-property'] ?? false;
 		if ( $isLink ) {
 			$attrs = $item;
-			foreach ( [ 'single-id', 'text', 'msg', 'tooltiponly', 'context', 'primary',
-						  // These fields provide context for skins to modify classes.
-						  // They should not be outputted to skin.
-						  'icon', 'button',
-						  'tooltip-params', 'exists', 'link-html' ] as $k ) {
+			foreach ( [
+				'single-id', 'text', 'msg', 'tooltiponly', 'context', 'primary',
+				// These fields provide context for skins to modify classes.
+				// They should not be outputted to skin.
+				'icon', 'button',
+				'tooltip-params', 'exists', 'link-html' ] as $k
+			) {
 				unset( $attrs[$k] );
 			}
 
@@ -189,6 +193,9 @@ class SkinComponentLink implements SkinComponent {
 				if ( $value === null ) {
 					continue;
 				}
+				if ( $classAsProperty && $key === 'class' ) {
+					continue;
+				}
 				$linkHtmlAttributes[] = [ 'key' => $key, 'value' => $value ];
 			}
 
@@ -200,11 +207,16 @@ class SkinComponentLink implements SkinComponent {
 				? 'a'
 				: $options['link-fallback'], $attrs, $html );
 		}
-		return [
+		$data = [
 			'html' => $html,
+			'icon' => $icon,
 			'array-attributes' => count( $linkHtmlAttributes ) > 0 ? $linkHtmlAttributes : null,
-			'text' => trim( $text )
+			'text' => trim( $text ),
 		];
+		if ( $classAsProperty ) {
+			$data['class'] = $attrs['class'] ?? '';
+		}
+		return $data;
 	}
 
 	/**
@@ -232,7 +244,8 @@ class SkinComponentLink implements SkinComponent {
 			$tip = Linker::tooltipAndAccesskeyAttribs(
 				$tooltipId,
 				$tooltipParams,
-				$tooltipOption
+				$tooltipOption,
+				$this->localizer
 			);
 			if ( isset( $tip['title'] ) && $tip['title'] !== false ) {
 				$attrs['title'] = $tip['title'];

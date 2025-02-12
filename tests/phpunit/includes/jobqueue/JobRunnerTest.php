@@ -1,13 +1,12 @@
 <?php
 
 use MediaWiki\Page\DeletePage;
+use MediaWiki\Request\WebRequest;
 use MediaWiki\Title\Title;
 
 /**
- * Class JobRunnerTest
- *
  * @group Database
- * @covers JobRunner
+ * @covers \JobRunner
  */
 class JobRunnerTest extends MediaWikiIntegrationTestCase {
 

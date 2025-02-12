@@ -14,11 +14,20 @@
  * specific language governing permissions and limitations under the License.
  */
 
+namespace Wikimedia\Tests\Mime;
+
+use MediaWikiCoversValidator;
+use PHPUnit\Framework\TestCase;
+use Wikimedia\Mime\MSCompoundFileReader;
+
 /**
  * @group Media
- * @covers MSCompoundFileReader
+ * @group Mime
+ * @covers \Wikimedia\Mime\MSCompoundFileReader
  */
-class MSCompoundFileReaderTest extends PHPUnit\Framework\TestCase {
+class MSCompoundFileReaderTest extends TestCase {
+	use MediaWikiCoversValidator;
+
 	public static function provideValid() {
 		return [
 			[ 'calc.xls', 'application/vnd.ms-excel' ],

@@ -22,7 +22,11 @@
  * @author Rob Church <robchur@gmail.com>
  */
 
+use MediaWiki\Maintenance\Maintenance;
+
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script that purges old text records from the database.
@@ -41,5 +45,7 @@ class PurgeOldText extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = PurgeOldText::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

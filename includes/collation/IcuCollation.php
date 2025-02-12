@@ -18,7 +18,9 @@
  * @file
  */
 
+use MediaWiki\Language\Language;
 use MediaWiki\Languages\LanguageFactory;
+use MediaWiki\MediaWikiServices;
 
 /**
  * @since 1.16.3
@@ -256,7 +258,7 @@ class IcuCollation extends Collation {
 
 		$mainCollator = Collator::create( $locale );
 		if ( !$mainCollator ) {
-			throw new MWException( "Invalid ICU locale specified for collation: $locale" );
+			throw new InvalidArgumentException( "Invalid ICU locale specified for collation: $locale" );
 		}
 		$this->mainCollator = $mainCollator;
 
@@ -334,7 +336,8 @@ class IcuCollation extends Collation {
 	 */
 	private function getFirstLetterData() {
 		if ( $this->firstLetterData === null ) {
-			$cache = ObjectCache::getLocalServerInstance( CACHE_ANYTHING );
+			$cache = MediaWikiServices::getInstance()->getObjectCacheFactory()
+				->getLocalServerInstance( CACHE_ANYTHING );
 			$cacheKey = $cache->makeKey(
 				'first-letters',
 				static::class,
@@ -352,7 +355,6 @@ class IcuCollation extends Collation {
 
 	/**
 	 * @return array
-	 * @throws MWException
 	 */
 	private function fetchFirstLetterData() {
 		// Generate data from serialized data file
@@ -373,7 +375,7 @@ class IcuCollation extends Collation {
 		} elseif ( $this->locale === 'root' ) {
 			$letters = require __DIR__ . "/data/first-letters-root.php";
 		} else {
-			throw new MWException( "MediaWiki does not support ICU locale " .
+			throw new RuntimeException( "MediaWiki does not support ICU locale " .
 				"\"{$this->locale}\"" );
 		}
 

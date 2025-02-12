@@ -22,7 +22,7 @@
  * @since 1.26
  */
 
-use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
 use MediaWiki\Title\Title;
 
 /**
@@ -112,7 +112,7 @@ class ProtectLogFormatter extends LogFormatter {
 			);
 		}
 
-		if ( empty( $links ) ) {
+		if ( !$links ) {
 			return '';
 		} else {
 			return $this->msg( 'parentheses' )->rawParams(
@@ -157,7 +157,7 @@ class ProtectLogFormatter extends LogFormatter {
 	public function formatParametersForApi() {
 		$ret = parent::formatParametersForApi();
 		if ( isset( $ret['details'] ) && is_array( $ret['details'] ) ) {
-			$contLang = MediaWikiServices::getInstance()->getContentLanguage();
+			$contLang = $this->getContentLanguage();
 			foreach ( $ret['details'] as &$detail ) {
 				if ( isset( $detail['expiry'] ) ) {
 					$detail['expiry'] = $contLang->

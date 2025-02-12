@@ -22,7 +22,12 @@
 
 declare( strict_types = 1 );
 
+namespace MediaWiki\Password;
+
+use InvalidArgumentException;
+use MediaWiki\Config\Config;
 use MediaWiki\MainConfigNames;
+use MWCryptRand;
 use Wikimedia\ObjectFactory\ObjectFactory;
 
 /**
@@ -49,6 +54,8 @@ final class PasswordFactory {
 	private $types = [
 		'' => [ 'type' => '', 'class' => InvalidPassword::class ],
 	];
+
+	private const MIN_RANDOM_PASSWORD_LENGTH = 10;
 
 	/**
 	 * Most of the time you'll want to use MediaWikiServices::getInstance()->getPasswordFactory
@@ -99,8 +106,6 @@ final class PasswordFactory {
 
 	/**
 	 * Get the default password type
-	 *
-	 * @return string
 	 */
 	public function getDefaultType(): string {
 		return $this->default;
@@ -108,12 +113,14 @@ final class PasswordFactory {
 
 	/**
 	 * @deprecated since 1.32 Initialize settings using the constructor
+	 *   Emitting deprecation warnings since 1.41.
 	 *
 	 * Initialize the internal static variables using the global variables
 	 *
 	 * @param Config $config Configuration object to load data from
 	 */
 	public function init( Config $config ): void {
+		wfDeprecated( __METHOD__, '1.32' );
 		foreach ( $config->get( MainConfigNames::PasswordConfig ) as $type => $options ) {
 			$this->register( $type, $options );
 		}
@@ -195,7 +202,7 @@ final class PasswordFactory {
 	 * @param Password|null $existing Optional existing hash to get options from
 	 * @return Password
 	 */
-	public function newFromPlaintext( ?string $password, Password $existing = null ): Password {
+	public function newFromPlaintext( ?string $password, ?Password $existing = null ): Password {
 		if ( $password === null ) {
 			return new InvalidPassword( $this, [ 'type' => '' ], null );
 		}
@@ -237,19 +244,16 @@ final class PasswordFactory {
 	 */
 	public static function generateRandomPasswordString( int $minLength = 10 ): string {
 		// Decide the final password length based on our min password length,
-		// stopping at a minimum of 10 chars.
-		$length = max( 10, $minLength );
+		// requiring at least a minimum of self::MIN_RANDOM_PASSWORD_LENGTH chars.
+		$length = max( self::MIN_RANDOM_PASSWORD_LENGTH, $minLength );
 		// Multiply by 1.25 to get the number of hex characters we need
-		// Generate random hex chars
 		$hex = MWCryptRand::generateHex( ceil( $length * 1.25 ) );
 		// Convert from base 16 to base 32 to get a proper password like string
-		return substr( Wikimedia\base_convert( $hex, 16, 32, $length ), -$length );
+		return substr( \Wikimedia\base_convert( $hex, 16, 32, $length ), -$length );
 	}
 
 	/**
 	 * Create an InvalidPassword
-	 *
-	 * @return InvalidPassword
 	 */
 	public static function newInvalidPassword(): InvalidPassword {
 		static $password = null;
@@ -262,3 +266,6 @@ final class PasswordFactory {
 		return $password;
 	}
 }
+
+/** @deprecated since 1.43 use MediaWiki\\Password\\PasswordFactory */
+class_alias( PasswordFactory::class, 'PasswordFactory' );

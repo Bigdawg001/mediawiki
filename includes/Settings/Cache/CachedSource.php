@@ -2,10 +2,11 @@
 
 namespace MediaWiki\Settings\Cache;
 
-use BagOStuff;
 use MediaWiki\Settings\SettingsBuilderException;
 use MediaWiki\Settings\Source\SettingsIncludeLocator;
 use MediaWiki\Settings\Source\SettingsSource;
+use Stringable;
+use Wikimedia\ObjectCache\BagOStuff;
 use Wikimedia\WaitConditionLoop;
 
 /**
@@ -14,7 +15,7 @@ use Wikimedia\WaitConditionLoop;
  * @newable
  * @since 1.38
  */
-class CachedSource implements SettingsSource, SettingsIncludeLocator {
+class CachedSource implements Stringable, SettingsSource, SettingsIncludeLocator {
 	/**
 	 * Cached source generation timeout (in seconds).
 	 */
@@ -115,8 +116,6 @@ class CachedSource implements SettingsSource, SettingsIncludeLocator {
 
 	/**
 	 * Returns the string representation of the encapsulated source.
-	 *
-	 * @return string
 	 */
 	public function __toString(): string {
 		return $this->source->__toString();
@@ -212,8 +211,6 @@ class CachedSource implements SettingsSource, SettingsIncludeLocator {
 	/**
 	 * Wraps cached source with the metadata needed to perform probabilistic
 	 * early expiration to help mitigate cache stampedes.
-	 *
-	 * @return array
 	 */
 	private function loadWithMetadata(): array {
 		$start = microtime( true );

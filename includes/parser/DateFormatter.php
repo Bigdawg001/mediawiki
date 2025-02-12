@@ -21,7 +21,10 @@
  * @ingroup Parser
  */
 
+namespace MediaWiki\Parser;
+
 use MediaWiki\Html\Html;
+use MediaWiki\Language\Language;
 use MediaWiki\MediaWikiServices;
 
 /**
@@ -162,7 +165,7 @@ class DateFormatter {
 	 *     Defaults to the site content language
 	 * @return DateFormatter
 	 */
-	public static function getInstance( Language $lang = null ) {
+	public static function getInstance( ?Language $lang = null ) {
 		$lang ??= MediaWikiServices::getInstance()->getContentLanguage();
 		return MediaWikiServices::getInstance()->getDateFormatterFactory()->get( $lang );
 	}
@@ -308,7 +311,7 @@ class DateFormatter {
 	 *   year number and 'BC' at the end otherwise.
 	 */
 	private function makeNormalYear( $iso ) {
-		if ( $iso[0] == '-' ) {
+		if ( $iso <= 0 ) {
 			$text = ( intval( substr( $iso, 1 ) ) + 1 ) . ' BC';
 		} else {
 			$text = intval( $iso );
@@ -316,3 +319,6 @@ class DateFormatter {
 		return $text;
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( DateFormatter::class, 'DateFormatter' );

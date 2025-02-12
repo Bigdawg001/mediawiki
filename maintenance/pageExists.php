@@ -19,8 +19,11 @@
  * @ingroup Maintenance
  */
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Title\Title;
 
 /**
@@ -48,5 +51,7 @@ class PageExists extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = PageExists::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

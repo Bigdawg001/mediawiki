@@ -18,6 +18,16 @@
  * @file
  */
 
+namespace MediaWiki\PoolCounter;
+
+use MediaWiki\Status\Status;
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
+use Wikimedia\Telemetry\NoopTracer;
+use Wikimedia\Telemetry\SpanInterface;
+use Wikimedia\Telemetry\TracerInterface;
+
 /**
  * Semaphore semantics to restrict how many workers may concurrently perform a task.
  *
@@ -46,7 +56,7 @@
  * @since 1.16
  * @stable to extend
  */
-abstract class PoolCounter {
+abstract class PoolCounter implements LoggerAwareInterface {
 	/* Return codes */
 	public const LOCKED = 1; /* Lock acquired */
 	public const RELEASED = 2; /* Lock released */
@@ -60,6 +70,7 @@ abstract class PoolCounter {
 
 	/** @var string All workers with the same key share the lock */
 	protected $key;
+	protected string $type;
 	/** @var int Maximum number of workers working on tasks with the same key simultaneously */
 	protected $workers;
 	/**
@@ -73,6 +84,9 @@ abstract class PoolCounter {
 	protected $maxqueue;
 	/** @var int Maximum time in seconds to wait for the lock */
 	protected $timeout;
+	protected LoggerInterface $logger;
+	protected TracerInterface $tracer;
+	protected ?SpanInterface $heldLockSpan = null;
 
 	/**
 	 * @var bool Whether the key is a "might wait" key
@@ -101,11 +115,14 @@ abstract class PoolCounter {
 			$this->slots = $conf['slots'];
 		}
 		$this->fastStale = $conf['fastStale'] ?? false;
+		$this->logger = new NullLogger();
+		$this->tracer = new NoopTracer();
 
 		if ( $this->slots ) {
 			$key = $this->hashKeyIntoSlots( $type, $key, $this->slots );
 		}
 
+		$this->type = $type;
 		$this->key = $key;
 		$this->isMightWaitKey = !preg_match( '/^nowait:/', $this->key );
 	}
@@ -161,12 +178,16 @@ abstract class PoolCounter {
 				 * good idea then feel free to implement an unsafe flag or
 				 * something.
 				 */
-				return Status::newFatal( 'poolcounter-usage-error',
-					'You may only aquire a single non-nowait lock.' );
+				return Status::newFatal(
+					'poolcounter-usage-error',
+					'You may only aquire a single non-nowait lock.'
+				);
 			}
 		} elseif ( $this->timeout !== 0 ) {
-			return Status::newFatal( 'poolcounter-usage-error',
-				'Locks starting in nowait: must have 0 timeout.' );
+			return Status::newFatal(
+				'poolcounter-usage-error',
+				'Locks starting in nowait: must have 0 timeout.'
+			);
 		}
 		return Status::newGood();
 	}
@@ -177,6 +198,13 @@ abstract class PoolCounter {
 	 */
 	final protected function onAcquire() {
 		self::$acquiredMightWaitKey |= $this->isMightWaitKey;
+		$this->heldLockSpan = $this->tracer->createSpan( "PoolCounterLocked::{$this->type}" )->start();
+		$this->heldLockSpan->activate();
+		if ( $this->heldLockSpan->getContext()->isSampled() ) {
+			$this->heldLockSpan->setAttributes( [
+				'org.wikimedia.poolcounter.key' => $this->key,
+			] );
+		}
 	}
 
 	/**
@@ -185,6 +213,10 @@ abstract class PoolCounter {
 	 */
 	final protected function onRelease() {
 		self::$acquiredMightWaitKey &= !$this->isMightWaitKey;
+		if ( $this->heldLockSpan ) {
+			$this->heldLockSpan->end();
+			$this->heldLockSpan = null;
+		}
 	}
 
 	/**
@@ -212,4 +244,33 @@ abstract class PoolCounter {
 	public function isFastStaleEnabled() {
 		return $this->fastStale;
 	}
+
+	/**
+	 * @since 1.42
+	 * @param LoggerInterface $logger
+	 * @return void
+	 */
+	public function setLogger( LoggerInterface $logger ) {
+		$this->logger = $logger;
+	}
+
+	/**
+	 * @since 1.45
+	 * @param TracerInterface $tracer
+	 * @return void
+	 */
+	public function setTracer( TracerInterface $tracer ) {
+		$this->tracer = $tracer;
+	}
+
+	/**
+	 * @internal For use in PoolCounterWork only
+	 * @return LoggerInterface
+	 */
+	public function getLogger(): LoggerInterface {
+		return $this->logger;
+	}
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( PoolCounter::class, 'PoolCounter' );

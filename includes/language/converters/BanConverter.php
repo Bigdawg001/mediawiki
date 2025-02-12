@@ -25,32 +25,14 @@
  */
 class BanConverter extends LanguageConverterIcu {
 
-	/**
-	 * Get Main language code.
-	 *
-	 * @since 1.36
-	 * @return string
-	 */
 	public function getMainCode(): string {
 		return 'ban';
 	}
 
-	/**
-	 * Get supported variants of the language.
-	 *
-	 * @since 1.36
-	 * @return array
-	 */
 	public function getLanguageVariants(): array {
 		return [ 'ban', 'ban-bali', 'ban-x-dharma', 'ban-x-palmleaf', 'ban-x-pku' ];
 	}
 
-	/**
-	 * Get language variants fallbacks.
-	 *
-	 * @since 1.36
-	 * @return array
-	 */
 	public function getVariantsFallbacks(): array {
 		return [
 			'ban-bali' => 'ban',
@@ -1040,7 +1022,6 @@ EOF;
 
 	/**
 	 * Guess if a text is written in Balinese or Latin.
-	 * Overrides LanguageConverter::guessVariant()
 	 *
 	 * @param string $text The text to be checked
 	 * @param string $variant Language code of the variant to be checked for

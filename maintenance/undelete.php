@@ -21,10 +21,13 @@
  * @ingroup Maintenance
  */
 
-use MediaWiki\StubObject\StubGlobalUser;
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 class Undelete extends Maintenance {
 	public function __construct() {
@@ -52,14 +55,24 @@ class Undelete extends Maintenance {
 		if ( !$user ) {
 			$this->fatalError( "Invalid username" );
 		}
-		StubGlobalUser::setUser( $user );
 
-		$archive = new PageArchive( $title );
-		$this->output( "Undeleting " . $title->getPrefixedDBkey() . '...' );
-		$archive->undeleteAsUser( [], $user, $reason );
+		$page = $this->getServiceContainer()->getWikiPageFactory()->newFromTitle( $title );
+		$this->output( "Undeleting " . $title->getPrefixedDBkey() . "...\n" );
+
+		$this->beginTransactionRound( __METHOD__ );
+		$status = $this->getServiceContainer()->getUndeletePageFactory()
+			->newUndeletePage( $page, $user )
+			->undeleteUnsafe( $reason );
+		$this->commitTransactionRound( __METHOD__ );
+
+		if ( !$status->isGood() ) {
+			$this->fatalError( $status );
+		}
 		$this->output( "done\n" );
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = Undelete::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

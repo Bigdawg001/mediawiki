@@ -19,11 +19,11 @@
 
 namespace MediaWiki\Parser\Parsoid\Config;
 
+use MediaWiki\Parser\ParserOptions;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\Revision\SlotRoleHandler;
 use MediaWiki\Title\Title;
-use ParserOptions;
 use Wikimedia\Bcp47Code\Bcp47Code;
 use Wikimedia\Parsoid\Config\PageConfig as IPageConfig;
 use Wikimedia\Parsoid\Config\PageContent as IPageContent;
@@ -37,24 +37,12 @@ use Wikimedia\Parsoid\Config\PageContent as IPageContent;
  * @internal
  */
 class PageConfig extends IPageConfig {
-
-	/** @var ParserOptions */
-	private $parserOptions;
-
-	/** @var SlotRoleHandler */
-	private $slotRoleHandler;
-
-	/** @var Title */
-	private $title;
-
-	/** @var ?RevisionRecord */
-	private $revision;
-
-	/** @var Bcp47Code|null */
-	private $pageLanguage;
-
-	/** @var string */
-	private $pageLanguageDir;
+	private ParserOptions $parserOptions;
+	private SlotRoleHandler $slotRoleHandler;
+	private Title $title;
+	private ?RevisionRecord $revision = null;
+	private Bcp47Code $pageLanguage;
+	private string $pageLanguageDir;
 
 	/**
 	 * @param ParserOptions $parserOptions
@@ -80,10 +68,6 @@ class PageConfig extends IPageConfig {
 		$this->pageLanguageDir = $pageLanguageDir;
 	}
 
-	/**
-	 * Get content model
-	 * @return string
-	 */
 	public function getContentModel(): string {
 		// @todo Check just the main slot, or all slots, or what?
 		$rev = $this->getRevision();
@@ -102,21 +86,9 @@ class PageConfig extends IPageConfig {
 		}
 	}
 
-	public function hasLintableContentModel(): bool {
-		// @todo Check just the main slot, or all slots, or what?
-		$content = $this->getRevisionContent();
-		$model = $content ? $content->getModel( SlotRecord::MAIN ) : null;
-		return $content && ( $model === CONTENT_MODEL_WIKITEXT || $model === 'proofread-page' );
-	}
-
 	/** @inheritDoc */
-	public function getTitle(): string {
-		return $this->title->getPrefixedText();
-	}
-
-	/** @inheritDoc */
-	public function getNs(): int {
-		return $this->title->getNamespace();
+	public function getLinkTarget(): Title {
+		return $this->title;
 	}
 
 	/** @inheritDoc */
@@ -158,9 +130,6 @@ class PageConfig extends IPageConfig {
 		return $stuff['revision-record'] ?? null;
 	}
 
-	/**
-	 * @return ?RevisionRecord
-	 */
 	private function getRevision(): ?RevisionRecord {
 		return $this->revision;
 	}

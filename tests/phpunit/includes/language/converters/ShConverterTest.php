@@ -2,14 +2,13 @@
 
 /**
  * @group Language
- * @covers ShConverter
+ * @covers \ShConverter
  */
 class ShConverterTest extends MediaWikiIntegrationTestCase {
 	use LanguageConverterTestTrait;
 
 	/**
 	 * @dataProvider provideAutoConvertToAllVariants
-	 * @covers ShConverter::autoConvertToAllVariants
 	 */
 	public function testAutoConvertToAllVariants( $result, $value ) {
 		$this->assertEquals( $result, $this->getLanguageConverter()->autoConvertToAllVariants( $value ) );
@@ -34,9 +33,6 @@ class ShConverterTest extends MediaWikiIntegrationTestCase {
 		];
 	}
 
-	/**
-	 * @covers ShConverter::convertTo
-	 */
 	public function testConvertTo() {
 		$this->testConversionToLatin();
 		$this->testConversionToCyrillic();
@@ -65,6 +61,14 @@ class ShConverterTest extends MediaWikiIntegrationTestCase {
 		// Roman numerals are not converted
 		$this->assertEquals( 'а I б II в III г IV шђжчћ',
 			$this->convertToCyrillic( 'a I b II v III g IV šđžčć' )
+		);
+		// Exemption for the words containing "konjug" or "konjun"
+		$this->assertEquals( 'конјугација',
+			$this->convertToCyrillic( 'konjugacija' )
+		);
+		// Exemption for the words containing "wiki"
+		$this->assertEquals( 'Википедија',
+			$this->convertToCyrillic( 'Wikipedija' )
 		);
 		// Manual conversion rules work
 		$this->assertEquals( 'Cyrillic',

@@ -20,6 +20,8 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
 use MediaWiki\Cache\LinkBatchFactory;
 use MediaWiki\Linker\LinksMigration;
 use MediaWiki\ParamValidator\TypeDef\NamespaceDef;
@@ -37,23 +39,17 @@ class ApiQueryLinks extends ApiQueryGeneratorBase {
 	private const LINKS = 'links';
 	private const TEMPLATES = 'templates';
 
-	private $table, $prefix, $titlesParam, $helpUrl;
+	private string $table;
+	private string $prefix;
+	private string $titlesParam;
+	private string $helpUrl;
 
-	/** @var LinkBatchFactory */
-	private $linkBatchFactory;
+	private LinkBatchFactory $linkBatchFactory;
+	private LinksMigration $linksMigration;
 
-	/** @var LinksMigration */
-	private $linksMigration;
-
-	/**
-	 * @param ApiQuery $query
-	 * @param string $moduleName
-	 * @param LinkBatchFactory $linkBatchFactory
-	 * @param LinksMigration $linksMigration
-	 */
 	public function __construct(
 		ApiQuery $query,
-		$moduleName,
+		string $moduleName,
 		LinkBatchFactory $linkBatchFactory,
 		LinksMigration $linksMigration
 	) {
@@ -136,15 +132,14 @@ class ApiQueryLinks extends ApiQueryGeneratorBase {
 					$lb->addObj( $title );
 				}
 			}
-			$cond = $lb->constructSet( $this->prefix, $this->getDB() );
-			if ( $cond ) {
-				$this->addWhere( $cond );
-				$multiNS = count( $lb->data ) !== 1;
-				$multiTitle = count( array_merge( ...$lb->data ) ) !== 1;
-			} else {
-				// No titles so no results
+			if ( $lb->isEmpty() ) {
+				// No titles, no results!
 				return;
 			}
+			$cond = $lb->constructSet( $this->prefix, $this->getDB() );
+			$this->addWhere( $cond );
+			$multiNS = count( $lb->data ) !== 1;
+			$multiTitle = count( array_merge( ...$lb->data ) ) !== 1;
 		} elseif ( $params['namespace'] ) {
 			$this->addWhereFld( $nsField, $params['namespace'] );
 			$multiNS = $params['namespace'] === null || count( $params['namespace'] ) !== 1;
@@ -255,13 +250,15 @@ class ApiQueryLinks extends ApiQueryGeneratorBase {
 	protected function getExamplesMessages() {
 		$name = $this->getModuleName();
 		$path = $this->getModulePath();
+		$title = Title::newMainPage()->getPrefixedText();
+		$mp = rawurlencode( $title );
 
 		return [
-			"action=query&prop={$name}&titles=Main%20Page"
+			"action=query&prop={$name}&titles={$mp}"
 				=> "apihelp-{$path}-example-simple",
-			"action=query&generator={$name}&titles=Main%20Page&prop=info"
+			"action=query&generator={$name}&titles={$mp}&prop=info"
 				=> "apihelp-{$path}-example-generator",
-			"action=query&prop={$name}&titles=Main%20Page&{$this->prefix}namespace=2|10"
+			"action=query&prop={$name}&titles={$mp}&{$this->prefix}namespace=2|10"
 				=> "apihelp-{$path}-example-namespaces",
 		];
 	}
@@ -270,3 +267,6 @@ class ApiQueryLinks extends ApiQueryGeneratorBase {
 		return $this->helpUrl;
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiQueryLinks::class, 'ApiQueryLinks' );

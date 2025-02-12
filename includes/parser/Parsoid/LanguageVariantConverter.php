@@ -2,71 +2,51 @@
 
 namespace MediaWiki\Parser\Parsoid;
 
+use MediaWiki\Language\LanguageCode;
 use MediaWiki\Languages\LanguageConverterFactory;
 use MediaWiki\Languages\LanguageFactory;
 use MediaWiki\Page\PageIdentity;
+use MediaWiki\Parser\ParserOutput;
 use MediaWiki\Parser\Parsoid\Config\PageConfigFactory;
 use MediaWiki\Rest\HttpException;
+use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Revision\RevisionAccessException;
 use MediaWiki\Title\Title;
 use MediaWiki\Title\TitleFactory;
-use ParserOutput;
 use Wikimedia\Bcp47Code\Bcp47Code;
 use Wikimedia\Bcp47Code\Bcp47CodeValue;
+use Wikimedia\Message\MessageValue;
 use Wikimedia\Parsoid\Config\PageConfig;
 use Wikimedia\Parsoid\Config\SiteConfig;
 use Wikimedia\Parsoid\Core\PageBundle;
+use Wikimedia\Parsoid\DOM\Element;
 use Wikimedia\Parsoid\Parsoid;
+use Wikimedia\Parsoid\Utils\DOMCompat;
+use Wikimedia\Parsoid\Utils\DOMUtils;
 
 /**
  * @since 1.40
  * @unstable should be marked stable before 1.40 release
  */
 class LanguageVariantConverter {
-	/** @var PageConfigFactory */
-	private $pageConfigFactory;
-
-	/** @var PageConfig */
-	private $pageConfig;
-
-	/** @var PageIdentity */
-	private $pageIdentity;
-
-	/** @var Title */
-	private $pageTitle;
-
-	/** @var Parsoid */
-	private $parsoid;
-
-	/** @var array */
-	private $parsoidSettings;
-
-	/** @var SiteConfig */
-	private $siteConfig;
-
-	/** @var TitleFactory */
-	private $titleFactory;
-
-	/** @var LanguageConverterFactory */
-	private $languageConverterFactory;
-
-	/** @var LanguageFactory */
-	private $languageFactory;
-
+	private PageConfigFactory $pageConfigFactory;
+	private ?PageConfig $pageConfig = null;
+	private PageIdentity $pageIdentity;
+	private Title $pageTitle;
+	private Parsoid $parsoid;
+	private SiteConfig $siteConfig;
+	private LanguageConverterFactory $languageConverterFactory;
+	private LanguageFactory $languageFactory;
 	/**
 	 * Page language override from the Content-Language header.
-	 * @var ?Bcp47Code
 	 */
-	private $pageLanguageOverride;
-
-	/** @var bool */
-	private $isFallbackLanguageConverterEnabled = true;
+	private ?Bcp47Code $pageLanguageOverride = null;
+	private bool $isFallbackLanguageConverterEnabled = true;
 
 	public function __construct(
 		PageIdentity $pageIdentity,
 		PageConfigFactory $pageConfigFactory,
 		Parsoid $parsoid,
-		array $parsoidSettings,
 		SiteConfig $siteConfig,
 		TitleFactory $titleFactory,
 		LanguageConverterFactory $languageConverterFactory,
@@ -75,14 +55,10 @@ class LanguageVariantConverter {
 		$this->pageConfigFactory = $pageConfigFactory;
 		$this->pageIdentity = $pageIdentity;
 		$this->parsoid = $parsoid;
-		$this->parsoidSettings = $parsoidSettings;
 		$this->siteConfig = $siteConfig;
-		$this->titleFactory = $titleFactory;
-		// @phan-suppress-next-line PhanPossiblyNullTypeMismatchProperty
-		$this->pageTitle = $this->titleFactory->castFromPageIdentity( $this->pageIdentity );
+		$this->pageTitle = $titleFactory->newFromPageIdentity( $this->pageIdentity );
 		$this->languageConverterFactory = $languageConverterFactory;
 		$this->languageFactory = $languageFactory;
-		$this->pageLanguageOverride = null;
 	}
 
 	/**
@@ -114,7 +90,7 @@ class LanguageVariantConverter {
 	 * @param ?Bcp47Code $sourceVariant
 	 *
 	 * @return PageBundle The converted PageBundle, or the object passed in as
-	 * 	       $pageBundle if the conversion is not supported.
+	 *         $pageBundle if the conversion is not supported.
 	 * @throws HttpException
 	 */
 	public function convertPageBundleVariant(
@@ -132,7 +108,17 @@ class LanguageVariantConverter {
 
 		$pageConfig = $this->getPageConfig( $pageLanguage, $sourceVariant );
 
-		if ( !$this->parsoid->implementsLanguageConversionBcp47( $pageConfig, $targetVariant ) ) {
+		if ( $this->parsoid->implementsLanguageConversionBcp47( $pageConfig, $targetVariant ) ) {
+			return $this->parsoid->pb2pb(
+				$pageConfig, 'variant', $pageBundle,
+				[
+					'variant' => [
+						'source' => $sourceVariant,
+						'target' => $targetVariant,
+					]
+				]
+			);
+		} else {
 			if ( !$this->isFallbackLanguageConverterEnabled ) {
 				// Fallback variant conversion is not enabled, return the page bundle as is.
 				return $pageBundle;
@@ -145,40 +131,38 @@ class LanguageVariantConverter {
 			$languageConverter = $this->languageConverterFactory->getLanguageConverter( $baseLanguage );
 			$targetVariantCode = $this->languageFactory->getLanguage( $targetVariant )->getCode();
 			if ( $languageConverter->hasVariant( $targetVariantCode ) ) {
+				// NOTE: This is not a convert() because we have the exact desired variant
+				// and don't need to compute a preferred variant based on a base language.
+				// Also see T267067 for why convert() should be avoided.
 				$convertedHtml = $languageConverter->convertTo( $pageBundle->html, $targetVariantCode );
+				$pageVariant = $targetVariant;
 			} else {
-				// No conversion possible - pass through original HTML.
+				// No conversion possible - pass through original HTML in original language
 				$convertedHtml = $pageBundle->html;
+				$pageVariant = $pageConfig->getPageLanguageBcp47();
 			}
 
 			// Add a note so that we can identify what was used to perform the variant conversion
 			$msg = "<!-- Variant conversion performed using the core LanguageConverter -->";
 			$convertedHtml = $msg . $convertedHtml;
 
-			// HACK: Pass the HTML to Parsoid for variant conversion in order to add metadata that is
-			// missing when we use the core LanguageConverter directly.
-
-			// Replace the original page bundle, so Parsoid gets the converted HTML as input.
-			$pageBundle = new PageBundle(
-				$convertedHtml,
-				[],
-				[],
-				$pageBundle->version,
-				[ 'content-language' => $targetVariant->toBcp47Code() ]
+			// NOTE: Keep this in sync with code in Parsoid.php in Parsoid repo
+			// Add meta information that Parsoid normally adds
+			$headers = [
+				'content-language' => $pageVariant->toBcp47Code(),
+				'vary' => [ 'Accept', 'Accept-Language' ]
+			];
+			$doc = DOMUtils::parseHTML( '' );
+			$doc->appendChild( $doc->createElement( 'head' ) );
+			DOMUtils::addHttpEquivHeaders( $doc, $headers );
+			$docElt = $doc->documentElement;
+			'@phan-var Element $docElt';
+			$docHtml = DOMCompat::getOuterHTML( $docElt );
+			$convertedHtml = preg_replace( "#</body>#", $docHtml, "$convertedHtml</body>" );
+			return new PageBundle(
+				$convertedHtml, [], [], $pageBundle->version, $headers
 			);
 		}
-
-		$modifiedPageBundle = $this->parsoid->pb2pb(
-			$pageConfig, 'variant', $pageBundle,
-			[
-				'variant' => [
-					'source' => $sourceVariant,
-					'target' => $targetVariant,
-				]
-			]
-		);
-
-		return $modifiedPageBundle;
 	}
 
 	/**
@@ -203,7 +187,6 @@ class LanguageVariantConverter {
 
 	/**
 	 * Disable fallback language variant converter
-	 * @return void
 	 */
 	public function disableFallbackLanguageConverter(): void {
 		$this->isFallbackLanguageConverterEnabled = false;
@@ -220,8 +203,7 @@ class LanguageVariantConverter {
 				null,
 				null,
 				null,
-				$pageLanguage,
-				$this->parsoidSettings
+				$pageLanguage
 			);
 
 			if ( $sourceVariant ) {
@@ -230,7 +212,7 @@ class LanguageVariantConverter {
 		} catch ( RevisionAccessException $exception ) {
 			// TODO: Throw a different exception, this class should not know
 			//       about HTTP status codes.
-			throw new HttpException( 'The specified revision is deleted or suppressed.', 404 );
+			throw new LocalizedHttpException( new MessageValue( "rest-specified-revision-unavailable" ), 404 );
 		}
 
 		return $this->pageConfig;
@@ -327,11 +309,18 @@ class LanguageVariantConverter {
 			$baseLanguage = $parentLang;
 		}
 
-		// If the source variant isn't actually a variant, trigger auto-detection
-		// FIXME: This should probably use LanguageConverter::validateVariant()
-		// as well, but we'd need a LanguageConverterFactory for that.
-		if ( $sourceLanguage && strcasecmp( $sourceLanguage->toBcp47Code(), $baseLanguage->toBcp47Code() ) === 0 ) {
-			$sourceLanguage = null;
+		if ( $sourceLanguage !== null ) {
+			$parentConverter = $this->languageConverterFactory->getLanguageConverter( $parentLang );
+			// If the source variant isn't actually a variant, trigger auto-detection
+			$sourceIsVariant = (
+				strcasecmp( $parentLang->toBcp47Code(), $sourceLanguage->toBcp47Code() ) !== 0 &&
+				$parentConverter->hasVariant(
+					LanguageCode::bcp47ToInternal( $sourceLanguage->toBcp47Code() )
+				)
+			);
+			if ( !$sourceIsVariant ) {
+				$sourceLanguage = null;
+			}
 		}
 
 		return [ $baseLanguage, $sourceLanguage ];

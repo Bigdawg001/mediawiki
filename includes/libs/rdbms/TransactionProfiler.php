@@ -19,14 +19,13 @@
  */
 namespace Wikimedia\Rdbms;
 
-use Liuggio\StatsdClient\Factory\StatsdDataFactoryInterface;
-use NullStatsdDataFactory;
+use InvalidArgumentException;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use RuntimeException;
-use StatsdAwareInterface;
 use Wikimedia\ScopedCallback;
+use Wikimedia\Stats\StatsFactory;
 
 /**
  * Detect high-contention DB queries via profiling calls.
@@ -38,11 +37,11 @@ use Wikimedia\ScopedCallback;
  * @ingroup Profiler
  * @ingroup Database
  */
-class TransactionProfiler implements LoggerAwareInterface, StatsdAwareInterface {
+class TransactionProfiler implements LoggerAwareInterface {
 	/** @var LoggerInterface */
 	private $logger;
-	/** @var StatsdDataFactoryInterface */
-	private $stats;
+	/** @var StatsFactory */
+	private $statsFactory;
 	/** @var array<string,array> Map of (event name => map of FLD_* class constants) */
 	private $expect;
 	/** @var array<string,int> Map of (event name => current hits) */
@@ -60,7 +59,7 @@ class TransactionProfiler implements LoggerAwareInterface, StatsdAwareInterface 
 
 	/**
 	 * @var array[][] Map of (trx ID => list of (query name, start time, end time))
-	 * @phan-var array<string,array<int,array{0:string,1:float,2:float}>>
+	 * @phan-var array<string,array<int,array{0:string|GeneralizedSQL,1:float,2:float}>>
 	 */
 	private $dbTrxMethodTimes;
 
@@ -114,15 +113,21 @@ class TransactionProfiler implements LoggerAwareInterface, StatsdAwareInterface 
 		$this->silenced = array_fill_keys( self::EVENT_NAMES, 0 );
 
 		$this->setLogger( new NullLogger() );
-		$this->setStatsdDataFactory( new NullStatsdDataFactory() );
+		$this->statsFactory = StatsFactory::newNull();
 	}
 
 	public function setLogger( LoggerInterface $logger ) {
 		$this->logger = $logger;
 	}
 
-	public function setStatsdDataFactory( StatsdDataFactoryInterface $statsFactory ) {
-		$this->stats = $statsFactory;
+	/**
+	 * Set statsFactory
+	 *
+	 * @param StatsFactory $statsFactory
+	 * @return void
+	 */
+	public function setStatsFactory( StatsFactory $statsFactory ) {
+		$this->statsFactory = $statsFactory;
 	}
 
 	/**
@@ -131,23 +136,6 @@ class TransactionProfiler implements LoggerAwareInterface, StatsdAwareInterface 
 	 */
 	public function setRequestMethod( ?string $method ) {
 		$this->method = $method;
-	}
-
-	/**
-	 * @param bool $value
-	 * @return bool Old value
-	 * @since 1.28
-	 * @deprecated Since 1.40
-	 */
-	public function setSilenced( bool $value ) {
-		wfDeprecated( __METHOD__, '1.40' );
-
-		$delta = $value ? 1 : -1;
-		foreach ( self::EVENT_NAMES as $event ) {
-			$this->silenced[$event] += $delta;
-		}
-
-		return false;
 	}
 
 	/**
@@ -256,15 +244,38 @@ class TransactionProfiler implements LoggerAwareInterface, StatsdAwareInterface 
 	}
 
 	/**
+	 * Get the expectation associated with a specific event name.
+	 *
+	 * This will return the value of the expectation even if the event is silenced.
+	 *
+	 * Use this to check if a specific event is allowed before performing it, such as checking
+	 * if the request will allow writes before performing them and instead deferring the writes
+	 * to outside the request.
+	 *
+	 * @since 1.44
+	 * @param string $event Event name. Valid event names are defined in {@see self::EVENT_NAMES}
+	 * @return float|int Maximum event count, event value, or total event value
+	 *    depending on the type of event.
+	 * @throws InvalidArgumentException If the provided event name is not one in {@see self::EVENT_NAMES}
+	 */
+	public function getExpectation( string $event ) {
+		if ( !isset( $this->expect[$event] ) ) {
+			throw new InvalidArgumentException( "Unrecognised event name '$event' provided." );
+		}
+
+		return $this->expect[$event][self::FLD_LIMIT];
+	}
+
+	/**
 	 * Mark a DB as having been connected to with a new handle
 	 *
 	 * Note that there can be multiple connections to a single DB.
 	 *
 	 * @param string $server DB server
 	 * @param string|null $db DB name
-	 * @param bool $isPrimary
+	 * @param bool $isPrimaryWithReplicas If the server is the primary and there are replicas
 	 */
-	public function recordConnection( $server, $db, bool $isPrimary ) {
+	public function recordConnection( $server, $db, bool $isPrimaryWithReplicas ) {
 		// Report when too many connections happen...
 		if ( $this->pingAndCheckThreshold( 'conns' ) ) {
 			$this->reportExpectationViolated(
@@ -275,7 +286,7 @@ class TransactionProfiler implements LoggerAwareInterface, StatsdAwareInterface 
 		}
 
 		// Report when too many primary connections happen...
-		if ( $isPrimary && $this->pingAndCheckThreshold( 'masterConns' ) ) {
+		if ( $isPrimaryWithReplicas && $this->pingAndCheckThreshold( 'masterConns' ) ) {
 			$this->reportExpectationViolated(
 				'masterConns',
 				"[connect to $server ($db)]",
@@ -292,14 +303,15 @@ class TransactionProfiler implements LoggerAwareInterface, StatsdAwareInterface 
 	 * @param string $server DB server
 	 * @param string|null $db DB name
 	 * @param string $id ID string of transaction
+	 * @param float $startTime UNIX timestamp
 	 */
-	public function transactionWritingIn( $server, $db, string $id ) {
+	public function transactionWritingIn( $server, $db, string $id, float $startTime ) {
 		$name = "{$db} {$server} TRX#$id";
 		if ( isset( $this->dbTrxHoldingLocks[$name] ) ) {
 			$this->logger->warning( "Nested transaction for '$name' - out of sync." );
 		}
 		$this->dbTrxHoldingLocks[$name] = [
-			'start' => $this->getCurrentTime(),
+			'start' => $startTime,
 			'conns' => [], // all connections involved
 		];
 		$this->dbTrxMethodTimes[$name] = [];
@@ -454,9 +466,9 @@ class TransactionProfiler implements LoggerAwareInterface, StatsdAwareInterface 
 				$trace .= sprintf(
 					"%-2d %.3fs %s\n", $i, ( $end - $sTime ), $this->getGeneralizedSql( $query ) );
 			}
-			$this->logger->warning( "Sub-optimal transaction [{dbs}]:\n{trace}", [
+			$this->logger->warning( "Suboptimal transaction [{dbs}]:\n{trace}", [
 				'dbs' => implode( ', ', array_keys( $this->dbTrxHoldingLocks[$name]['conns'] ) ),
-				'trace' => $trace
+				'trace' => mb_substr( $trace, 0, 2000 )
 			] );
 		}
 		unset( $this->dbTrxHoldingLocks[$name] );
@@ -518,7 +530,11 @@ class TransactionProfiler implements LoggerAwareInterface, StatsdAwareInterface 
 		$violations = ++$this->violations[$event];
 		// First violation; check if this is a web request
 		if ( $violations === 1 && $this->method !== null ) {
-			$this->stats->increment( "rdbms_trxprofiler_warnings.$event.{$this->method}" );
+			$this->statsFactory->getCounter( 'rdbms_trxprofiler_warnings_total' )
+				->setLabel( 'event', $event )
+				->setLabel( 'method', $this->method )
+				->copyToStatsdAt( "rdbms_trxprofiler_warnings.$event.{$this->method}" )
+				->increment();
 		}
 
 		$max = $this->expect[$event][self::FLD_LIMIT];
@@ -541,7 +557,8 @@ class TransactionProfiler implements LoggerAwareInterface, StatsdAwareInterface 
 				'query' => $this->getGeneralizedSql( $query ),
 				'exception' => new RuntimeException(),
 				'trxId' => $trxId,
-				'fullQuery' => $this->getRawSql( $query ),
+				// Avoid truncated JSON in Logstash (T349140)
+				'fullQuery' => mb_substr( $this->getRawSql( $query ), 0, 2000 ),
 				'dbHost' => $serverName
 			]
 		);

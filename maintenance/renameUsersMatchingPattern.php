@@ -1,20 +1,23 @@
 <?php
 
-use MediaWiki\MediaWikiServices;
-use MediaWiki\Page\MovePageFactory;
-use MediaWiki\RenameUser\RenameuserSQL;
+use MediaWiki\Maintenance\Maintenance;
+use MediaWiki\RenameUser\RenameUserFactory;
 use MediaWiki\Title\TitleFactory;
 use MediaWiki\User\TempUser\Pattern;
+use MediaWiki\User\User;
 use MediaWiki\User\UserFactory;
+use Wikimedia\Rdbms\IExpression;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 class RenameUsersMatchingPattern extends Maintenance {
 	/** @var UserFactory */
 	private $userFactory;
 
-	/** @var MovePageFactory */
-	private $movePageFactory;
+	/** @var RenameUserFactory */
+	private $renameUserFactory;
 
 	/** @var TitleFactory */
 	private $titleFactory;
@@ -55,12 +58,12 @@ class RenameUsersMatchingPattern extends Maintenance {
 	}
 
 	private function initServices() {
-		$services = MediaWikiServices::getInstance();
+		$services = $this->getServiceContainer();
 		if ( $services->getCentralIdLookupFactory()->getNonLocalLookup() ) {
 			$this->fatalError( "This script cannot be run when CentralAuth is enabled." );
 		}
 		$this->userFactory = $services->getUserFactory();
-		$this->movePageFactory = $services->getMovePageFactory();
+		$this->renameUserFactory = $services->getRenameUserFactory();
 		$this->titleFactory = $services->getTitleFactory();
 	}
 
@@ -76,8 +79,7 @@ class RenameUsersMatchingPattern extends Maintenance {
 			$performer = $this->userFactory->newFromName( $this->getOption( 'performer' ) );
 		}
 		if ( !$performer ) {
-			$this->error( "Unable to get performer account" );
-			return false;
+			$this->fatalError( "Unable to get performer account" );
 		}
 		$this->performer = $performer;
 
@@ -86,7 +88,7 @@ class RenameUsersMatchingPattern extends Maintenance {
 		$this->suppressRedirect = $this->getOption( 'suppress-redirect' );
 		$this->skipPageMoves = $this->getOption( 'skip-page-moves' );
 
-		$dbr = $this->getDB( DB_REPLICA );
+		$dbr = $this->getReplicaDB();
 		$batchConds = [];
 		$batchSize = $this->getBatchSize();
 		$numRenamed = 0;
@@ -94,10 +96,8 @@ class RenameUsersMatchingPattern extends Maintenance {
 			$res = $dbr->newSelectQueryBuilder()
 				->select( [ 'user_name' ] )
 				->from( 'user' )
-				->where( array_merge(
-					[ 'user_name' . $fromPattern->buildLike( $dbr ) ],
-					$batchConds
-				) )
+				->where( $dbr->expr( 'user_name', IExpression::LIKE, $fromPattern->toLikeValue( $dbr ) ) )
+				->andWhere( $batchConds )
 				->orderBy( 'user_name' )
 				->limit( $batchSize )
 				->caller( __METHOD__ )
@@ -105,7 +105,7 @@ class RenameUsersMatchingPattern extends Maintenance {
 
 			foreach ( $res as $row ) {
 				$oldName = $row->user_name;
-				$batchConds = [ 'user_name > ' . $dbr->addQuotes( $oldName ) ];
+				$batchConds = [ $dbr->expr( 'user_name', '>', $oldName ) ];
 				$variablePart = $fromPattern->extract( $oldName );
 				if ( $variablePart === null ) {
 					$this->output( "Username \"fromName\" matched the LIKE " .
@@ -113,6 +113,24 @@ class RenameUsersMatchingPattern extends Maintenance {
 					continue;
 				}
 				$newName = $toPattern->generate( $variablePart );
+
+				// Canonicalize
+				$newTitle = $this->titleFactory->makeTitleSafe( NS_USER, $newName );
+				$newUser = $this->userFactory->newFromName( $newName );
+				if ( !$newTitle || !$newUser ) {
+					$this->output( "Cannot rename \"$oldName\" " .
+						"because \"$newName\" is not a valid title\n" );
+					continue;
+				}
+				$newName = $newTitle->getText();
+
+				// Check destination existence
+				if ( $newUser->isRegistered() ) {
+					$this->output( "Cannot rename \"$oldName\" " .
+						"because \"$newName\" already exists\n" );
+					continue;
+				}
+
 				$numRenamed += $this->renameUser( $oldName, $newName ) ? 1 : 0;
 				$this->waitForReplication();
 			}
@@ -127,82 +145,46 @@ class RenameUsersMatchingPattern extends Maintenance {
 	 * @return bool True if the user was renamed
 	 */
 	private function renameUser( $oldName, $newName ) {
-		$id = $this->userFactory->newFromName( $oldName )->getId();
+		$oldUser = $this->userFactory->newFromName( $oldName );
+		if ( !$oldUser ) {
+			$this->output( "Invalid user name \"$oldName\"" );
+			return false;
+		}
+
+		$id = $oldUser->getId();
 		if ( !$id ) {
 			$this->output( "Cannot rename non-existent user \"$oldName\"" );
+			return false;
 		}
 
 		if ( $this->dryRun ) {
 			$this->output( "$oldName would be renamed to $newName\n" );
 		} else {
-			$renamer = new RenameuserSQL(
-				$oldName,
-				$newName,
-				$id,
-				$this->performer,
-				[
-					'reason' => $this->reason
-				]
-			);
+			$rename = $this->renameUserFactory->newRenameUser( $this->performer, $oldUser, $newName, $this->reason, [
+				'forceGlobalDetach' => $this->getOption( 'force-global-detach' ),
+				'movePages' => !$this->getOption( 'skip-page-moves' ),
+				'suppressRedirect' => $this->getOption( 'suppress-redirect' ),
+			] );
+			$status = $rename->renameGlobal();
 
-			if ( !$renamer->rename() ) {
-				$this->output( "Unable to rename $oldName" );
-				return false;
-			} else {
+			if ( $status->isGood() ) {
 				$this->output( "$oldName was successfully renamed to $newName.\n" );
-			}
-		}
-
-		if ( $this->skipPageMoves ) {
-			return true;
-		}
-
-		$this->movePageAndSubpages( NS_USER, 'User', $oldName, $newName );
-		$this->movePageAndSubpages( NS_USER_TALK, 'User talk', $oldName, $newName );
-		return true;
-	}
-
-	private function movePageAndSubpages( $ns, $nsName, $oldName, $newName ) {
-		$oldTitle = $this->titleFactory->makeTitleSafe( $ns, $oldName );
-		if ( !$oldTitle ) {
-			$this->output( "[[$nsName:$oldName]] is an invalid title, can't move it.\n" );
-			return true;
-		}
-		$newTitle = $this->titleFactory->makeTitleSafe( $ns, $newName );
-		if ( !$newTitle ) {
-			$this->output( "[[$nsName:$newName]] is an invalid title, can't move to it.\n" );
-			return true;
-		}
-
-		$movePage = $this->movePageFactory->newMovePage( $oldTitle, $newTitle );
-		$movePage->setMaximumMovedPages( -1 );
-
-		$logMessage = wfMessage(
-			'renameuser-move-log', $oldName, $newName
-		)->inContentLanguage()->text();
-
-		if ( $this->dryRun ) {
-			if ( $oldTitle->exists() ) {
-				$this->output( "Would move [[$nsName:$oldName]] to [[$nsName:$newName]].\n" );
-			}
-		} else {
-			if ( $oldTitle->exists() ) {
-				$status = $movePage->move(
-					$this->performer, $logMessage, !$this->suppressRedirect );
 			} else {
-				$status = Status::newGood();
-			}
-			$status->merge( $movePage->moveSubpages(
-				$this->performer, $logMessage, !$this->suppressRedirect ) );
-			if ( !$status->isGood() ) {
-				$this->output( "Failed to rename user page: " .
-					$status->getWikiText( false, false, 'en' ) .
-					"\n" );
+				if ( $status->isOK() ) {
+					$this->output( "$oldName was renamed to $newName.\n" );
+				} else {
+					$this->output( "Unable to rename $oldName.\n" );
+				}
+				foreach ( $status->getMessages() as $msg ) {
+					$this->output( '  - ' . wfMessage( $msg )->text() );
+				}
 			}
 		}
 		return true;
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = RenameUsersMatchingPattern::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

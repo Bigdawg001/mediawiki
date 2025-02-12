@@ -19,11 +19,14 @@
 
 use MediaWiki\Category\CategoriesRdf;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Maintenance\Maintenance;
 use Wikimedia\Purtle\RdfWriter;
 use Wikimedia\Purtle\RdfWriterFactory;
-use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IReadableDatabase;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script to provide RDF representation of the category tree.
@@ -55,63 +58,56 @@ class DumpCategoriesAsRdf extends Maintenance {
 
 	/**
 	 * Produce row iterator for categories.
-	 * @param IDatabase $dbr Database connection
+	 * @param IReadableDatabase $dbr
 	 * @param string $fname Name of the calling function
 	 * @return RecursiveIterator
 	 */
-	public function getCategoryIterator( IDatabase $dbr, $fname ) {
+	public function getCategoryIterator( IReadableDatabase $dbr, $fname ) {
 		$it = new BatchRowIterator(
 			$dbr,
-			[ 'page', 'page_props', 'category' ],
+			$dbr->newSelectQueryBuilder()
+				->from( 'page' )
+				->leftJoin( 'page_props', null, [ 'pp_propname' => 'hiddencat', 'pp_page = page_id' ] )
+				->leftJoin( 'category', null, [ 'cat_title = page_title' ] )
+				->select( [
+					'page_title',
+					'page_id',
+					'pp_propname',
+					'cat_pages',
+					'cat_subcats',
+					'cat_files'
+				] )
+				->where( [
+					'page_namespace' => NS_CATEGORY,
+				] )
+				->caller( $fname ),
 			[ 'page_title' ],
 			$this->getBatchSize()
 		);
-		$it->addConditions( [
-			'page_namespace' => NS_CATEGORY,
-		] );
-		$it->setFetchColumns( [
-			'page_title',
-			'page_id',
-			'pp_propname',
-			'cat_pages',
-			'cat_subcats',
-			'cat_files'
-		] );
-		$it->addJoinConditions(
-			[
-				'page_props' => [
-					'LEFT JOIN', [ 'pp_propname' => 'hiddencat', 'pp_page = page_id' ]
-				],
-				'category' => [
-					'LEFT JOIN', [ 'cat_title = page_title' ]
-				]
-			]
-
-		);
-		$it->setCaller( $fname );
 		return $it;
 	}
 
 	/**
 	 * Get iterator for links for categories.
-	 * @param IDatabase $dbr
+	 * @param IReadableDatabase $dbr
 	 * @param int[] $ids List of page IDs
 	 * @param string $fname Name of the calling function
 	 * @return Traversable
 	 */
-	public function getCategoryLinksIterator( IDatabase $dbr, array $ids, $fname ) {
+	public function getCategoryLinksIterator( IReadableDatabase $dbr, array $ids, $fname ) {
 		$it = new BatchRowIterator(
 			$dbr,
-			'categorylinks',
+			$dbr->newSelectQueryBuilder()
+				->from( 'categorylinks' )
+				->select( [ 'cl_from', 'cl_to' ] )
+				->where( [
+					'cl_type' => 'subcat',
+					'cl_from' => $ids
+				] )
+				->caller( $fname ),
 			[ 'cl_from', 'cl_to' ],
 			$this->getBatchSize()
 		);
-		$it->addConditions( [
-			'cl_type' => 'subcat',
-			'cl_from' => $ids
-		] );
-		$it->setFetchColumns( [ 'cl_from', 'cl_to' ] );
-		$it->setCaller( $fname );
 		return new RecursiveIteratorIterator( $it );
 	}
 
@@ -120,9 +116,10 @@ class DumpCategoriesAsRdf extends Maintenance {
 	 */
 	public function addDumpHeader( $timestamp ) {
 		$licenseUrl = $this->getConfig()->get( MainConfigNames::RightsUrl );
-		if ( substr( $licenseUrl, 0, 2 ) == '//' ) {
+		if ( str_starts_with( $licenseUrl, '//' ) ) {
 			$licenseUrl = 'https:' . $licenseUrl;
 		}
+		$urlUtils = $this->getServiceContainer()->getUrlUtils();
 		$this->rdfWriter->about( $this->categoriesRdf->getDumpURI() )
 			->a( 'schema', 'Dataset' )
 			->a( 'owl', 'Ontology' )
@@ -130,7 +127,7 @@ class DumpCategoriesAsRdf extends Maintenance {
 			->say( 'schema', 'softwareVersion' )->value( CategoriesRdf::FORMAT_VERSION )
 			->say( 'schema', 'dateModified' )
 			->value( wfTimestamp( TS_ISO_8601, $timestamp ), 'xsd', 'dateTime' )
-			->say( 'schema', 'isPartOf' )->is( wfExpandUrl( '/', PROTO_CANONICAL ) )
+			->say( 'schema', 'isPartOf' )->is( (string)$urlUtils->expand( '/', PROTO_CANONICAL ) )
 			->say( 'owl', 'imports' )->is( CategoriesRdf::OWL_URL );
 	}
 
@@ -188,5 +185,7 @@ class DumpCategoriesAsRdf extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = DumpCategoriesAsRdf::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

@@ -11,16 +11,10 @@ use MediaWiki\Settings\Source\SettingsFileUtils;
  */
 class LocalSettingsLoader {
 
-	/** @var SettingsBuilder */
-	private $settingsBuilder;
+	private SettingsBuilder $settingsBuilder;
 
-	/** @var string */
-	private $baseDir;
+	private string $baseDir;
 
-	/**
-	 * @param SettingsBuilder $settingsBuilder
-	 * @param string $baseDir
-	 */
 	public function __construct( SettingsBuilder $settingsBuilder, string $baseDir ) {
 		$this->settingsBuilder = $settingsBuilder;
 		$this->baseDir = $baseDir;
@@ -52,7 +46,7 @@ class LocalSettingsLoader {
 		}
 
 		// make available some non-config globals available
-		// phpcs:ignore MediaWiki.VariableAnalysis.UnusedGlobalVariables.UnusedGlobal$wgCommandLineMode
+		// phpcs:ignore MediaWiki.VariableAnalysis.UnusedGlobalVariables.UnusedGlobal$wgCommandLineMode, MediaWiki.Usage.DeprecatedGlobalVariables
 		global $wgCommandLineMode;
 
 		// make additional variables available

@@ -21,20 +21,23 @@
 namespace MediaWiki\ResourceLoader;
 
 use Composer\Spdx\SpdxLicenses;
-use Exception;
+use LogicException;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
 use PharData;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use SplFileInfo;
 use Symfony\Component\Yaml\Yaml;
+use Wikimedia\UUID\GlobalIdGenerator;
 
 /**
  * Manage foreign resources registered with ResourceLoader.
  *
  * @since 1.32
  * @ingroup ResourceLoader
+ * @see https://www.mediawiki.org/wiki/Foreign_resources
  */
 class ForeignResourceManager {
 	/** @var string */
@@ -78,6 +81,8 @@ class ForeignResourceManager {
 	/** @var array[] */
 	private $registry;
 
+	private GlobalIdGenerator $globalIdGenerator;
+
 	/**
 	 * @param string $registryFile Path to YAML file
 	 * @param string $libDir Path to a modules directory
@@ -89,10 +94,11 @@ class ForeignResourceManager {
 	public function __construct(
 		$registryFile,
 		$libDir,
-		callable $infoPrinter = null,
-		callable $errorPrinter = null,
-		callable $verbosePrinter = null
+		?callable $infoPrinter = null,
+		?callable $errorPrinter = null,
+		?callable $verbosePrinter = null
 	) {
+		$this->globalIdGenerator = MediaWikiServices::getInstance()->getGlobalIdGenerator();
 		$this->registryFile = $registryFile;
 		$this->libDir = $libDir;
 		$this->infoPrinter = $infoPrinter ?? static function ( $_ ) {
@@ -102,13 +108,17 @@ class ForeignResourceManager {
 		};
 
 		// Support XDG_CACHE_HOME to speed up CI by avoiding repeated downloads.
-		$conf = MediaWikiServices::getInstance()->getMainConfig();
-		if ( ( $cacheHome = getenv( 'XDG_CACHE_HOME' ) ) !== false ) {
+		$cacheHome = getenv( 'XDG_CACHE_HOME' );
+		if ( $cacheHome !== false ) {
 			$this->cacheDir = realpath( $cacheHome ) . '/mw-foreign';
-		} elseif ( ( $cacheConf = $conf->get( MainConfigNames::CacheDirectory ) ) !== false ) {
-			$this->cacheDir = "$cacheConf/ForeignResourceManager";
 		} else {
-			$this->cacheDir = "{$this->libDir}/.foreign/cache";
+			$conf = MediaWikiServices::getInstance()->getMainConfig();
+			$cacheConf = $conf->get( MainConfigNames::CacheDirectory );
+			if ( $cacheConf !== false ) {
+				$this->cacheDir = "$cacheConf/ForeignResourceManager";
+			} else {
+				$this->cacheDir = "{$this->libDir}/.foreign/cache";
+			}
 		}
 	}
 
@@ -116,10 +126,10 @@ class ForeignResourceManager {
 	 * @param string $action
 	 * @param string $module
 	 * @return bool
-	 * @throws Exception
+	 * @throws LogicException
 	 */
 	public function run( $action, $module ) {
-		$actions = [ 'update', 'verify', 'make-sri' ];
+		$actions = [ 'update', 'verify', 'make-sri', 'make-cdx' ];
 		if ( !in_array( $action, $actions ) ) {
 			$this->error( "Invalid action.\n\nMust be one of " . implode( ', ', $actions ) . '.' );
 			return false;
@@ -140,6 +150,17 @@ class ForeignResourceManager {
 			return false;
 		}
 
+		if ( $this->action === 'make-cdx' ) {
+			$cdxFile = $this->getCdxFileLocation();
+			$cdxJson = json_encode(
+				$this->generateCdxForModules( $modules ),
+				JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
+			);
+			file_put_contents( $cdxFile, $cdxJson );
+			$this->output( "Created CycloneDX file at $cdxFile\n" );
+			return true;
+		}
+
 		foreach ( $modules as $moduleName => $info ) {
 			$this->verbose( "\n### {$moduleName}\n\n" );
 
@@ -156,10 +177,15 @@ class ForeignResourceManager {
 			// depending on action.
 
 			if ( !isset( $info['type'] ) ) {
-				throw new Exception( "Module '$moduleName' must have a 'type' key." );
+				throw new LogicException( "Module '$moduleName' must have a 'type' key." );
 			}
 
 			$this->validateLicense( $moduleName, $info );
+
+			if ( $info['type'] === 'doc-only' ) {
+				$this->output( "... {$moduleName} is documentation-only, skipping integrity checks.\n" );
+				continue;
+			}
 
 			$destDir = "{$this->libDir}/$moduleName";
 
@@ -171,12 +197,13 @@ class ForeignResourceManager {
 			$this->verbose( "... preparing {$this->tmpParentDir}\n" );
 			wfRecursiveRemoveDir( $this->tmpParentDir );
 			if ( !wfMkdirParents( $this->tmpParentDir ) ) {
-				throw new Exception( "Unable to create {$this->tmpParentDir}" );
+				throw new LogicException( "Unable to create {$this->tmpParentDir}" );
 			}
 
 			switch ( $info['type'] ) {
 				case 'tar':
-					$this->handleTypeTar( $moduleName, $destDir, $info );
+				case 'zip':
+					$this->handleTypeTar( $moduleName, $destDir, $info, $info['type'] );
 					break;
 				case 'file':
 					$this->handleTypeFile( $moduleName, $destDir, $info );
@@ -185,7 +212,7 @@ class ForeignResourceManager {
 					$this->handleTypeMultiFile( $moduleName, $destDir, $info );
 					break;
 				default:
-					throw new Exception( "Unknown type '{$info['type']}' for '$moduleName'" );
+					throw new LogicException( "Unknown type '{$info['type']}' for '$moduleName'" );
 			}
 		}
 
@@ -199,6 +226,24 @@ class ForeignResourceManager {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Returns a JSON string describing the foreign resources in a CycloneDX format.
+	 */
+	public function generateCdx(): string {
+		$this->registry = Yaml::parseFile( $this->registryFile );
+		return json_encode(
+			$this->generateCdxForModules( $this->registry ),
+			JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
+		);
+	}
+
+	/**
+	 * Get the path to the CycloneDX file that describes the foreign resources.
+	 */
+	public function getCdxFileLocation(): string {
+		return "$this->libDir/foreign-resources.cdx.json";
 	}
 
 	/**
@@ -267,13 +312,20 @@ class ForeignResourceManager {
 			}
 		}
 
-		$req = MediaWikiServices::getInstance()->getHttpRequestFactory()
+		$services = MediaWikiServices::getInstance();
+		$req = $services->getHttpRequestFactory()
 			->create( $src, [ 'method' => 'GET', 'followRedirects' => false ], __METHOD__ );
-		if ( !$req->execute()->isOK() ) {
-			throw new Exception( "Failed to download resource at {$src}" );
+		$reqStatusValue = $req->execute();
+		if ( !$reqStatusValue->isOK() ) {
+			$message = "Failed to download resource at {$src}";
+			$reqError = $reqStatusValue->getMessages( 'error' )[0] ?? null;
+			if ( $reqError !== null ) {
+				$message .= ': ' . Message::newFromSpecifier( $reqError )->inLanguage( 'en' )->plain();
+			}
+			throw new ForeignResourceNetworkException( $message );
 		}
 		if ( $req->getStatus() !== 200 ) {
-			throw new Exception( "Unexpected HTTP {$req->getStatus()} response from {$src}" );
+			throw new ForeignResourceNetworkException( "Unexpected HTTP {$req->getStatus()} response from {$src}" );
 		}
 		$data = $req->getContent();
 		$algo = $integrity === null ? $this->defaultAlgo : explode( '-', $integrity )[0];
@@ -286,7 +338,7 @@ class ForeignResourceManager {
 			$this->output( "Integrity for {$src}\n\tintegrity: {$actualIntegrity}\n" );
 		} else {
 			$expectedIntegrity = $integrity ?? 'null';
-			throw new Exception( "Integrity check failed for {$src}\n" .
+			throw new ForeignResourceNetworkException( "Integrity check failed for {$src}\n" .
 				"\tExpected: {$expectedIntegrity}\n" .
 				"\tActual: {$actualIntegrity}"
 			);
@@ -301,7 +353,7 @@ class ForeignResourceManager {
 	 */
 	private function handleTypeFile( $moduleName, $destDir, array $info ) {
 		if ( !isset( $info['src'] ) ) {
-			throw new Exception( "Module '$moduleName' must have a 'src' key." );
+			throw new LogicException( "Module '$moduleName' must have a 'src' key." );
 		}
 		$data = $this->fetch( $info['src'], $info['integrity'] ?? null, $moduleName );
 		$dest = $info['dest'] ?? basename( $info['src'] );
@@ -322,11 +374,11 @@ class ForeignResourceManager {
 	 */
 	private function handleTypeMultiFile( $moduleName, $destDir, array $info ) {
 		if ( !isset( $info['files'] ) ) {
-			throw new Exception( "Module '$moduleName' must have a 'files' key." );
+			throw new LogicException( "Module '$moduleName' must have a 'files' key." );
 		}
 		foreach ( $info['files'] as $dest => $file ) {
 			if ( !isset( $file['src'] ) ) {
-				throw new Exception( "Module '$moduleName' file '$dest' must have a 'src' key." );
+				throw new LogicException( "Module '$moduleName' file '$dest' must have a 'src' key." );
 			}
 			$data = $this->fetch( $file['src'], $file['integrity'] ?? null, $moduleName );
 			$path = "$destDir/$dest";
@@ -343,15 +395,16 @@ class ForeignResourceManager {
 	 * @param string $moduleName
 	 * @param string $destDir
 	 * @param array $info
+	 * @param string $fileType
 	 */
-	private function handleTypeTar( $moduleName, $destDir, array $info ) {
+	private function handleTypeTar( $moduleName, $destDir, array $info, string $fileType ) {
 		$info += [ 'src' => null, 'integrity' => null, 'dest' => null ];
 		if ( $info['src'] === null ) {
-			throw new Exception( "Module '$moduleName' must have a 'src' key." );
+			throw new LogicException( "Module '$moduleName' must have a 'src' key." );
 		}
 		// Download the resource to a temporary file and open it
 		$data = $this->fetch( $info['src'], $info['integrity'], $moduleName );
-		$tmpFile = "{$this->tmpParentDir}/$moduleName.tar";
+		$tmpFile = "{$this->tmpParentDir}/$moduleName." . $fileType;
 		$this->verbose( "... writing '$moduleName' src to $tmpFile\n" );
 		file_put_contents( $tmpFile, $data );
 		$p = new PharData( $tmpFile );
@@ -369,7 +422,7 @@ class ForeignResourceManager {
 				// Use glob() to expand wildcards and check existence
 				$fromPaths = glob( "{$tmpDir}/{$fromSubPath}", GLOB_BRACE );
 				if ( !$fromPaths ) {
-					throw new Exception( "Path '$fromSubPath' of '$moduleName' not found." );
+					throw new LogicException( "Path '$fromSubPath' of '$moduleName' not found." );
 				}
 				foreach ( $fromPaths as $fromPath ) {
 					$toCopy[$fromPath] = $toSubPath === null
@@ -401,7 +454,7 @@ class ForeignResourceManager {
 				$this->verbose( "... moving $from to $to\n" );
 				wfMkdirParents( dirname( $to ) );
 				if ( !rename( $from, $to ) ) {
-					throw new Exception( "Could not move $from to $to." );
+					throw new LogicException( "Could not move $from to $to." );
 				}
 			}
 		}
@@ -456,17 +509,59 @@ class ForeignResourceManager {
 	 */
 	private function validateLicense( $moduleName, $info ) {
 		if ( !isset( $info['license'] ) || !is_string( $info['license'] ) ) {
-			throw new Exception( "Module '$moduleName' needs a valid SPDX license; no license is currently present" );
+			throw new LogicException(
+				"Module '$moduleName' needs a valid SPDX license; no license is currently present"
+			);
 		}
 		$licenses = new SpdxLicenses();
 		if ( !$licenses->validate( $info['license'] ) ) {
 			$this->error(
 				"Module '$moduleName' has an invalid SPDX license identifier '{$info['license']}', "
-				. 'see <https://spdx.org/licenses/>'
+				. "see <https://spdx.org/licenses/>.\n"
 			);
 		}
 	}
+
+	private function generateCdxForModules( array $modules ): array {
+		$cdx = [
+			'$schema' => 'http://cyclonedx.org/schema/bom-1.6.schema.json',
+			'bomFormat' => 'CycloneDX',
+			'specVersion' => '1.6',
+			'serialNumber' => 'urn:uuid:' . $this->globalIdGenerator->newUUIDv4(),
+			'version' => 1,
+			'components' => [],
+		];
+		foreach ( $modules as $moduleName => $module ) {
+			$moduleCdx = [
+				'type' => 'library',
+				'name' => $moduleName,
+				'version' => $module['version'],
+			];
+			if ( preg_match( '/ (AND|OR|WITH) /', $module['license'] ) ) {
+				$moduleCdx['licenses'][] = [ 'expression' => $module['license'] ];
+			} else {
+				$moduleCdx['licenses'][] = [ 'license' => [ 'id' => $module['license'] ] ];
+			}
+			if ( $module['purl'] ?? false ) {
+				$moduleCdx['purl'] = $module['purl'];
+			}
+			if ( $module['version'] ?? false ) {
+				$moduleCdx['version'] = $module['version'];
+			}
+			if ( $module['authors'] ?? false ) {
+				$moduleCdx['authors'] = array_map(
+					static fn ( $author ) => [ 'name' => $author ],
+					preg_split( '/,( and)? /', $module['authors'] )
+				);
+			}
+			if ( $module['homepage'] ?? false ) {
+				$moduleCdx['externalReferences'] = [ [ 'url' => $module['homepage'], 'type' => 'website' ] ];
+			}
+			$cdx['components'][] = $moduleCdx;
+		}
+		return $cdx;
+	}
 }
 
-/** @deprecated since 1.40 */
+/** @deprecated class alias since 1.40 */
 class_alias( ForeignResourceManager::class, 'ForeignResourceManager' );

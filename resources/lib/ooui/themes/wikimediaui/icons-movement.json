@@ -12,10 +12,10 @@
 			"global": true
 		},
 		"destructive": {
-			"color": "#d33"
+			"color": "#d73333"
 		},
 		"error": {
-			"color": "#d33"
+			"color": "#d73333"
 		},
 		"warning": {
 			"color": "#edab00"
@@ -25,6 +25,9 @@
 		}
 	},
 	"images": {
+		"arrowDown": {
+			"file": "images/icons/arrowDown.svg"
+		},
 		"arrowNext": {
 			"file": {
 				"ltr": "images/icons/arrowNext-ltr.svg",
@@ -36,6 +39,9 @@
 				"ltr": "images/icons/arrowPrevious-ltr.svg",
 				"rtl": "images/icons/arrowPrevious-rtl.svg"
 			}
+		},
+		"arrowUp": {
+			"file": "images/icons/arrowUp.svg"
 		},
 		"collapse": {
 			"file": "images/icons/collapse.svg"
@@ -64,6 +70,18 @@
 		"move": {
 			"file": "images/icons/move.svg"
 		},
+		"first": {
+			"file": {
+				"ltr": "images/icons/moveFirst-ltr.svg",
+				"rtl": "images/icons/moveFirst-rtl.svg"
+			}
+		},
+		"last": {
+			"file": {
+				"ltr": "images/icons/moveLast-ltr.svg",
+				"rtl": "images/icons/moveLast-rtl.svg"
+			}
+		},
 		"next": {
 			"file": {
 				"ltr": "images/icons/next-ltr.svg",
@@ -76,17 +94,8 @@
 				"rtl": "images/icons/previous-rtl.svg"
 			}
 		},
-		"last": {
-			"file": {
-				"ltr": "images/icons/moveLast-ltr.svg",
-				"rtl": "images/icons/moveLast-rtl.svg"
-			}
-		},
-		"first": {
-			"file": {
-				"ltr": "images/icons/moveFirst-ltr.svg",
-				"rtl": "images/icons/moveFirst-rtl.svg"
-			}
+		"sortVertical": {
+			"file": "images/icons/sortVertical.svg"
 		},
 		"upTriangle": {
 			"file": "images/icons/upTriangle.svg"

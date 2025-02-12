@@ -1,5 +1,4 @@
 <?php
-
 /**
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,7 +16,6 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @author Derk-Jan Hartman <hartman.wiki@gmail.com>
  */
 
 namespace MediaWiki\User;
@@ -26,7 +24,8 @@ use DateInterval;
 use DateTime;
 use DateTimeZone;
 use Exception;
-use MWTimestamp;
+use MediaWiki\Utils\MWTimestamp;
+use Stringable;
 use Wikimedia\RequestTimeout\TimeoutException;
 
 /**
@@ -39,8 +38,10 @@ use Wikimedia\RequestTimeout\TimeoutException;
  * taking into account DST etc.
  *
  * @since 1.37
+ * @ingroup User
+ * @author Derk-Jan Hartman <hartman.wiki@gmail.com>
  */
-class UserTimeCorrection {
+class UserTimeCorrection implements Stringable {
 
 	/**
 	 * @var string (default) Time correction based on the MediaWiki's system offset from UTC.
@@ -77,7 +78,7 @@ class UserTimeCorrection {
 	 */
 	public function __construct(
 		string $timeCorrection,
-		DateTime $relativeToDate = null,
+		?DateTime $relativeToDate = null,
 		int $systemOffset = 0
 	) {
 		$this->date = $relativeToDate ?? new DateTime( '@' . MWTimestamp::time() );
@@ -128,7 +129,6 @@ class UserTimeCorrection {
 
 	/**
 	 * Was the original correction specification valid
-	 * @return bool
 	 */
 	public function isValid(): bool {
 		return $this->valid;

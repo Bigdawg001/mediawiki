@@ -3,13 +3,13 @@
 namespace MediaWiki\Tests\Rest\Handler;
 
 use Exception;
+use MediaWiki\Content\TextContent;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Rest\Handler\PageSourceHandler;
 use MediaWiki\Rest\LocalizedHttpException;
 use MediaWiki\Rest\RequestData;
 use MediaWiki\Revision\SlotRecord;
 use MediaWikiIntegrationTestCase;
-use TextContent;
 use Wikimedia\Message\MessageValue;
 use WikiPage;
 
@@ -27,15 +27,6 @@ class PageSourceHandlerTest extends MediaWikiIntegrationTestCase {
 
 	protected function setUp(): void {
 		parent::setUp();
-
-		// Clean up these tables after each test
-		$this->tablesUsed = [
-			'page',
-			'revision',
-			'comment',
-			'text',
-			'content'
-		];
 
 		$this->overrideConfigValues( [
 			MainConfigNames::RightsUrl => 'https://example.com/rights',
@@ -57,7 +48,7 @@ class PageSourceHandlerTest extends MediaWikiIntegrationTestCase {
 			[ 'pathParams' => [ 'title' => $page->getTitle()->getPrefixedText() ] ]
 		);
 
-		$htmlUrl = 'https://wiki.example.com/rest/v1/page/Talk%3ASourceEndpointTestPage%2Fwith%2Fslashes/html';
+		$htmlUrl = 'https://wiki.example.com/rest/mock/page/Talk%3ASourceEndpointTestPage%2Fwith%2Fslashes/html';
 
 		$handler = $this->newHandler();
 		$config = [ 'format' => 'bare' ];
@@ -82,6 +73,25 @@ class PageSourceHandlerTest extends MediaWikiIntegrationTestCase {
 
 		$this->assertResponseData( $page, $data );
 		$this->assertSame( $content->getText(), $data['source'] );
+	}
+
+	public function testExecuteRestbaseCompat() {
+		$page = $this->getExistingTestPage( 'Talk:SourceEndpointTestPage/with/slashes' );
+		$request = new RequestData(
+			[
+				'pathParams' => [ 'title' => $page->getTitle()->getPrefixedText() ],
+				'headers' => [ 'x-restbase-compat' => 'true' ]
+			]
+
+		);
+
+		$htmlUrl = 'https://wiki.example.com/rest/mock/page/Talk%3ASourceEndpointTestPage%2Fwith%2Fslashes/html';
+
+		$handler = $this->newHandler();
+		$config = [ 'format' => 'bare' ];
+		$data = $this->executeHandlerAndGetBodyData( $handler, $request, $config );
+
+		$this->assertRestbaseCompatibleResponseData( $page, $data );
 	}
 
 	public function testExecute_missingparam() {
@@ -109,13 +119,25 @@ class PageSourceHandlerTest extends MediaWikiIntegrationTestCase {
 		);
 
 		$handler = $this->newHandler();
-		$this->executeHandler( $handler, $request );
+		$config = [ 'format' => 'bare' ];
+		$this->executeHandler( $handler, $request, $config );
 	}
 
-	/**
-	 * @param WikiPage $page
-	 * @param array $data
-	 */
+	public function testExecute_message() {
+		$request = new RequestData( [ 'pathParams' => [ 'title' => 'MediaWiki:Ok' ] ] );
+
+		$this->expectExceptionObject(
+			new LocalizedHttpException(
+				new MessageValue( "rest-nonexistent-title", [ 'testing' ] ),
+				404
+			)
+		);
+
+		$handler = $this->newHandler();
+		$config = [ 'format' => 'bare' ];
+		$this->executeHandler( $handler, $request, $config );
+	}
+
 	private function assertResponseData( WikiPage $page, array $data ): void {
 		$this->assertSame( $page->getId(), $data['id'] );
 		$this->assertSame( $page->getTitle()->getPrefixedDBkey(), $data['key'] );
@@ -128,6 +150,28 @@ class PageSourceHandlerTest extends MediaWikiIntegrationTestCase {
 		$this->assertSame( CONTENT_MODEL_WIKITEXT, $data['content_model'] );
 		$this->assertSame( 'https://example.com/rights', $data['license']['url'] );
 		$this->assertSame( 'some rights', $data['license']['title'] );
+	}
+
+	private function assertRestbaseCompatibleResponseData( WikiPage $page, array $data ): void {
+		$this->assertArrayHasKey( 'items', $data );
+		$this->assertSame( $page->getTitle()->getPrefixedDBkey(), $data['items'][0]['title'] );
+		$this->assertSame( $page->getId(), $data['items'][0]['page_id'] );
+		$this->assertSame( $page->getLatest(), $data['items'][0]['rev'] );
+		$this->assertSame( $page->getNamespace(), $data['items'][0]['namespace'] );
+		$this->assertSame( $page->getUser(), $data['items'][0]['user_id'] );
+		$this->assertSame( $page->getUserText(), $data['items'][0]['user_text'] );
+		$this->assertSame(
+			wfTimestampOrNull( TS_ISO_8601, $page->getTimestamp() ),
+			$data['items'][0]['timestamp']
+		);
+		$this->assertSame( $page->getComment(), $data['items'][0]['comment'] );
+		$this->assertSame( [], $data['items'][0]['tags'] );
+		$this->assertSame( [], $data['items'][0]['restrictions'] );
+		$this->assertSame(
+			$page->getTitle()->getPageLanguage()->getCode(),
+			$data['items'][0]['page_language']
+		);
+		$this->assertSame( $page->isRedirect(), $data['items'][0]['redirect'] );
 	}
 
 }

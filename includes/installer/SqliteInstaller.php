@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Sqlite-specific installer.
  *
@@ -21,9 +22,10 @@
  * @ingroup Installer
  */
 
+namespace MediaWiki\Installer;
+
 use MediaWiki\MediaWikiServices;
-use Wikimedia\AtEase\AtEase;
-use Wikimedia\Rdbms\DatabaseFactory;
+use MediaWiki\Status\Status;
 use Wikimedia\Rdbms\DatabaseSqlite;
 use Wikimedia\Rdbms\DBConnectionError;
 
@@ -35,7 +37,9 @@ use Wikimedia\Rdbms\DBConnectionError;
  */
 class SqliteInstaller extends DatabaseInstaller {
 
+	/** @inheritDoc */
 	public static $minimumVersion = '3.8.0';
+	/** @inheritDoc */
 	protected static $notMinimumVersionMessage = 'config-outdated-sqlite';
 
 	/**
@@ -43,6 +47,7 @@ class SqliteInstaller extends DatabaseInstaller {
 	 */
 	public $db;
 
+	/** @inheritDoc */
 	protected $globalNames = [
 		'wgDBname',
 		'wgSQLiteDataDir',
@@ -56,13 +61,21 @@ class SqliteInstaller extends DatabaseInstaller {
 		return self::checkExtension( 'pdo_sqlite' );
 	}
 
+	public function getConnectForm( WebInstaller $webInstaller ): DatabaseConnectForm {
+		return new SqliteConnectForm( $webInstaller, $this );
+	}
+
+	public function getSettingsForm( WebInstaller $webInstaller ): DatabaseSettingsForm {
+		return new DatabaseSettingsForm( $webInstaller, $this );
+	}
+
 	/**
 	 * @return Status
 	 */
 	public function checkPrerequisites() {
 		// Bail out if SQLite is too old
 		$db = DatabaseSqlite::newStandaloneInstance( ':memory:' );
-		$result = static::meetsMinimumRequirement( $db->getServerVersion() );
+		$result = static::meetsMinimumRequirement( $db );
 		// Check for FTS3 full-text search module
 		if ( DatabaseSqlite::getFulltextSearchModule() != 'FTS3' ) {
 			$result->warning( 'config-no-fts3' );
@@ -88,291 +101,30 @@ class SqliteInstaller extends DatabaseInstaller {
 		return $defaults;
 	}
 
-	public function getConnectForm() {
-		return $this->getTextBox(
-			'wgSQLiteDataDir',
-			'config-sqlite-dir', [],
-			$this->parent->getHelpBox( 'config-sqlite-dir-help' )
-		) .
-		$this->getTextBox(
-			'wgDBname',
-			'config-db-name',
-			[],
-			$this->parent->getHelpBox( 'config-sqlite-name-help' )
-		);
-	}
-
 	/**
-	 * Safe wrapper for PHP's realpath() that fails gracefully if it's unable to canonicalize the path.
-	 *
-	 * @param string $path
-	 *
-	 * @return string
+	 * @param string $type
+	 * @return ConnectionStatus
 	 */
-	private static function realpath( $path ) {
-		return realpath( $path ) ?: $path;
-	}
-
-	/**
-	 * @return Status
-	 */
-	public function submitConnectForm() {
-		$this->setVarsFromRequest( [ 'wgSQLiteDataDir', 'wgDBname' ] );
-
-		# Try realpath() if the directory already exists
-		$dir = self::realpath( $this->getVar( 'wgSQLiteDataDir' ) );
-		$result = self::checkDataDir( $dir );
-		if ( $result->isOK() ) {
-			# Try expanding again in case we've just created it
-			$dir = self::realpath( $dir );
-			$this->setVar( 'wgSQLiteDataDir', $dir );
-		}
-		# Table prefix is not used on SQLite, keep it empty
-		$this->setVar( 'wgDBprefix', '' );
-
-		return $result;
-	}
-
-	/**
-	 * Check if the data directory is writable or can be created
-	 * @param string $dir Path to the data directory
-	 * @return Status Return fatal Status if $dir un-writable or no permission to create a directory
-	 */
-	private static function checkDataDir( $dir ): Status {
-		if ( is_dir( $dir ) ) {
-			if ( !is_readable( $dir ) ) {
-				return Status::newFatal( 'config-sqlite-dir-unwritable', $dir );
-			}
-		} else {
-			// Check the parent directory if $dir not exists
-			if ( !is_writable( dirname( $dir ) ) ) {
-				$webserverGroup = Installer::maybeGetWebserverPrimaryGroup();
-				if ( $webserverGroup !== null ) {
-					return Status::newFatal(
-						'config-sqlite-parent-unwritable-group',
-						$dir, dirname( $dir ), basename( $dir ),
-						$webserverGroup
-					);
-				} else {
-					return Status::newFatal(
-						'config-sqlite-parent-unwritable-nogroup',
-						$dir, dirname( $dir ), basename( $dir )
-					);
-				}
-			}
-		}
-		return Status::newGood();
-	}
-
-	/**
-	 * @param string $dir Path to the data directory
-	 * @return Status Return good Status if without error
-	 */
-	private static function createDataDir( $dir ): Status {
-		if ( !is_dir( $dir ) ) {
-			AtEase::suppressWarnings();
-			$ok = wfMkdirParents( $dir, 0700, __METHOD__ );
-			AtEase::restoreWarnings();
-			if ( !$ok ) {
-				return Status::newFatal( 'config-sqlite-mkdir-error', $dir );
-			}
-		}
-		# Put a .htaccess file in case the user didn't take our advice
-		file_put_contents( "$dir/.htaccess", "Deny from all\n" );
-		return Status::newGood();
-	}
-
-	/**
-	 * @return Status
-	 */
-	public function openConnection() {
-		$status = Status::newGood();
+	public function openConnection( string $type ) {
+		$status = new ConnectionStatus;
 		$dir = $this->getVar( 'wgSQLiteDataDir' );
 		$dbName = $this->getVar( 'wgDBname' );
+
+		// Don't implicitly create the file
+		$file = DatabaseSqlite::generateFileName( $dir, $dbName );
+		if ( !file_exists( $file ) ) {
+			$status->fatal( 'config-sqlite-connection-error',
+				'file does not exist' );
+			return $status;
+		}
+
 		try {
 			$db = MediaWikiServices::getInstance()->getDatabaseFactory()->create(
 				'sqlite', [ 'dbname' => $dbName, 'dbDirectory' => $dir ]
 			);
-			$status->value = $db;
+			$status->setDB( $db );
 		} catch ( DBConnectionError $e ) {
 			$status->fatal( 'config-sqlite-connection-error', $e->getMessage() );
-		}
-
-		return $status;
-	}
-
-	/**
-	 * @return bool
-	 */
-	public function needsUpgrade() {
-		$dir = $this->getVar( 'wgSQLiteDataDir' );
-		$dbName = $this->getVar( 'wgDBname' );
-		// Don't create the data file yet
-		if ( !file_exists( DatabaseSqlite::generateFileName( $dir, $dbName ) ) ) {
-			return false;
-		}
-
-		// If the data file exists, look inside it
-		return parent::needsUpgrade();
-	}
-
-	/**
-	 * @return Status
-	 */
-	public function setupDatabase() {
-		$dir = $this->getVar( 'wgSQLiteDataDir' );
-
-		# Double check (Only available in web installation). We checked this before but maybe someone
-		# deleted the data dir between then and now
-		$dir_status = self::checkDataDir( $dir );
-		if ( $dir_status->isGood() ) {
-			$res = self::createDataDir( $dir );
-			if ( !$res->isGood() ) {
-				return $res;
-			}
-		} else {
-			return $dir_status;
-		}
-
-		$db = $this->getVar( 'wgDBname' );
-
-		# Make the main and cache stub DB files
-		$status = Status::newGood();
-		$status->merge( $this->makeStubDBFile( $dir, $db ) );
-		$status->merge( $this->makeStubDBFile( $dir, "wikicache" ) );
-		$status->merge( $this->makeStubDBFile( $dir, "{$db}_l10n_cache" ) );
-		$status->merge( $this->makeStubDBFile( $dir, "{$db}_jobqueue" ) );
-		if ( !$status->isOK() ) {
-			return $status;
-		}
-
-		# Nuke the unused settings for clarity
-		$this->setVar( 'wgDBserver', '' );
-		$this->setVar( 'wgDBuser', '' );
-		$this->setVar( 'wgDBpassword', '' );
-		$this->setupSchemaVars();
-
-		# Create the l10n cache DB
-		try {
-			$conn = ( new DatabaseFactory() )->create(
-				'sqlite', [ 'dbname' => "{$db}_l10n_cache", 'dbDirectory' => $dir ] );
-			# @todo: don't duplicate l10n_cache definition, though it's very simple
-			$sql =
-<<<EOT
-	CREATE TABLE l10n_cache (
-		lc_lang BLOB NOT NULL,
-		lc_key TEXT NOT NULL,
-		lc_value BLOB NOT NULL,
-		PRIMARY KEY (lc_lang, lc_key)
-	);
-EOT;
-			$conn->query( $sql, __METHOD__ );
-			$conn->query( "PRAGMA journal_mode=WAL", __METHOD__ ); // this is permanent
-			$conn->close( __METHOD__ );
-		} catch ( DBConnectionError $e ) {
-			return Status::newFatal( 'config-sqlite-connection-error', $e->getMessage() );
-		}
-
-		# Create the job queue DB
-		try {
-			$conn = ( new DatabaseFactory() )->create(
-				'sqlite', [ 'dbname' => "{$db}_jobqueue", 'dbDirectory' => $dir ] );
-			# @todo: don't duplicate job definition, though it's very static
-			$sql =
-<<<EOT
-	CREATE TABLE job (
-		job_id INTEGER  NOT NULL PRIMARY KEY AUTOINCREMENT,
-		job_cmd BLOB NOT NULL default '',
-		job_namespace INTEGER NOT NULL,
-		job_title TEXT  NOT NULL,
-		job_timestamp BLOB NULL default NULL,
-		job_params BLOB NOT NULL,
-		job_random integer  NOT NULL default 0,
-		job_attempts integer  NOT NULL default 0,
-		job_token BLOB NOT NULL default '',
-		job_token_timestamp BLOB NULL default NULL,
-		job_sha1 BLOB NOT NULL default ''
-	);
-	CREATE INDEX job_sha1 ON job (job_sha1);
-	CREATE INDEX job_cmd_token ON job (job_cmd,job_token,job_random);
-	CREATE INDEX job_cmd_token_id ON job (job_cmd,job_token,job_id);
-	CREATE INDEX job_cmd ON job (job_cmd, job_namespace, job_title, job_params);
-	CREATE INDEX job_timestamp ON job (job_timestamp);
-EOT;
-			$conn->query( $sql, __METHOD__ );
-			$conn->query( "PRAGMA journal_mode=WAL", __METHOD__ ); // this is permanent
-			$conn->close( __METHOD__ );
-		} catch ( DBConnectionError $e ) {
-			return Status::newFatal( 'config-sqlite-connection-error', $e->getMessage() );
-		}
-
-		# Open the main DB
-		return $this->getConnection();
-	}
-
-	/**
-	 * @param string $dir
-	 * @param string $db
-	 * @return Status
-	 */
-	protected function makeStubDBFile( $dir, $db ) {
-		$file = DatabaseSqlite::generateFileName( $dir, $db );
-
-		if ( file_exists( $file ) ) {
-			if ( !is_writable( $file ) ) {
-				return Status::newFatal( 'config-sqlite-readonly', $file );
-			}
-			return Status::newGood();
-		}
-
-		$oldMask = umask( 0177 );
-		if ( file_put_contents( $file, '' ) === false ) {
-			umask( $oldMask );
-			return Status::newFatal( 'config-sqlite-cant-create-db', $file );
-		}
-		umask( $oldMask );
-
-		return Status::newGood();
-	}
-
-	/**
-	 * @return Status
-	 */
-	public function createTables() {
-		$status = parent::createTables();
-		if ( $status->isGood() ) {
-			$status = parent::createManualTables();
-		}
-
-		return $this->setupSearchIndex( $status );
-	}
-
-	public function createManualTables() {
-		// Already handled above. Do nothing.
-		return Status::newGood();
-	}
-
-	/**
-	 * @param Status &$status
-	 * @return Status
-	 */
-	public function setupSearchIndex( &$status ) {
-		global $IP;
-
-		$module = DatabaseSqlite::getFulltextSearchModule();
-		$searchIndexSql = (string)$this->db->selectField(
-			$this->db->addIdentifierQuotes( 'sqlite_master' ),
-			'sql',
-			[ 'tbl_name' => $this->db->tableName( 'searchindex', 'raw' ) ],
-			__METHOD__
-		);
-		$fts3tTable = ( stristr( $searchIndexSql, 'fts' ) !== false );
-
-		if ( $fts3tTable && !$module ) {
-			$status->warning( 'config-sqlite-fts3-downgrade' );
-			$this->db->sourceFile( "$IP/maintenance/sqlite/archives/searchindex-no-fts.sql" );
-		} elseif ( !$fts3tTable && $module == 'FTS3' ) {
-			$this->db->sourceFile( "$IP/maintenance/sqlite/archives/searchindex-fts3.sql" );
 		}
 
 		return $status;
@@ -384,8 +136,8 @@ EOT;
 	public function getLocalSettings() {
 		$dir = LocalSettingsGenerator::escapePhpString( $this->getVar( 'wgSQLiteDataDir' ) );
 		// These tables have frequent writes and are thus split off from the main one.
-		// Since the code using these tables only uses transactions for writes then set
-		// them to using BEGIN IMMEDIATE. This avoids frequent lock errors on first write.
+		// Since the code using these tables only uses transactions for writes, then set
+		// them to using BEGIN IMMEDIATE. This avoids frequent lock errors on the first write action.
 		return "# SQLite-specific settings
 \$wgSQLiteDataDir = \"{$dir}\";
 \$wgObjectCaches[CACHE_DB] = [
@@ -400,10 +152,6 @@ EOT;
 		'trxMode' => 'IMMEDIATE',
 		'flags' => 0
 	]
-];
-\$wgObjectCaches['db-replicated'] = [
-	'factory' => 'Wikimedia\ObjectFactory\ObjectFactory::getObjectFromSpec',
-	'args' => [ [ 'factory' => 'ObjectCache::getInstance', 'args' => [ CACHE_DB ] ] ]
 ];
 \$wgLocalisationCacheConf['storeServer'] = [
 	'type' => 'sqlite',
@@ -427,6 +175,6 @@ EOT;
 		'flags' => 0
 	]
 ];
-\$wgResourceLoaderUseObjectCacheForDeps = true;";
+";
 	}
 }

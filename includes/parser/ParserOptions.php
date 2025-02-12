@@ -21,13 +21,28 @@
  * @ingroup Parser
  */
 
+namespace MediaWiki\Parser;
+
+use InvalidArgumentException;
+use LogicException;
+use MediaWiki\Content\Content;
+use MediaWiki\Context\IContextSource;
+use MediaWiki\HookContainer\HookRunner;
+use MediaWiki\Language\Language;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Page\PageIdentity;
+use MediaWiki\Page\PageIdentityValue;
+use MediaWiki\Page\PageRecord;
 use MediaWiki\Revision\MutableRevisionRecord;
 use MediaWiki\Revision\SlotRecord;
 use MediaWiki\StubObject\StubObject;
 use MediaWiki\Title\Title;
 use MediaWiki\User\UserIdentity;
+use MediaWiki\User\UserIdentityValue;
+use MediaWiki\Utils\MWTimestamp;
+use ReflectionClass;
+use Wikimedia\IPUtils;
 use Wikimedia\ScopedCallback;
 
 /**
@@ -86,6 +101,8 @@ class ParserOptions {
 		'printable' => true,
 		'userlang' => true,
 		'useParsoid' => true,
+		'suppressSectionEditLinks' => true,
+		'collapsibleSections' => true,
 	];
 
 	/**
@@ -137,6 +154,7 @@ class ParserOptions {
 
 	/**
 	 * Appended to the options hash
+	 * @var string
 	 */
 	private $mExtraKey = '';
 
@@ -280,18 +298,6 @@ class ParserOptions {
 	}
 
 	/**
-	 * Allow all external images inline?
-	 * @param bool|null $x New value (null is no change)
-	 * @return bool Old value
-	 * @deprecated since 1.35; per-parser configuration of image handling via
-	 * parser options is deprecated. Use site configuration.
-	 */
-	public function setAllowExternalImages( $x ) {
-		wfDeprecated( __METHOD__, '1.35' );
-		return $this->setOptionLegacy( 'allowExternalImages', $x );
-	}
-
-	/**
 	 * External images to allow
 	 *
 	 * When self::getAllowExternalImages() is false
@@ -303,38 +309,11 @@ class ParserOptions {
 	}
 
 	/**
-	 * External images to allow
-	 *
-	 * When self::getAllowExternalImages() is false
-	 *
-	 * @param string|string[]|null $x New value (null is no change)
-	 * @return string|string[] Old value
-	 * @deprecated since 1.35; per-parser configuration of image handling via
-	 * parser options is deprecated. Use site configuration.
-	 */
-	public function setAllowExternalImagesFrom( $x ) {
-		wfDeprecated( __METHOD__, '1.35' );
-		return $this->setOptionLegacy( 'allowExternalImagesFrom', $x );
-	}
-
-	/**
 	 * Use the on-wiki external image whitelist?
 	 * @return bool
 	 */
 	public function getEnableImageWhitelist() {
 		return $this->getOption( 'enableImageWhitelist' );
-	}
-
-	/**
-	 * Use the on-wiki external image whitelist?
-	 * @param bool|null $x New value (null is no change)
-	 * @return bool Old value
-	 * @deprecated since 1.35; per-parser configuration of image handling via
-	 * parser options is deprecated. Use site configuration.
-	 */
-	public function setEnableImageWhitelist( $x ) {
-		wfDeprecated( __METHOD__, '1.35' );
-		return $this->setOptionLegacy( 'enableImageWhitelist', $x );
 	}
 
 	/**
@@ -812,9 +791,51 @@ class ParserOptions {
 	 * other metadata generated (like the table of contents).
 	 * @see T307691
 	 * @since 1.39
+	 * @deprecated since 1.42; just clear the metadata in the final
+	 *  parser output
 	 */
 	public function setSuppressTOC() {
+		wfDeprecated( __METHOD__, '1.42' );
 		$this->setOption( 'suppressTOC', true );
+	}
+
+	/**
+	 * Should section edit links be suppressed?
+	 * Used when parsing wikitext which will be presented in a
+	 * non-interactive context: previews, UX text, etc.
+	 * @since 1.42
+	 * @return bool
+	 */
+	public function getSuppressSectionEditLinks() {
+		return $this->getOption( 'suppressSectionEditLinks' );
+	}
+
+	/**
+	 * Suppress section edit links in the output.
+	 * Used when parsing wikitext which will be presented in a
+	 * non-interactive context: previews, UX text, etc.
+	 * @since 1.42
+	 */
+	public function setSuppressSectionEditLinks() {
+		$this->setOption( 'suppressSectionEditLinks', true );
+	}
+
+	/**
+	 * Should section contents be wrapped in <div> to make them
+	 * collapsible?
+	 * @since 1.42
+	 */
+	public function getCollapsibleSections(): bool {
+		return $this->getOption( 'collapsibleSections' );
+	}
+
+	/**
+	 * Wrap section contents in a <div> to allow client-side code
+	 * to collapse them.
+	 * @since 1.42
+	 */
+	public function setCollapsibleSections(): void {
+		$this->setOption( 'collapsibleSections', true );
 	}
 
 	/**
@@ -994,7 +1015,7 @@ class ParserOptions {
 	 * @return string TS_MW timestamp
 	 */
 	public function getTimestamp() {
-		if ( !isset( $this->mTimestamp ) ) {
+		if ( $this->mTimestamp === null ) {
 			$this->mTimestamp = wfTimestampNow();
 		}
 		return $this->mTimestamp;
@@ -1069,7 +1090,7 @@ class ParserOptions {
 	 * @return ParserOptions
 	 */
 	public static function newFromAnon() {
-		return new ParserOptions( new User,
+		return new ParserOptions( MediaWikiServices::getInstance()->getUserFactory()->newAnonymous(),
 			MediaWikiServices::getInstance()->getContentLanguage() );
 	}
 
@@ -1102,7 +1123,23 @@ class ParserOptions {
 	 * @return ParserOptions
 	 */
 	public static function newFromContext( IContextSource $context ) {
-		return new ParserOptions( $context->getUser(), $context->getLanguage() );
+		$contextUser = $context->getUser();
+
+		// Use the stashed temporary account name instead of an IP address as the user for the ParserOptions
+		// (if a stashed name is set). This is so that magic words like {{REVISIONUSER}} show the temporary account
+		// name instead of IP address.
+		$tempUserCreator = MediaWikiServices::getInstance()->getTempUserCreator();
+		if ( $tempUserCreator->isEnabled() && IPUtils::isIPAddress( $contextUser->getName() ) ) {
+			// We do not attempt to acquire a temporary account name if no name is stashed, as this may be called in
+			// contexts (such as the parse API) where the user will not be performing an edit on their next action
+			// and therefore would be increasing the rate limit unnecessarily.
+			$tempName = $tempUserCreator->getStashedName( $context->getRequest()->getSession() );
+			if ( $tempName !== null ) {
+				$contextUser = UserIdentityValue::newAnonymous( $tempName );
+			}
+		}
+
+		return new ParserOptions( $contextUser, $context->getLanguage() );
 	}
 
 	/**
@@ -1146,7 +1183,7 @@ class ParserOptions {
 	 */
 	public static function clearStaticCache() {
 		if ( !defined( 'MW_PHPUNIT_TEST' ) && !defined( 'MW_PARSER_TEST' ) ) {
-			throw new RuntimeException( __METHOD__ . ' is just for testing' );
+			throw new LogicException( __METHOD__ . ' is just for testing' );
 		}
 		self::$defaults = null;
 		self::$lazyOptions = null;
@@ -1189,6 +1226,8 @@ class ParserOptions {
 				'targetLanguage' => null,
 				'removeComments' => true,
 				'suppressTOC' => false,
+				'suppressSectionEditLinks' => false,
+				'collapsibleSections' => false,
 				'enableLimitReport' => false,
 				'preSaveTransform' => true,
 				'isPreview' => false,
@@ -1208,7 +1247,7 @@ class ParserOptions {
 			self::$cacheVaryingOptionsHash = self::$initialCacheVaryingOptionsHash;
 			self::$lazyOptions = self::$initialLazyOptions;
 
-			Hooks::runner()->onParserOptionsRegister(
+			( new HookRunner( $services->getHookContainer() ) )->onParserOptionsRegister(
 				self::$defaults,
 				self::$cacheVaryingOptionsHash,
 				self::$lazyOptions
@@ -1351,7 +1390,7 @@ class ParserOptions {
 	 * Record that an option was internally accessed.
 	 *
 	 * This calls the watcher set by ParserOptions::registerWatcher().
-	 * Typically, the watcher callback is ParserOutput::registerOption().
+	 * Typically, the watcher callback is ParserOutput::recordOption().
 	 * The information registered this way is consumed by ParserCache::save().
 	 *
 	 * @param string $optionName Name of the option
@@ -1451,7 +1490,7 @@ class ParserOptions {
 		$user = $services->getUserFactory()->newFromUserIdentity( $this->getUserIdentity() );
 		// Give a chance for extensions to modify the hash, if they have
 		// extra options or other effects on the parser cache.
-		Hooks::runner()->onPageRenderingHash(
+		( new HookRunner( $services->getHookContainer() ) )->onPageRenderingHash(
 			$confstr,
 			$user,
 			$forOptions
@@ -1469,7 +1508,7 @@ class ParserOptions {
 	 * @return bool
 	 * @since 1.30
 	 */
-	public function isSafeToCache( array $usedOptions = null ) {
+	public function isSafeToCache( ?array $usedOptions = null ) {
 		$defaults = self::getDefaults();
 		$inCacheKey = self::getCacheVaryingOptionsHash();
 		$usedOptions ??= array_keys( $this->options );
@@ -1489,24 +1528,54 @@ class ParserOptions {
 	 * Sets a hook to force that a page exists, and sets a current revision callback to return
 	 * a revision with custom content when the current revision of the page is requested.
 	 *
-	 * @since 1.25
-	 * @param Title $title
+	 * @param PageIdentity $page
 	 * @param Content $content
 	 * @param UserIdentity $user The user that the fake revision is attributed to
+	 * @param int $currentRevId
+	 *
 	 * @return ScopedCallback to unset the hook
+	 * @internal since 1.44, this method is no longer considered safe to call
+	 * by extensions. It may be removed or changed in a backwards incompatible
+	 * way in 1.45 or later.
+	 *
+	 * @since 1.25
 	 */
-	public function setupFakeRevision( $title, $content, $user ) {
+	public function setupFakeRevision( $page, $content, $user, $currentRevId = 0 ) {
 		$oldCallback = $this->setCurrentRevisionRecordCallback(
-			static function (
-				$titleToCheck, $parser = null ) use ( $title, $content, $user, &$oldCallback
-			) {
-				if ( $titleToCheck->equals( $title ) ) {
-					$revRecord = new MutableRevisionRecord( $title );
+			function ( $titleToCheck, $parser = null )
+			use ( $page, $content, $user, $currentRevId, &$oldCallback )
+			{
+				if ( $titleToCheck->isSamePageAs( $page ) ) {
+					if ( $page->exists() ) {
+						$pageId = $page->getId();
+
+						if ( $currentRevId ) {
+							$parentRevision = $currentRevId;
+						} elseif ( $page instanceof Title ) {
+							$parentRevision = $page->getLatestRevID();
+						} elseif ( $page instanceof PageRecord ) {
+							$parentRevision = $page->getLatest();
+						} else {
+							$parentRevision = 0;
+						}
+					} else {
+						$pageId = $this->getSpeculativePageId() ?: 0;
+						$parentRevision = 0;
+						$page = new PageIdentityValue(
+							$pageId,
+							$page->getNamespace(),
+							$page->getDBkey(),
+							$page->getWikiId()
+						);
+					}
+
+					$revRecord = new MutableRevisionRecord( $page );
 					$revRecord->setContent( SlotRecord::MAIN, $content )
 						->setUser( $user )
 						->setTimestamp( MWTimestamp::now( TS_MW ) )
-						->setPageId( $title->getArticleID() )
-						->setParentId( $title->getLatestRevID() );
+						->setId( 0 )
+						->setPageId( $pageId )
+						->setParentId( $parentRevision );
 					return $revRecord;
 				} else {
 					return call_user_func( $oldCallback, $titleToCheck, $parser );
@@ -1517,19 +1586,19 @@ class ParserOptions {
 		$hookContainer = MediaWikiServices::getInstance()->getHookContainer();
 		$hookScope = $hookContainer->scopedRegister(
 			'TitleExists',
-			static function ( $titleToCheck, &$exists ) use ( $title ) {
-				if ( $titleToCheck->equals( $title ) ) {
+			static function ( Title $titleToCheck, &$exists ) use ( $page ) {
+				if ( $titleToCheck->isSamePageAs( $page ) ) {
 					$exists = true;
 				}
 			}
 		);
 
 		$linkCache = MediaWikiServices::getInstance()->getLinkCache();
-		$linkCache->clearBadLink( $title->getPrefixedDBkey() );
+		$linkCache->clearBadLink( $page );
 
-		return new ScopedCallback( function () use ( $title, $hookScope, $linkCache, $oldCallback ) {
+		return new ScopedCallback( function () use ( $page, $hookScope, $linkCache, $oldCallback ) {
 			ScopedCallback::consume( $hookScope );
-			$linkCache->clearLink( $title );
+			$linkCache->clearLink( $page );
 			$this->setCurrentRevisionRecordCallback( $oldCallback );
 		} );
 	}
@@ -1537,7 +1606,6 @@ class ParserOptions {
 	/**
 	 * Returns reason for rendering the content. This human-readable, intended for logging and debugging only.
 	 * Expected values include "edit", "view", "purge", "LinksUpdate", etc.
-	 * @return string
 	 */
 	public function getRenderReason(): string {
 		return $this->renderReason;
@@ -1546,12 +1614,14 @@ class ParserOptions {
 	/**
 	 * Sets reason for rendering the content. This human-readable, intended for logging and debugging only.
 	 * Expected values include "edit", "view", "purge", "LinksUpdate", etc.
-	 * @param string $renderReason
 	 */
 	public function setRenderReason( string $renderReason ): void {
 		$this->renderReason = $renderReason;
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ParserOptions::class, 'ParserOptions' );
 
 /**
  * For really cool vim folding this needs to be at the end:

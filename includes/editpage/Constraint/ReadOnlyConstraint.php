@@ -20,8 +20,8 @@
 
 namespace MediaWiki\EditPage\Constraint;
 
-use ReadOnlyMode;
 use StatusValue;
+use Wikimedia\Rdbms\ReadOnlyMode;
 
 /**
  * Verify site is not in read only mode
@@ -32,15 +32,9 @@ use StatusValue;
  */
 class ReadOnlyConstraint implements IEditConstraint {
 
-	/** @var ReadOnlyMode */
-	private $readOnlyMode;
+	private ReadOnlyMode $readOnlyMode;
+	private string $result;
 
-	/** @var string|null */
-	private $result;
-
-	/**
-	 * @param ReadOnlyMode $readOnlyMode
-	 */
 	public function __construct( ReadOnlyMode $readOnlyMode ) {
 		$this->readOnlyMode = $readOnlyMode;
 	}

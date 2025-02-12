@@ -23,19 +23,28 @@
  * @file
  */
 
+namespace MediaWiki\Api;
+
+use MediaWiki\ChangeTags\ChangeTagsStore;
 use MediaWiki\CommentFormatter\CommentFormatter;
 use MediaWiki\Content\IContentHandlerFactory;
 use MediaWiki\Content\Renderer\ContentRenderer;
 use MediaWiki\Content\Transform\ContentTransformer;
 use MediaWiki\MainConfigNames;
 use MediaWiki\ParamValidator\TypeDef\UserDef;
+use MediaWiki\Parser\ParserFactory;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\RevisionStore;
 use MediaWiki\Revision\SlotRoleRegistry;
 use MediaWiki\Storage\NameTableAccessException;
 use MediaWiki\Storage\NameTableStore;
+use MediaWiki\Title\NamespaceInfo;
 use MediaWiki\Title\Title;
+use MediaWiki\User\TempUser\TempUserCreator;
+use MediaWiki\User\UserFactory;
 use Wikimedia\ParamValidator\ParamValidator;
+use Wikimedia\Rdbms\IExpression;
+use Wikimedia\Rdbms\LikeValue;
 
 /**
  * Query module to enumerate all deleted revisions.
@@ -44,40 +53,26 @@ use Wikimedia\ParamValidator\ParamValidator;
  */
 class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 
-	/** @var RevisionStore */
-	private $revisionStore;
+	private RevisionStore $revisionStore;
+	private NameTableStore $changeTagDefStore;
+	private ChangeTagsStore $changeTagsStore;
+	private NamespaceInfo $namespaceInfo;
 
-	/** @var NameTableStore */
-	private $changeTagDefStore;
-
-	/** @var NamespaceInfo */
-	private $namespaceInfo;
-
-	/**
-	 * @param ApiQuery $query
-	 * @param string $moduleName
-	 * @param RevisionStore $revisionStore
-	 * @param IContentHandlerFactory $contentHandlerFactory
-	 * @param ParserFactory $parserFactory
-	 * @param SlotRoleRegistry $slotRoleRegistry
-	 * @param NameTableStore $changeTagDefStore
-	 * @param NamespaceInfo $namespaceInfo
-	 * @param ContentRenderer $contentRenderer
-	 * @param ContentTransformer $contentTransformer
-	 * @param CommentFormatter $commentFormatter
-	 */
 	public function __construct(
 		ApiQuery $query,
-		$moduleName,
+		string $moduleName,
 		RevisionStore $revisionStore,
 		IContentHandlerFactory $contentHandlerFactory,
 		ParserFactory $parserFactory,
 		SlotRoleRegistry $slotRoleRegistry,
 		NameTableStore $changeTagDefStore,
+		ChangeTagsStore $changeTagsStore,
 		NamespaceInfo $namespaceInfo,
 		ContentRenderer $contentRenderer,
 		ContentTransformer $contentTransformer,
-		CommentFormatter $commentFormatter
+		CommentFormatter $commentFormatter,
+		TempUserCreator $tempUserCreator,
+		UserFactory $userFactory
 	) {
 		parent::__construct(
 			$query,
@@ -89,10 +84,13 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 			$slotRoleRegistry,
 			$contentRenderer,
 			$contentTransformer,
-			$commentFormatter
+			$commentFormatter,
+			$tempUserCreator,
+			$userFactory
 		);
 		$this->revisionStore = $revisionStore;
 		$this->changeTagDefStore = $changeTagDefStore;
+		$this->changeTagsStore = $changeTagsStore;
 		$this->namespaceInfo = $namespaceInfo;
 	}
 
@@ -100,7 +98,7 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 	 * @param ApiPageSet|null $resultPageSet
 	 * @return void
 	 */
-	protected function run( ApiPageSet $resultPageSet = null ) {
+	protected function run( ?ApiPageSet $resultPageSet = null ) {
 		$db = $this->getDB();
 		$params = $this->extractRequestParams( false );
 
@@ -182,7 +180,9 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 		}
 
 		if ( $this->fld_tags ) {
-			$this->addFields( [ 'ts_tags' => ChangeTags::makeTagSummarySubquery( 'archive' ) ] );
+			$this->addFields( [
+				'ts_tags' => $this->changeTagsStore->makeTagSummarySubquery( 'archive' )
+			] );
 		}
 
 		if ( $params['tag'] !== null ) {
@@ -224,49 +224,64 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 				$isDirNewer = ( $dir === 'newer' );
 				$after = ( $isDirNewer ? '>=' : '<=' );
 				$before = ( $isDirNewer ? '<=' : '>=' );
-				$where = [];
+				$titleParts = [];
 				foreach ( $namespaces as $ns ) {
-					$w = [];
 					if ( $params['from'] !== null ) {
-						$w[] = 'ar_title' . $after .
-							$db->addQuotes( $this->titlePartToKey( $params['from'], $ns ) );
+						$fromTitlePart = $this->titlePartToKey( $params['from'], $ns );
+					} else {
+						$fromTitlePart = '';
 					}
 					if ( $params['to'] !== null ) {
-						$w[] = 'ar_title' . $before .
-							$db->addQuotes( $this->titlePartToKey( $params['to'], $ns ) );
+						$toTitlePart = $this->titlePartToKey( $params['to'], $ns );
+					} else {
+						$toTitlePart = '';
 					}
-					$w = $db->makeList( $w, LIST_AND );
-					$where[$w][] = $ns;
+					$titleParts[$fromTitlePart . '|' . $toTitlePart][] = $ns;
 				}
-				if ( count( $where ) == 1 ) {
-					$where = key( $where );
-					$this->addWhere( $where );
-				} else {
-					$where2 = [];
-					foreach ( $where as $w => $ns ) {
-						$where2[] = $db->makeList( [ $w, 'ar_namespace' => $ns ], LIST_AND );
+				if ( count( $titleParts ) === 1 ) {
+					[ $fromTitlePart, $toTitlePart, ] = explode( '|', key( $titleParts ), 2 );
+					if ( $fromTitlePart !== '' ) {
+						$this->addWhere( $db->expr( 'ar_title', $after, $fromTitlePart ) );
 					}
-					$this->addWhere( $db->makeList( $where2, LIST_OR ) );
+					if ( $toTitlePart !== '' ) {
+						$this->addWhere( $db->expr( 'ar_title', $before, $toTitlePart ) );
+					}
+				} else {
+					$where = [];
+					foreach ( $titleParts as $titlePart => $ns ) {
+						[ $fromTitlePart, $toTitlePart, ] = explode( '|', $titlePart, 2 );
+						$expr = $db->expr( 'ar_namespace', '=', $ns );
+						if ( $fromTitlePart !== '' ) {
+							$expr = $expr->and( 'ar_title', $after, $fromTitlePart );
+						}
+						if ( $toTitlePart !== '' ) {
+							$expr = $expr->and( 'ar_title', $before, $toTitlePart );
+						}
+						$where[] = $expr;
+					}
+					$this->addWhere( $db->orExpr( $where ) );
 				}
 			}
 
 			if ( isset( $params['prefix'] ) ) {
-				$where = [];
+				$titleParts = [];
 				foreach ( $namespaces as $ns ) {
-					$w = 'ar_title' . $db->buildLike(
-						$this->titlePartToKey( $params['prefix'], $ns ),
-						$db->anyString() );
-					$where[$w][] = $ns;
+					$prefixTitlePart = $this->titlePartToKey( $params['prefix'], $ns );
+					$titleParts[$prefixTitlePart][] = $ns;
 				}
-				if ( count( $where ) == 1 ) {
-					$where = key( $where );
-					$this->addWhere( $where );
+				if ( count( $titleParts ) === 1 ) {
+					$prefixTitlePart = key( $titleParts );
+					$this->addWhere( $db->expr( 'ar_title', IExpression::LIKE,
+						new LikeValue( $prefixTitlePart, $db->anyString() )
+					) );
 				} else {
-					$where2 = [];
-					foreach ( $where as $w => $ns ) {
-						$where2[] = $db->makeList( [ $w, 'ar_namespace' => $ns ], LIST_AND );
+					$where = [];
+					foreach ( $titleParts as $prefixTitlePart => $ns ) {
+						$where[] = $db->expr( 'ar_namespace', '=', $ns )
+							->and( 'ar_title', IExpression::LIKE,
+								new LikeValue( $prefixTitlePart, $db->anyString() ) );
 					}
-					$this->addWhere( $db->makeList( $where2, LIST_OR ) );
+					$this->addWhere( $db->orExpr( $where ) );
 				}
 			}
 		} else {
@@ -285,7 +300,7 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 			// use the ar_actor_timestamp index.
 			$this->addWhereFld( 'actor_name', $params['user'] );
 		} elseif ( $params['excludeuser'] !== null ) {
-			$this->addWhere( 'actor_name<>' . $db->addQuotes( $params['excludeuser'] ) );
+			$this->addWhere( $db->expr( 'actor_name', '!=', $params['excludeuser'] ) );
 		}
 
 		if ( $params['user'] !== null || $params['excludeuser'] !== null ) {
@@ -441,7 +456,7 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 		$ret = parent::getAllowedParams() + [
 			'user' => [
 				ParamValidator::PARAM_TYPE => 'user',
-				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'id', 'interwiki' ],
+				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'temp', 'id', 'interwiki' ],
 			],
 			'namespace' => [
 				ParamValidator::PARAM_ISMULTI => true,
@@ -462,6 +477,10 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 				],
 				ParamValidator::PARAM_DEFAULT => 'older',
 				ApiBase::PARAM_HELP_MSG => 'api-help-param-direction',
+				ApiBase::PARAM_HELP_MSG_PER_VALUE => [
+					'newer' => 'api-help-paramvalue-direction-newer',
+					'older' => 'api-help-paramvalue-direction-older',
+				],
 			],
 			'from' => [
 				ApiBase::PARAM_HELP_MSG_INFO => [ [ 'nonuseronly' ] ],
@@ -474,7 +493,7 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 			],
 			'excludeuser' => [
 				ParamValidator::PARAM_TYPE => 'user',
-				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'id', 'interwiki' ],
+				UserDef::PARAM_ALLOWED_USER_TYPES => [ 'name', 'ip', 'temp', 'id', 'interwiki' ],
 				ApiBase::PARAM_HELP_MSG_INFO => [ [ 'nonuseronly' ] ],
 			],
 			'tag' => null,
@@ -511,3 +530,6 @@ class ApiQueryAllDeletedRevisions extends ApiQueryRevisionsBase {
 		return 'https://www.mediawiki.org/wiki/Special:MyLanguage/API:Alldeletedrevisions';
 	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( ApiQueryAllDeletedRevisions::class, 'ApiQueryAllDeletedRevisions' );

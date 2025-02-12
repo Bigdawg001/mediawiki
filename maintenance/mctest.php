@@ -23,8 +23,12 @@
  */
 
 use MediaWiki\MainConfigNames;
+use MediaWiki\Maintenance\Maintenance;
+use Wikimedia\ObjectCache\BagOStuff;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script that  makes several 'set', 'incr' and 'get' requests
@@ -108,10 +112,6 @@ class McTest extends Maintenance {
 		}
 	}
 
-	/**
-	 * @param BagOStuff $mcc
-	 * @param array $valueByKey
-	 */
 	private function benchmarkSingleKeyOps( BagOStuff $mcc, array $valueByKey ) {
 		$add = 0;
 		$set = 0;
@@ -174,10 +174,6 @@ class McTest extends Maintenance {
 		);
 	}
 
-	/**
-	 * @param BagOStuff $mcc
-	 * @param array $valueByKey
-	 */
 	private function benchmarkMultiKeyOpsImmediateBlocking( BagOStuff $mcc, array $valueByKey ) {
 		$keys = array_keys( $valueByKey );
 		$iterations = count( $valueByKey );
@@ -210,10 +206,6 @@ class McTest extends Maintenance {
 		);
 	}
 
-	/**
-	 * @param BagOStuff $mcc
-	 * @param array $valueByKey
-	 */
 	private function benchmarkMultiKeyOpsDeferredBlocking( BagOStuff $mcc, array $valueByKey ) {
 		$keys = array_keys( $valueByKey );
 		$iterations = count( $valueByKey );
@@ -248,5 +240,7 @@ class McTest extends Maintenance {
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = McTest::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

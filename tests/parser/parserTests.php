@@ -2,7 +2,7 @@
 /**
  * MediaWiki parser test suite
  *
- * Copyright © 2004 Brion Vibber <brion@pobox.com>
+ * Copyright © 2004 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
  * This program is free software; you can redistribute it and/or modify
@@ -26,13 +26,16 @@
 
 require_once __DIR__ . '/../../maintenance/Maintenance.php';
 
+use MediaWiki\Maintenance\Maintenance;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Settings\SettingsBuilder;
+use MediaWiki\Specials\SpecialVersion;
 use MediaWiki\Tests\AnsiTermColorer;
 use MediaWiki\Tests\DummyTermColorer;
 use Wikimedia\Parsoid\Utils\ScriptUtils;
 
 define( 'MW_AUTOLOAD_TEST_CLASSES', true );
+define( 'MW_PARSER_TEST', true );
 
 class ParserTestsMaintenance extends Maintenance {
 
@@ -48,7 +51,7 @@ class ParserTestsMaintenance extends Maintenance {
 			false, true );
 		$this->addOption( 'regex', 'Only run tests whose descriptions which match given regex',
 			false, true );
-		$this->addOption( 'filter', 'Alias for --regex', false, true );
+		$this->addOption( 'filter', 'Only run tests whose description contains the given string', false, true );
 		$this->addOption( 'file', 'Run test cases from a custom file instead of parserTests.txt',
 			false, true, false, true );
 		$this->addOption( 'dir', 'Run test cases for all *.txt files in a directory',
@@ -103,7 +106,7 @@ class ParserTestsMaintenance extends Maintenance {
 				'for finer grained editing of tests.' );
 	}
 
-	public function finalSetup( SettingsBuilder $settingsBuilder = null ) {
+	public function finalSetup( SettingsBuilder $settingsBuilder ) {
 		// Some methods which are discouraged for normal code throw exceptions unless
 		// we declare this is just a test.
 		define( 'MW_PARSER_TEST', true );
@@ -118,8 +121,8 @@ class ParserTestsMaintenance extends Maintenance {
 		// Cases of weird db corruption were encountered when running tests on earlyish
 		// versions of SQLite
 		if ( $wgDBtype == 'sqlite' ) {
-			$db = wfGetDB( DB_PRIMARY );
-			$version = $db->getServerVersion();
+			$dbw = MediaWikiServices::getInstance()->getConnectionProvider()->getPrimaryDatabase();
+			$version = $dbw->getServerVersion();
 			if ( version_compare( $version, '3.6' ) < 0 ) {
 				die( "Parser tests require SQLite version 3.6 or later, you have $version\n" );
 			}
@@ -147,7 +150,14 @@ class ParserTestsMaintenance extends Maintenance {
 		$record = $this->hasOption( 'record' );
 		$compare = $this->hasOption( 'compare' );
 
-		$regex = $this->getOption( 'filter', $this->getOption( 'regex', false ) );
+		if ( $this->hasOption( 'filter' ) ) {
+			$regex = preg_quote( $this->getOption( 'filter' ), '/' );
+			if ( $this->hasOption( 'regex' ) ) {
+				echo "Warning: --regex cannot be used with --filter, disabling --regexp\n";
+			}
+		} else {
+			$regex = $this->getOption( 'regex', false );
+		}
 		if ( $regex !== false ) {
 			$regex = "/$regex/i";
 
@@ -192,7 +202,7 @@ class ParserTestsMaintenance extends Maintenance {
 		$recorderLB = false;
 		if ( $record || $compare ) {
 			// Make an untracked DB_PRIMARY connection (wiki's table prefix, not parsertest_)
-			$recorderLB = MediaWikiServices::getInstance()->getDBLoadBalancerFactory()->newMainLB();
+			$recorderLB = $this->getServiceContainer()->getDBLoadBalancerFactory()->newMainLB();
 			$recorderDB = $recorderLB->getMaintenanceConnectionRef( DB_PRIMARY );
 			// Add recorder before previewer because recorder will create the
 			// DB table if it doesn't exist

@@ -4,8 +4,13 @@ use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageIdentityValue;
 use MediaWiki\Page\PageStoreRecord;
 use MediaWiki\Title\Title;
+use MediaWiki\Title\TitleFactory;
 use PHPUnit\Framework\MockObject\MockObject;
 
+/**
+ * Creates semi-sane Title mocks for tests.
+ * @stable to use since 1.41
+ */
 trait MockTitleTrait {
 
 	/** @var int */
@@ -22,6 +27,7 @@ trait MockTitleTrait {
 	 *        - language: Language
 	 *        - contentModel: string
 	 *        - revision: int
+	 *        - validRedirect: bool
 	 *
 	 * @return Title|MockObject
 	 */
@@ -57,18 +63,21 @@ trait MockTitleTrait {
 		$title->method( 'inNamespace' )->willReturnCallback( static function ( $namespace ) use ( $ns ) {
 			return $namespace === $ns;
 		} );
+		$title->method( 'isSpecialPage' )->willReturn( $ns === NS_SPECIAL );
 		$title->method( 'getFragment' )->willReturn( $props['fragment'] ?? '' );
 		$title->method( 'hasFragment' )->willReturn( !empty( $props['fragment'] ) );
 		$title->method( 'getInterwiki' )->willReturn( $props['interwiki'] ?? '' );
 		$title->method( 'exists' )->willReturn( $id > 0 );
 		$title->method( 'isRedirect' )->willReturn( $props['redirect'] ?? false );
+		$title->method( 'isValidRedirectTarget' )->willReturn( $props['validRedirect'] ?? true );
 		$title->method( 'getTouched' )->willReturn( $id ? '20200101223344' : false );
 
 		// TODO getPageLanguage should return a Language object, 'qqx' is a string
 		$title->method( 'getPageLanguage' )->willReturn( $props['language'] ?? 'qqx' );
-		$title->method( 'getContentModel' )
-			->willReturn( $props['contentModel'] ?? CONTENT_MODEL_WIKITEXT );
-		$title->method( 'getRestrictions' )->willReturn( [] );
+		$contentModel = $props['contentModel'] ?? CONTENT_MODEL_WIKITEXT;
+		$title->method( 'getContentModel' )->willReturn( $contentModel );
+		$title->method( 'hasContentModel' )->willReturnCallback(
+			static fn ( $id ) => $id === $contentModel );
 		$title->method( 'getTitleProtection' )->willReturn( false );
 		$title->method( 'canExist' )
 			->willReturn( $ns >= 0 && empty( $props['interwiki'] ) && $text !== '' );
@@ -118,5 +127,20 @@ trait MockTitleTrait {
 		} );
 
 		return $title;
+	}
+
+	private function makeMockTitleFactory(): TitleFactory {
+		$factory = $this->createNoOpMock(
+			TitleFactory::class,
+			[ 'newFromText' ]
+		);
+
+		$factory->method( 'newFromText' )->willReturnCallback(
+			function ( $text ) {
+				return $this->makeMockTitle( $text );
+			}
+		);
+
+		return $factory;
 	}
 }

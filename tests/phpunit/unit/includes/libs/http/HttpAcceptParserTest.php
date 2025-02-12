@@ -1,13 +1,18 @@
 <?php
 
+namespace Wikimedia\Tests\Http;
+
+use MediaWikiCoversValidator;
+use PHPUnit\Framework\TestCase;
 use Wikimedia\Http\HttpAcceptParser;
 
 /**
- * @covers Wikimedia\Http\HttpAcceptParser
+ * @covers \Wikimedia\Http\HttpAcceptParser
  *
  * @author Daniel Kinzler
  */
-class HttpAcceptParserTest extends \PHPUnit\Framework\TestCase {
+class HttpAcceptParserTest extends TestCase {
+	use MediaWikiCoversValidator;
 
 	public static function provideParseWeights() {
 		return [

@@ -1,24 +1,25 @@
 <?php
 
-namespace MediaWiki\Parser\Parsoid;
+namespace MediaWiki\Tests\Parser\Parsoid;
 
-use Language;
+use MediaWiki\Language\Language;
 use MediaWiki\MainConfigNames;
-use MediaWiki\MainConfigSchema;
 use MediaWiki\Page\PageIdentity;
+use MediaWiki\Parser\ParserOutput;
+use MediaWiki\Parser\Parsoid\LanguageVariantConverter;
+use MediaWiki\Parser\Parsoid\PageBundleParserOutputConverter;
 use MediaWikiIntegrationTestCase;
-use ParserOutput;
 use Wikimedia\Bcp47Code\Bcp47CodeValue;
 use Wikimedia\Parsoid\Core\PageBundle;
 use Wikimedia\Parsoid\Parsoid;
 
 /**
  * @group Database
- * @covers MediaWiki\Parser\Parsoid\LanguageVariantConverter
+ * @covers \MediaWiki\Parser\Parsoid\LanguageVariantConverter
  */
 class LanguageVariantConverterTest extends MediaWikiIntegrationTestCase {
 	public function setUp(): void {
-		$this->overrideConfigValue( 'UsePigLatinVariant', true );
+		$this->overrideConfigValue( MainConfigNames::UsePigLatinVariant, true );
 	}
 
 	public static function provideConvertPageBundleVariant() {
@@ -140,20 +141,6 @@ class LanguageVariantConverterTest extends MediaWikiIntegrationTestCase {
 			'>Hallo Wereld<',
 			false // The output language is currently not indicated. Should be expected to be 'nl' in the future.
 		];
-		yield 'Variant conversion with fallback to core LanguageConverter' => [
-			new PageBundle(
-				'<p>Siltemeniñ astın sız:</p>',
-				[ 'parsoid-data' ],
-				[ 'mw-data' ],
-				Parsoid::defaultHTMLVersion(),
-				[]
-			),
-			null,
-			'kk-cyrl',
-			'kk-latn',
-			'<p>Сілтеменің астын сыз:</p>',
-			'kk-cyrl|kk-Cyrl'
-		];
 	}
 
 	/**
@@ -167,9 +154,7 @@ class LanguageVariantConverterTest extends MediaWikiIntegrationTestCase {
 		$expected,
 		$expectedLanguage = null
 	) {
-		if ( $expectedLanguage === null ) {
-			$expectedLanguage = $target;
-		}
+		$expectedLanguage ??= $target;
 
 		$page = $this->getExistingTestPage();
 		$languageVariantConverter = $this->getLanguageVariantConverter( $page );
@@ -213,9 +198,7 @@ class LanguageVariantConverterTest extends MediaWikiIntegrationTestCase {
 		$expected,
 		$expectedLanguage = null
 	) {
-		if ( $expectedLanguage === null ) {
-			$expectedLanguage = $target;
-		}
+		$expectedLanguage ??= $target;
 
 		$page = $this->getExistingTestPage();
 		$languageVariantConverter = $this->getLanguageVariantConverter( $page );
@@ -250,6 +233,7 @@ class LanguageVariantConverterTest extends MediaWikiIntegrationTestCase {
 
 		if ( $expectedLanguage !== false ) {
 			$this->assertMatchesRegularExpression( "@^$expectedLanguage@i", $extensionData['headers']['content-language'] );
+			$this->assertSame( $expectedLanguage, (string)$modifiedParserOutput->getLanguage() );
 		}
 	}
 
@@ -263,7 +247,6 @@ class LanguageVariantConverterTest extends MediaWikiIntegrationTestCase {
 			$pageIdentity,
 			$this->getServiceContainer()->getParsoidPageConfigFactory(),
 			$this->getServiceContainer()->getService( '_Parsoid' ),
-			MainConfigSchema::getDefaultValue( MainConfigNames::ParsoidSettings ),
 			$this->getServiceContainer()->getParsoidSiteConfig(),
 			$this->getServiceContainer()->getTitleFactory(),
 			$this->getServiceContainer()->getLanguageConverterFactory(),

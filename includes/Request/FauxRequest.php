@@ -2,7 +2,7 @@
 /**
  * Deal with importing all those nasty globals and things
  *
- * Copyright © 2003 Brion Vibber <brion@pobox.com>
+ * Copyright © 2003 Brooke Vibber <bvibber@wikimedia.org>
  * https://www.mediawiki.org/
  *
  * This program is free software; you can redistribute it and/or modify
@@ -25,12 +25,12 @@
 
 namespace MediaWiki\Request;
 
+use InvalidArgumentException;
 use MediaWiki;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Session\SessionManager;
 use MWException;
-use WebRequest;
 
 /**
  * WebRequest clone which takes values from a provided array.
@@ -40,11 +40,12 @@ use WebRequest;
  * @ingroup HTTP
  */
 class FauxRequest extends WebRequest {
-	private $wasPosted = false;
-	private $requestUrl;
-	protected $cookies = [];
-	/** @var array */
-	private $uploadData = [];
+	private bool $wasPosted;
+	private ?string $requestUrl = null;
+	private array $serverInfo;
+
+	protected array $cookies = [];
+	private array $uploadData = [];
 
 	/**
 	 * @stable to call
@@ -55,18 +56,14 @@ class FauxRequest extends WebRequest {
 	 * @param MediaWiki\Session\Session|array|null $session Session, session
 	 *  data array, or null
 	 * @param string $protocol 'http' or 'https'
-	 * @throws MWException
 	 */
-	public function __construct( $data = [], $wasPosted = false,
+	public function __construct( array $data = [], $wasPosted = false,
 								$session = null, $protocol = 'http'
 	) {
 		$this->requestTime = microtime( true );
+		$this->serverInfo = $_SERVER;
 
-		if ( is_array( $data ) ) {
-			$this->data = $data;
-		} else {
-			throw new MWException( "MediaWiki\Request\FauxRequest() got bogus data" );
-		}
+		$this->data = $data;
 		$this->wasPosted = $wasPosted;
 		if ( $session instanceof MediaWiki\Session\Session ) {
 			$this->sessionId = $session->getSessionId();
@@ -77,9 +74,17 @@ class FauxRequest extends WebRequest {
 				$mwsession->set( $key, $value );
 			}
 		} elseif ( $session !== null ) {
-			throw new MWException( "MediaWiki\Request\FauxRequest() got bogus session" );
+			throw new InvalidArgumentException( "MediaWiki\Request\FauxRequest() got bogus session" );
 		}
 		$this->protocol = $protocol;
+	}
+
+	public function response(): FauxResponse {
+		/* Lazy initialization of response object for this request */
+		if ( !$this->response ) {
+			$this->response = new FauxResponse();
+		}
+		return $this->response;
 	}
 
 	/**
@@ -108,6 +113,10 @@ class FauxRequest extends WebRequest {
 		} else {
 			return $this->data;
 		}
+	}
+
+	public function getQueryValuesOnly() {
+		return $this->getQueryValues();
 	}
 
 	public function getMethod() {
@@ -190,7 +199,7 @@ class FauxRequest extends WebRequest {
 		if ( !is_array( $data ) ||
 			array_diff( WebRequestUpload::REQUIRED_FILEINFO_KEYS, array_keys( $data ) ) !== []
 		) {
-			throw new MWException( __METHOD__ . ' got bogus data' );
+			throw new InvalidArgumentException( __METHOD__ . ' got bogus data' );
 		}
 		$this->uploadData[$key] = $data;
 	}
@@ -207,16 +216,39 @@ class FauxRequest extends WebRequest {
 
 	/**
 	 * @param string $url
+	 *
 	 * @since 1.25
 	 */
-	public function setRequestURL( $url ) {
+	public function setRequestURL( string $url ) {
 		$this->requestUrl = $url;
+
+		if ( preg_match( '@^(.*)://@', $url, $m ) ) {
+			$this->protocol = $m[1];
+		}
+	}
+
+	/**
+	 * @since 1.42
+	 * @return bool
+	 */
+	public function hasRequestURL(): bool {
+		return $this->requestUrl !== null;
+	}
+
+	protected function getServerInfo( $name, $default = null ): ?string {
+		return $this->serverInfo[$name] ?? $default;
+	}
+
+	/**
+	 * @see $_SERVER
+	 * @param array $info
+	 */
+	public function setServerInfo( array $info ) {
+		$this->serverInfo = $info;
 	}
 
 	/**
 	 * @return string
-	 * @since 1.25 MWException( "getRequestURL not implemented" )
-	 * no longer thrown.
 	 */
 	public function getRequestURL() {
 		if ( $this->requestUrl === null ) {
@@ -295,4 +327,5 @@ class FauxRequest extends WebRequest {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( FauxRequest::class, 'FauxRequest' );

@@ -22,11 +22,12 @@
  * @ingroup Maintenance
  */
 
-use Doctrine\SqlFormatter\NullHighlighter;
-use Doctrine\SqlFormatter\SqlFormatter;
-use Wikimedia\Rdbms\DoctrineSchemaBuilderFactory;
+use MediaWiki\Maintenance\SchemaGenerator;
+use MediaWiki\Maintenance\SchemaMaintenance;
 
+// @codeCoverageIgnoreStart
 require_once __DIR__ . '/includes/SchemaMaintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script to generate schema from abstract json files.
@@ -37,42 +38,15 @@ class GenerateSchemaChangeSql extends SchemaMaintenance {
 	public function __construct() {
 		parent::__construct();
 		$this->addDescription( 'Build SQL files for schema changes from abstract JSON files' );
-		$this->scriptName = 'generateSchemaChangeSql.php';
 	}
 
-	protected function generateSchema( string $platform, array $schema ): string {
-		$schemaChangeBuilder = ( new DoctrineSchemaBuilderFactory() )->getSchemaChangeBuilder( $platform );
-
-		$schemaChangeSqls = $schemaChangeBuilder->getSchemaChangeSql( $schema );
-
-		$sql = '';
-
-		if ( $schemaChangeSqls !== [] ) {
-			// Temporary
-			$sql .= implode( ";\n\n", $schemaChangeSqls ) . ';';
-			$sql = ( new SqlFormatter( new NullHighlighter() ) )->format( $sql );
-		} else {
-			$this->fatalError( 'No schema changes detected!' );
-		}
-
-		// Until the linting issue is resolved
-		// https://github.com/doctrine/sql-formatter/issues/53
-		$sql = str_replace( "\n/*_*/\n", " /*_*/", $sql );
-		$sql = str_replace( "; ", ";\n", $sql );
-		$sql = preg_replace( "/\n+? +?/", ' ', $sql );
-		$sql = str_replace( "/*_*/  ", "/*_*/", $sql );
-
-		// Sqlite hacks
-		if ( $platform === 'sqlite' ) {
-			// Doctrine prepends __temp__ to the table name and we set the table with the schema prefix causing invalid
-			// sqlite.
-			$sql = preg_replace( '/__temp__\s*\/\*_\*\//', '/*_*/__temp__', $sql );
-		}
-
-		return $sql;
+	protected function generateSchema( string $platform, string $jsonPath ): string {
+		return ( new SchemaGenerator() )->generateSchemaChange( $platform, $jsonPath );
 	}
 
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = GenerateSchemaChangeSql::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

@@ -1,7 +1,5 @@
 <?php
 /**
- * Interface for objects representing user identity.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -35,6 +33,7 @@ use MediaWiki\DAO\WikiAwareEntity;
  * get an actor ID for a UserIdentity.
  *
  * @since 1.31
+ * @ingroup User
  */
 interface UserIdentity extends WikiAwareEntity {
 
@@ -63,11 +62,14 @@ interface UserIdentity extends WikiAwareEntity {
 	public function equals( ?UserIdentity $user ): bool;
 
 	/**
+	 * This must be equivalent to getId() != 0 and is provided for code readability. There is no
+	 * equivalent utility for checking whether a user is temporary, since that would introduce a
+	 * service dependency. Use UserIdentityUtils::isTemp (or UserNameUtils::isTemp) instead.
+	 *
 	 * @since 1.34
 	 *
 	 * @return bool True if user is registered on this wiki, i.e., has a user ID. False if user is
-	 *   anonymous or has no local account (which can happen when importing). This must be
-	 *   equivalent to getId() != 0 and is provided for code readability.
+	 *   anonymous or has no local account (which can happen when importing).
 	 */
 	public function isRegistered(): bool;
 }

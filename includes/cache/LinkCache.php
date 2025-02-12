@@ -21,18 +21,28 @@
  * @ingroup Cache
  */
 
-use MediaWiki\Linker\LinkTarget;
+namespace MediaWiki\Cache;
+
+use InvalidArgumentException;
+use MapCacheLRU;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageReference;
 use MediaWiki\Page\PageStoreRecord;
+use MediaWiki\Title\NamespaceInfo;
+use MediaWiki\Title\TitleFormatter;
+use MediaWiki\Title\TitleValue;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use stdClass;
+use Wikimedia\ObjectCache\WANObjectCache;
+use Wikimedia\Parsoid\Core\LinkTarget;
 use Wikimedia\Rdbms\Database;
-use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\IDBAccessObject;
 use Wikimedia\Rdbms\ILoadBalancer;
+use Wikimedia\Rdbms\IReadableDatabase;
 
 /**
  * Cache for article titles (prefixed DB keys) and ids linked from one source
@@ -71,7 +81,7 @@ class LinkCache implements LoggerAwareInterface {
 		TitleFormatter $titleFormatter,
 		WANObjectCache $cache,
 		NamespaceInfo $nsInfo,
-		ILoadBalancer $loadBalancer = null
+		?ILoadBalancer $loadBalancer = null
 	) {
 		$this->entries = new MapCacheLRU( self::MAX_SIZE );
 		$this->wanCache = $cache;
@@ -81,9 +91,6 @@ class LinkCache implements LoggerAwareInterface {
 		$this->logger = new NullLogger();
 	}
 
-	/**
-	 * @param LoggerInterface $logger
-	 */
 	public function setLogger( LoggerInterface $logger ) {
 		$this->logger = $logger;
 	}
@@ -242,39 +249,6 @@ class LinkCache implements LoggerAwareInterface {
 	/**
 	 * Add information about an existing page to the process cache
 	 *
-	 * @deprecated since 1.37, use addGoodLinkObjFromRow() instead. PHPUnit tests
-	 *             must use LinkCacheTestTrait::addGoodLinkObject().
-	 *
-	 * @param int $id Page's ID
-	 * @param LinkTarget|PageReference $page The page to set cached info for.
-	 *        In MediaWiki 1.36 and earlier, only LinkTarget was accepted.
-	 * @param int $len Text's length
-	 * @param int|null $redir Whether the page is a redirect
-	 * @param int $revision Latest revision's ID
-	 * @param string|null $model Latest revision's content model ID
-	 * @param string|null $lang Language code of the page, if not the content language
-	 */
-	public function addGoodLinkObj( $id, $page, $len = -1, $redir = null,
-		$revision = 0, $model = null, $lang = null
-	) {
-		wfDeprecated( __METHOD__, '1.38' );
-		$this->addGoodLinkObjFromRow( $page, (object)[
-			'page_id' => (int)$id,
-			'page_namespace' => $page->getNamespace(),
-			'page_title' => $page->getDBkey(),
-			'page_len' => (int)$len,
-			'page_is_redirect' => (int)$redir,
-			'page_latest' => (int)$revision,
-			'page_content_model' => $model ? (string)$model : null,
-			'page_lang' => $lang ? (string)$lang : null,
-			'page_is_new' => 0,
-			'page_touched' => '',
-		] );
-	}
-
-	/**
-	 * Add information about an existing page to the process cache
-	 *
 	 * Callers must set the READ_LATEST flag if the row came from a DB_PRIMARY source.
 	 * However, the use of such data is highly discouraged; most callers rely on seeing
 	 * consistent DB_REPLICA data (e.g. REPEATABLE-READ point-in-time snapshots) and the
@@ -425,7 +399,7 @@ class LinkCache implements LoggerAwareInterface {
 	 */
 	private function getGoodLinkRowInternal(
 		TitleValue $link,
-		callable $fetchCallback = null,
+		?callable $fetchCallback = null,
 		int $queryFlags = IDBAccessObject::READ_NORMAL
 	): array {
 		$callerShouldAddGoodLink = false;
@@ -456,7 +430,7 @@ class LinkCache implements LoggerAwareInterface {
 				$wanCacheKey,
 				WANObjectCache::TTL_DAY,
 				function ( $curValue, &$ttl, array &$setOpts ) use ( $fetchCallback, $ns, $dbkey ) {
-					$dbr = $this->loadBalancer->getConnectionRef( ILoadBalancer::DB_REPLICA );
+					$dbr = $this->loadBalancer->getConnection( ILoadBalancer::DB_REPLICA );
 					$setOpts += Database::getCacheSetOptions( $dbr );
 
 					$row = $fetchCallback( $dbr, $ns, $dbkey, [] );
@@ -468,8 +442,17 @@ class LinkCache implements LoggerAwareInterface {
 			);
 		} else {
 			// No persistent caching needed, but we can still use the callback.
-			[ $mode, $options ] = DBAccessObjectUtils::getDBOptions( $queryFlags );
-			$dbr = $this->loadBalancer->getConnectionRef( $mode );
+			if ( ( $queryFlags & IDBAccessObject::READ_LATEST ) == IDBAccessObject::READ_LATEST ) {
+				$dbr = $this->loadBalancer->getConnection( DB_PRIMARY );
+			} else {
+				$dbr = $this->loadBalancer->getConnection( DB_REPLICA );
+			}
+			$options = [];
+			if ( ( $queryFlags & IDBAccessObject::READ_EXCLUSIVE ) == IDBAccessObject::READ_EXCLUSIVE ) {
+				$options[] = 'FOR UPDATE';
+			} elseif ( ( $queryFlags & IDBAccessObject::READ_LOCKING ) == IDBAccessObject::READ_LOCKING ) {
+				$options[] = 'LOCK IN SHARE MODE';
+			}
 			$row = $fetchCallback( $dbr, $ns, $dbkey, $options );
 		}
 
@@ -484,7 +467,7 @@ class LinkCache implements LoggerAwareInterface {
 	 * @param int $ns
 	 * @param string $dbkey
 	 * @param callable|null $fetchCallback A callback that will retrieve the link row with the
-	 *        signature ( IDatabase $db, int $ns, string $dbkey, array $queryOptions ): ?stdObj.
+	 *        signature ( IReadableDatabase $db, int $ns, string $dbkey, array $queryOptions ): ?stdObj.
 	 * @param int $queryFlags IDBAccessObject::READ_XXX
 	 *
 	 * @return stdClass|null
@@ -493,7 +476,7 @@ class LinkCache implements LoggerAwareInterface {
 	public function getGoodLinkRow(
 		int $ns,
 		string $dbkey,
-		callable $fetchCallback = null,
+		?callable $fetchCallback = null,
 		int $queryFlags = IDBAccessObject::READ_NORMAL
 	): ?stdClass {
 		$link = TitleValue::tryNew( $ns, $dbkey );
@@ -535,11 +518,7 @@ class LinkCache implements LoggerAwareInterface {
 	 */
 	private function getPersistentCacheKey( $page ) {
 		// if no key can be derived, the page isn't cacheable
-		if ( $this->getCacheKey( $page ) === null ) {
-			return null;
-		}
-
-		if ( !$this->usePersistentCache( $page ) ) {
+		if ( $this->getCacheKey( $page ) === null || !$this->usePersistentCache( $page ) ) {
 			return null;
 		}
 
@@ -568,13 +547,13 @@ class LinkCache implements LoggerAwareInterface {
 	}
 
 	/**
-	 * @param IDatabase $db
+	 * @param IReadableDatabase $db
 	 * @param int $ns
 	 * @param string $dbkey
 	 * @param array $options Query options, see IDatabase::select() for details.
 	 * @return stdClass|false
 	 */
-	private function fetchPageRow( IDatabase $db, int $ns, string $dbkey, $options = [] ) {
+	private function fetchPageRow( IReadableDatabase $db, int $ns, string $dbkey, $options = [] ) {
 		$queryBuilder = $db->newSelectQueryBuilder()
 			->select( self::getSelectFields() )
 			->from( 'page' )
@@ -607,3 +586,6 @@ class LinkCache implements LoggerAwareInterface {
 		$this->entries->clear();
 	}
 }
+
+/** @deprecated class alias since 1.42 */
+class_alias( LinkCache::class, 'LinkCache' );

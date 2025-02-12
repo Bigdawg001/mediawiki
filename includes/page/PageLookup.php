@@ -2,9 +2,9 @@
 
 namespace MediaWiki\Page;
 
-use IDBAccessObject;
 use InvalidArgumentException;
 use MediaWiki\Linker\LinkTarget;
+use Wikimedia\Rdbms\IDBAccessObject;
 
 /**
  * Service for looking up information about wiki pages.
@@ -14,7 +14,7 @@ use MediaWiki\Linker\LinkTarget;
  * @since 1.36
  * @ingroup Page
  */
-interface PageLookup extends IDBAccessObject {
+interface PageLookup {
 
 	/**
 	 * Returns the PageIdentity for the given LinkTarget. The page does not have to exist.
@@ -31,7 +31,7 @@ interface PageLookup extends IDBAccessObject {
 	 */
 	public function getPageForLink(
 		LinkTarget $link,
-		int $queryFlags = self::READ_NORMAL
+		int $queryFlags = IDBAccessObject::READ_NORMAL
 	): ProperPageIdentity;
 
 	/**
@@ -45,7 +45,7 @@ interface PageLookup extends IDBAccessObject {
 	 */
 	public function getPageById(
 		int $pageId,
-		int $queryFlags = self::READ_NORMAL
+		int $queryFlags = IDBAccessObject::READ_NORMAL
 	): ?ExistingPageRecord;
 
 	/**
@@ -61,7 +61,7 @@ interface PageLookup extends IDBAccessObject {
 	public function getPageByName(
 		int $namespace,
 		string $dbKey,
-		int $queryFlags = self::READ_NORMAL
+		int $queryFlags = IDBAccessObject::READ_NORMAL
 	): ?ExistingPageRecord;
 
 	/**
@@ -72,7 +72,7 @@ interface PageLookup extends IDBAccessObject {
 	 * @since 1.37
 	 *
 	 * @param string $text
-	 * @param int $defaultNamespace Namespace to assume per default (usually NS_MAIN)
+	 * @param int $defaultNamespace Namespace to assume by default (usually NS_MAIN)
 	 * @param int $queryFlags
 	 *
 	 * @return ProperPageIdentity|null
@@ -80,7 +80,7 @@ interface PageLookup extends IDBAccessObject {
 	public function getPageByText(
 		string $text,
 		int $defaultNamespace = NS_MAIN,
-		int $queryFlags = self::READ_NORMAL
+		int $queryFlags = IDBAccessObject::READ_NORMAL
 	): ?ProperPageIdentity;
 
 	/**
@@ -92,7 +92,7 @@ interface PageLookup extends IDBAccessObject {
 	 * @since 1.37
 	 *
 	 * @param string $text
-	 * @param int $defaultNamespace Namespace to assume per default (usually NS_MAIN)
+	 * @param int $defaultNamespace Namespace to assume by default (usually NS_MAIN)
 	 * @param int $queryFlags
 	 *
 	 * @return ExistingPageRecord|null
@@ -100,7 +100,7 @@ interface PageLookup extends IDBAccessObject {
 	public function getExistingPageByText(
 		string $text,
 		int $defaultNamespace = NS_MAIN,
-		int $queryFlags = self::READ_NORMAL
+		int $queryFlags = IDBAccessObject::READ_NORMAL
 	): ?ExistingPageRecord;
 
 	/**
@@ -118,7 +118,7 @@ interface PageLookup extends IDBAccessObject {
 	 */
 	public function getPageByReference(
 		PageReference $page,
-		int $queryFlags = self::READ_NORMAL
+		int $queryFlags = IDBAccessObject::READ_NORMAL
 	): ?ExistingPageRecord;
 
 }

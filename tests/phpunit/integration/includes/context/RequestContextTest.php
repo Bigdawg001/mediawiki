@@ -2,26 +2,31 @@
 
 namespace MediaWiki\Tests\Integration\Context;
 
+use LogicException;
 use MediaWiki\Actions\ActionFactory;
+use MediaWiki\Context\RequestContext;
+use MediaWiki\MainConfigNames;
 use MediaWiki\Permissions\UltimateAuthority;
 use MediaWiki\Request\FauxRequest;
 use MediaWiki\Session\PHPSessionHandler;
 use MediaWiki\Session\SessionManager;
 use MediaWiki\Title\Title;
+use MediaWiki\User\Options\StaticUserOptionsLookup;
+use MediaWiki\User\User;
 use MediaWiki\User\UserIdentityValue;
 use MediaWikiIntegrationTestCase;
-use RequestContext;
-use User;
+use Skin;
+use SkinFallback;
 
 /**
- * @covers RequestContext
+ * @covers \MediaWiki\Context\RequestContext
  * @group Database
  * @group RequestContext
  */
 class RequestContextTest extends MediaWikiIntegrationTestCase {
 
 	/**
-	 * @covers \RequestContext::sanitizeLangCode
+	 * @covers \MediaWiki\Context\RequestContext::sanitizeLangCode
 	 *
 	 * @dataProvider provideSanitizeLangCode
 	 */
@@ -60,8 +65,8 @@ class RequestContextTest extends MediaWikiIntegrationTestCase {
 
 	/**
 	 * Test the relationship between title and wikipage in RequestContext
-	 * @covers RequestContext::getWikiPage
-	 * @covers RequestContext::getTitle
+	 * @covers \MediaWiki\Context\RequestContext::getWikiPage
+	 * @covers \MediaWiki\Context\RequestContext::getTitle
 	 */
 	public function testWikiPageTitle() {
 		$context = new RequestContext();
@@ -86,7 +91,7 @@ class RequestContextTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers RequestContext::importScopedSession
+	 * @covers \MediaWiki\Context\RequestContext::importScopedSession
 	 */
 	public function testImportScopedSession() {
 		// Make sure session handling is started
@@ -167,10 +172,10 @@ class RequestContextTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers RequestContext::getUser
-	 * @covers RequestContext::setUser
-	 * @covers RequestContext::getAuthority
-	 * @covers RequestContext::setAuthority
+	 * @covers \MediaWiki\Context\RequestContext::getUser
+	 * @covers \MediaWiki\Context\RequestContext::setUser
+	 * @covers \MediaWiki\Context\RequestContext::getAuthority
+	 * @covers \MediaWiki\Context\RequestContext::setAuthority
 	 */
 	public function testTestGetSetAuthority() {
 		$context = new RequestContext();
@@ -190,7 +195,7 @@ class RequestContextTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers RequestContext
+	 * @covers \MediaWiki\Context\RequestContext
 	 */
 	public function testGetActionName() {
 		$factory = $this->createMock( ActionFactory::class );
@@ -209,7 +214,7 @@ class RequestContextTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers RequestContext
+	 * @covers \MediaWiki\Context\RequestContext
 	 */
 	public function testSetActionName() {
 		$factory = $this->createMock( ActionFactory::class );
@@ -224,7 +229,7 @@ class RequestContextTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers RequestContext
+	 * @covers \MediaWiki\Context\RequestContext
 	 */
 	public function testOverideActionName() {
 		$factory = $this->createMock( ActionFactory::class );
@@ -241,5 +246,85 @@ class RequestContextTest extends MediaWikiIntegrationTestCase {
 		@$context->setTitle( $this->createMock( Title::class ) );
 		$this->assertSame( 'bbb', $context->getActionName(), 'second from factory' );
 		$this->assertSame( 'bbb', $context->getActionName(), 'cached second' );
+	}
+
+	private function registerTestSkin() {
+		$skin = $this->createMock( Skin::class );
+
+		$skinFactory = $this->getServiceContainer()->getSkinFactory();
+		$skinFactory->register( 'test', 'test',
+			static function () use ( $skin ) {
+				return $skin;
+			}
+		);
+		return $skin;
+	}
+
+	public function testGetSkinFromDefault() {
+		$this->overrideConfigValue( MainConfigNames::DefaultSkin, 'test' );
+		$skin = $this->registerTestSkin();
+		$context = new RequestContext();
+		$this->assertSame( $skin, $context->getSkin() );
+	}
+
+	public function testGetSkinFromPref() {
+		$optionsLookup = new StaticUserOptionsLookup( [], [ 'skin' => 'test' ] );
+		$this->setService( 'UserOptionsLookup', $optionsLookup );
+
+		$skin = $this->registerTestSkin();
+
+		$context = new RequestContext();
+		$this->assertSame( $skin, $context->getSkin() );
+	}
+
+	public function testGetSkinFromStringHook() {
+		$skin = $this->registerTestSkin();
+		$this->setTemporaryHook(
+			'RequestContextCreateSkin',
+			static function ( $context, &$skin ) {
+				$skin = 'test';
+			}
+		);
+		$context = new RequestContext();
+		$this->assertSame( $skin, $context->getSkin() );
+	}
+
+	public function testGetSkinFromObjectHook() {
+		$skin = $this->createMock( Skin::class );
+		$this->setTemporaryHook(
+			'RequestContextCreateSkin',
+			static function ( $context, &$skinRes ) use ( $skin ) {
+				$skinRes = $skin;
+			}
+		);
+		$context = new RequestContext();
+		$this->assertSame( $skin, $context->getSkin() );
+	}
+
+	public function testGetSkinFromBadPrefs() {
+		// T342733
+		$this->overrideConfigValue( MainConfigNames::DefaultSkin, 'test' );
+		$optionsLookup = new StaticUserOptionsLookup( [], [ 'skin' => '' ] );
+		$this->setService( 'UserOptionsLookup', $optionsLookup );
+		$skin = $this->registerTestSkin();
+
+		$context = new RequestContext();
+		$this->assertSame( $skin, $context->getSkin() );
+	}
+
+	public function testGetSkinFromBadDefault() {
+		$this->overrideConfigValues( [
+			MainConfigNames::DefaultSkin => 'nonexistent',
+			MainConfigNames::HiddenPrefs => [ 'skin' ]
+		] );
+		$context = new RequestContext();
+		$this->assertInstanceOf( SkinFallback::class, $context->getSkin() );
+	}
+
+	public function testCloningNotAllowed() {
+		$context = RequestContext::getMain();
+		$this->expectException( LogicException::class );
+
+		clone $context;
 	}
 }

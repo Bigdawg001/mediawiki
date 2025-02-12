@@ -2,14 +2,15 @@
 
 namespace MediaWiki\Deferred\LinksUpdate;
 
+use InvalidArgumentException;
 use MediaWiki\Collation\CollationFactory;
 use MediaWiki\Config\ServiceOptions;
 use MediaWiki\Linker\LinkTargetLookup;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Page\PageReference;
+use MediaWiki\Parser\ParserOutput;
 use MediaWiki\Revision\RevisionRecord;
-use ParserOutput;
 use Wikimedia\ObjectFactory\ObjectFactory;
 use Wikimedia\Rdbms\LBFactory;
 
@@ -33,15 +34,15 @@ class LinksTableGroup {
 			'services' => [
 				'LanguageConverterFactory',
 				'NamespaceInfo',
-				'WikiPageFactory'
+				'WikiPageFactory',
+				'DBLoadBalancer',
+				'MainWANObjectCache',
+				'MainConfig'
 			],
 			'needCollation' => true,
 		],
 		'externallinks' => [
 			'class' => ExternalLinksTable::class,
-			'services' => [
-				'MainConfig'
-			],
 		],
 		'imagelinks' => [
 			'class' => ImageLinksTable::class
@@ -53,7 +54,10 @@ class LinksTableGroup {
 			'class' => LangLinksTable::class
 		],
 		'pagelinks' => [
-			'class' => PageLinksTable::class
+			'class' => PageLinksTable::class,
+			'services' => [
+				'MainConfig'
+			],
 		],
 		'page_props' => [
 			'class' => PagePropsTable::class,
@@ -64,9 +68,6 @@ class LinksTableGroup {
 		],
 		'templatelinks' => [
 			'class' => TemplateLinksTable::class,
-			'services' => [
-				'MainConfig'
-			],
 		]
 	];
 
@@ -138,8 +139,6 @@ class LinksTableGroup {
 
 	/**
 	 * Set the ParserOutput object to be used in new and existing objects.
-	 *
-	 * @param ParserOutput $parserOutput
 	 */
 	public function setParserOutput( ParserOutput $parserOutput ) {
 		$this->parserOutput = $parserOutput;
@@ -150,8 +149,6 @@ class LinksTableGroup {
 
 	/**
 	 * Set the original title in the case of a page move.
-	 *
-	 * @param PageReference $oldPage
 	 */
 	public function setMoveDetails( PageReference $oldPage ) {
 		$this->movedPage = $oldPage;
@@ -174,8 +171,6 @@ class LinksTableGroup {
 
 	/**
 	 * Set the revision to be used in new and existing objects.
-	 *
-	 * @param RevisionRecord $revision
 	 */
 	public function setRevision( RevisionRecord $revision ) {
 		$this->revision = $revision;
@@ -211,7 +206,7 @@ class LinksTableGroup {
 			$spec = self::CORE_LIST['categorylinks'];
 			return $this->addCollationArgs( $spec, $tableName, true, $info );
 		}
-		throw new \InvalidArgumentException(
+		throw new InvalidArgumentException(
 			__CLASS__ . ": unknown table name \"$tableName\"" );
 	}
 

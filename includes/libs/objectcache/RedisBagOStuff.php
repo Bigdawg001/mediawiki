@@ -1,7 +1,5 @@
 <?php
 /**
- * Object caching using Redis (http://redis.io/).
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -19,11 +17,22 @@
  *
  * @file
  */
+namespace Wikimedia\ObjectCache;
+
+use ArrayUtils;
+use Exception;
+use Redis;
+use RedisException;
 
 /**
- * Redis-based caching module for redis server >= 2.6.12 and phpredis >= 2.2.4
+ * Store data in Redis.
  *
+ * This requires the php-redis PECL extension (2.2.4 or later) and
+ * a Redis server (2.6.12 or later).
+ *
+ * @see http://redis.io/
  * @see https://github.com/phpredis/phpredis/blob/d310ed7c8/Changelog.md
+ *
  * @note Avoid use of Redis::MULTI transactions for twemproxy support
  *
  * @ingroup Cache
@@ -59,6 +68,9 @@ class RedisBagOStuff extends MediumSpecificBagOStuff {
 	 *     clear text. Optional, if it is unspecified, no AUTH command will be
 	 *     sent.
 	 *
+	 *   - prefix: A prefix that is transparently inserted before all keys.
+	 *     Optional, default is to not add any additional prefixes.
+	 *
 	 *   - automaticFailover: If this is false, then each key will be mapped to
 	 *     a single server, and if that server is down, any requests for that key
 	 *     will fail. If this is true, a connection failure will cause the client
@@ -66,12 +78,13 @@ class RedisBagOStuff extends MediumSpecificBagOStuff {
 	 *     consistent hashing algorithm). True by default. This has the
 	 *     potential to create consistency issues if a server is slow enough to
 	 *     flap, for example if it is in swap death.
+	 *
 	 * @param array $params
 	 */
 	public function __construct( $params ) {
 		parent::__construct( $params );
 		$redisConf = [ 'serializer' => 'none' ]; // manage that in this class
-		foreach ( [ 'connectTimeout', 'persistent', 'password' ] as $opt ) {
+		foreach ( [ 'connectTimeout', 'persistent', 'password', 'prefix' ] as $opt ) {
 			if ( isset( $params[$opt] ) ) {
 				$redisConf[$opt] = $params[$opt];
 			}
@@ -440,6 +453,7 @@ LUA;
 
 	/**
 	 * @param string[] $keys
+	 *
 	 * @return array ((server => redis handle wrapper), (server => key batch), success)
 	 * @phan-return array{0:array<string,string[]>,1:array<string,RedisConnRef|Redis>,2:bool}
 	 */
@@ -452,6 +466,7 @@ LUA;
 
 			$conn = null;
 			// Find a suitable server for this key...
+			// phpcs:ignore Generic.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition
 			while ( ( $tag = array_shift( $candidateTags ) ) !== null ) {
 				$server = $this->serverTagMap[$tag];
 				// Reuse connection handles for keys mapping to the same server
@@ -504,6 +519,7 @@ LUA;
 
 	/**
 	 * @param string $key
+	 *
 	 * @return RedisConnRef|Redis|null Redis handle wrapper for the key or null on failure
 	 */
 	protected function getConnection( $key ) {
@@ -527,6 +543,7 @@ LUA;
 
 	/**
 	 * Log a fatal error
+	 *
 	 * @param string $msg
 	 */
 	protected function logError( $msg ) {
@@ -538,6 +555,7 @@ LUA;
 	 * and protocol errors. Sometimes it also closes the connection, sometimes
 	 * not. The safest response for us is to explicitly destroy the connection
 	 * object and let it be reopened during the next request.
+	 *
 	 * @param RedisConnRef $conn
 	 * @param RedisException $e
 	 */
@@ -548,6 +566,7 @@ LUA;
 
 	/**
 	 * Send information about a single request to the debug log
+	 *
 	 * @param string $op
 	 * @param string $keys
 	 * @param string $server
@@ -556,13 +575,7 @@ LUA;
 	public function logRequest( $op, $keys, $server, $e = null ) {
 		$this->debug( "$op($keys) on $server: " . ( $e ? "failure" : "success" ) );
 	}
-
-	protected function makeKeyInternal( $keyspace, $components ) {
-		return $this->genericKeyFromComponents( $keyspace, ...$components );
-	}
-
-	protected function convertGenericKey( $key ) {
-		// short-circuit; already uses "generic" keys
-		return $key;
-	}
 }
+
+/** @deprecated class alias since 1.43 */
+class_alias( RedisBagOStuff::class, 'RedisBagOStuff' );

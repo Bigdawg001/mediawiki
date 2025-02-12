@@ -21,9 +21,11 @@
  * @ingroup Maintenance
  */
 
-require_once __DIR__ . '/Maintenance.php';
+use MediaWiki\Maintenance\Maintenance;
 
-use MediaWiki\MediaWikiServices;
+// @codeCoverageIgnoreStart
+require_once __DIR__ . '/Maintenance.php';
+// @codeCoverageIgnoreEnd
 
 /**
  * Maintenance script to show database lag.
@@ -31,6 +33,10 @@ use MediaWiki\MediaWikiServices;
  * @ingroup Maintenance
  */
 class DatabaseLag extends Maintenance {
+
+	/** @var bool */
+	protected $stopReporting = false;
+
 	public function __construct() {
 		parent::__construct();
 		$this->addDescription( 'Shows database lag' );
@@ -38,7 +44,7 @@ class DatabaseLag extends Maintenance {
 	}
 
 	public function execute() {
-		$lb = MediaWikiServices::getInstance()->getDBLoadBalancer();
+		$lb = $this->getServiceContainer()->getDBLoadBalancer();
 		if ( $this->hasOption( 'r' ) ) {
 			$this->output( 'time     ' );
 
@@ -49,26 +55,39 @@ class DatabaseLag extends Maintenance {
 			}
 			$this->output( "\n" );
 
-			// @phan-suppress-next-line PhanInfiniteLoop
-			while ( 1 ) {
+			do {
 				$lags = $lb->getLagTimes();
 				unset( $lags[0] );
 				$this->output( gmdate( 'H:i:s' ) . ' ' );
 				foreach ( $lags as $lag ) {
-					$this->output( sprintf( "%-12s ", $lag === false ? 'false' : $lag ) );
+					$this->output(
+						sprintf(
+							"%-12s ",
+							$lag === false ? 'replication stopped or errored' : $lag
+						)
+					);
 				}
 				$this->output( "\n" );
 				sleep( 5 );
-			}
+			} while ( !$this->stopReporting );
+
 		} else {
 			$lags = $lb->getLagTimes();
 			foreach ( $lags as $i => $lag ) {
 				$name = $lb->getServerName( $i );
-				$this->output( sprintf( "%-20s %s\n", $name, $lag === false ? 'false' : $lag ) );
+				$this->output(
+					sprintf(
+						"%-20s %s\n",
+						$name,
+						$lag === false ? 'replication stopped or errored' : $lag
+					)
+				);
 			}
 		}
 	}
 }
 
+// @codeCoverageIgnoreStart
 $maintClass = DatabaseLag::class;
 require_once RUN_MAINTENANCE_IF_MAIN;
+// @codeCoverageIgnoreEnd

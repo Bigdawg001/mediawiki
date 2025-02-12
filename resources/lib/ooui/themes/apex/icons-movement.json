@@ -2,6 +2,9 @@
 	"prefix": "oo-ui-icon",
 	"intro": "@import '../../../../src/styles/common.less';",
 	"images": {
+		"arrowDown": {
+			"file": "../wikimediaui/images/icons/arrowDown.svg"
+		},
 		"arrowNext": {
 			"file": {
 				"ltr": "../wikimediaui/images/icons/arrowNext-ltr.svg",
@@ -13,6 +16,9 @@
 				"ltr": "../wikimediaui/images/icons/arrowPrevious-ltr.svg",
 				"rtl": "../wikimediaui/images/icons/arrowPrevious-rtl.svg"
 			}
+		},
+		"arrowUp": {
+			"file": "../wikimediaui/images/icons/arrowUp.svg"
 		},
 		"collapse": {
 			"file": "../wikimediaui/images/icons/collapse.svg"
@@ -41,6 +47,18 @@
 		"move": {
 			"file": "../wikimediaui/images/icons/move.svg"
 		},
+		"first": {
+			"file": {
+				"ltr": "../wikimediaui/images/icons/moveFirst-ltr.svg",
+				"rtl": "../wikimediaui/images/icons/moveFirst-rtl.svg"
+			}
+		},
+		"last": {
+			"file": {
+				"ltr": "../wikimediaui/images/icons/moveLast-ltr.svg",
+				"rtl": "../wikimediaui/images/icons/moveLast-rtl.svg"
+			}
+		},
 		"next": {
 			"file": {
 				"ltr": "../wikimediaui/images/icons/next-ltr.svg",
@@ -53,17 +71,8 @@
 				"rtl": "../wikimediaui/images/icons/previous-rtl.svg"
 			}
 		},
-		"last": {
-			"file": {
-				"ltr": "../wikimediaui/images/icons/moveLast-ltr.svg",
-				"rtl": "../wikimediaui/images/icons/moveLast-rtl.svg"
-			}
-		},
-		"first": {
-			"file": {
-				"ltr": "../wikimediaui/images/icons/moveFirst-ltr.svg",
-				"rtl": "../wikimediaui/images/icons/moveFirst-rtl.svg"
-			}
+		"sortVertical": {
+			"file": "../wikimediaui/images/icons/sortVertical.svg"
 		},
 		"upTriangle": {
 			"file": "../wikimediaui/images/icons/upTriangle.svg"

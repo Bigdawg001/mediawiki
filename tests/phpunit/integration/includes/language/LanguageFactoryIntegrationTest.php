@@ -5,7 +5,8 @@ use MediaWikiIntegrationTestCase;
 use Wikimedia\Bcp47Code\Bcp47CodeValue;
 
 /**
- * @coversDefaultClass MediaWiki\Languages\LanguageFactory
+ * @group Language
+ * @covers \MediaWiki\Languages\LanguageFactory
  */
 class LanguageFactoryIntegrationTest extends MediaWikiIntegrationTestCase {
 	private function createFactory() {
@@ -13,7 +14,6 @@ class LanguageFactoryIntegrationTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers ::getParentLanguage()
 	 * @dataProvider provideCodes
 	 */
 	public function testGetParentLanguage( $code, $ignore, $parent = null ) {
@@ -23,7 +23,6 @@ class LanguageFactoryIntegrationTest extends MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers ::getParentLanguage()
 	 * @dataProvider provideCodes
 	 */
 	public function testGetParentLanguageBcp47Code( $ignore, $bcp47code, $parent = null ) {
@@ -55,9 +54,6 @@ class LanguageFactoryIntegrationTest extends MediaWikiIntegrationTestCase {
 			[ 'en-rtl', 'en-x-rtl' ],
 			[ 'es-formal', 'es-x-formal' ],
 			[ 'hu-formal', 'hu-x-formal' ],
-			[ 'kk-arab', 'kk-Arab', 'kk' ],
-			[ 'kk-cyrl', 'kk-Cyrl', 'kk' ],
-			[ 'kk-latn', 'kk-Latn', 'kk' ],
 			[ 'map-bms', 'jv-x-bms' ],
 			[ 'mo', 'ro-Cyrl-MD' ],
 			[ 'nrm', 'nrf' ],

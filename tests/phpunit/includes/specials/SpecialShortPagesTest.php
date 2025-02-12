@@ -1,6 +1,7 @@
 <?php
 
 use MediaWiki\MainConfigNames;
+use MediaWiki\Specials\SpecialShortPages;
 
 /**
  * Test class for SpecialShortPages class
@@ -13,7 +14,7 @@ class SpecialShortPagesTest extends MediaWikiIntegrationTestCase {
 
 	/**
 	 * @dataProvider provideGetQueryInfoRespectsContentNs
-	 * @covers SpecialShortPages::getQueryInfo()
+	 * @covers \MediaWiki\Specials\SpecialShortPages::getQueryInfo
 	 */
 	public function testGetQueryInfoRespectsContentNS( $contentNS, $blacklistNS, $expectedNS ) {
 		$this->overrideConfigValues( [
@@ -27,7 +28,7 @@ class SpecialShortPagesTest extends MediaWikiIntegrationTestCase {
 		$services = $this->getServiceContainer();
 		$page = new SpecialShortPages(
 			$services->getNamespaceInfo(),
-			$services->getDBLoadBalancer(),
+			$services->getConnectionProvider(),
 			$services->getLinkBatchFactory()
 		);
 		$queryInfo = $page->getQueryInfo();

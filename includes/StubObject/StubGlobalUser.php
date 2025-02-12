@@ -21,7 +21,7 @@
 namespace MediaWiki\StubObject;
 
 use InvalidArgumentException;
-use User;
+use MediaWiki\User\User;
 
 /**
  * Stub object for the global user ($wgUser) that makes it possible to change the
@@ -41,15 +41,13 @@ class StubGlobalUser extends StubObject {
 	/** @var User */
 	public $realUser;
 
-	/**
-	 * @param User $realUser
-	 */
 	public function __construct( User $realUser ) {
 		parent::__construct( 'wgUser' );
 		$this->realUser = $realUser;
 	}
 
 	/**
+	 * @deprecated since 1.35.
 	 * @return User
 	 */
 	// phpcs:ignore PSR2.Methods.MethodDeclaration.Underscore
@@ -111,7 +109,7 @@ class StubGlobalUser extends StubObject {
 		} else {
 			throw new InvalidArgumentException(
 				'$globalUser must be a User (or MediaWiki\StubObject\StubGlobalUser), got ' .
-				( is_object( $globalUser ) ? get_class( $globalUser ) : gettype( $globalUser ) )
+				get_debug_type( $globalUser )
 			);
 		}
 	}
@@ -154,4 +152,5 @@ class StubGlobalUser extends StubObject {
 	}
 }
 
+/** @deprecated class alias since 1.40 */
 class_alias( StubGlobalUser::class, 'StubGlobalUser' );

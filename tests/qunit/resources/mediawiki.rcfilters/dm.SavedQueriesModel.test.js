@@ -1,6 +1,7 @@
 /* eslint-disable camelcase */
 ( function () {
-	var filterDefinition = [ {
+	const rcfilters = require( 'mediawiki.rcfilters.filters.ui' );
+	const filterDefinition = [ {
 			name: 'group1',
 			type: 'send_unselected_if_any',
 			filters: [
@@ -103,16 +104,16 @@
 			}
 		},
 		removeHighlights = function ( data ) {
-			var copy = $.extend( true, {}, data );
+			const copy = $.extend( true, {}, data );
 			copy.queries[ 1234 ].data.highlights = {};
 			return copy;
 		};
 
 	QUnit.module( 'mediawiki.rcfilters - SavedQueriesModel' );
 
-	QUnit.test( 'Initializing queries', function ( assert ) {
-		var filtersModel = new mw.rcfilters.dm.FiltersViewModel(),
-			queriesModel = new mw.rcfilters.dm.SavedQueriesModel( filtersModel ),
+	QUnit.test( 'Initializing queries', ( assert ) => {
+		const filtersModel = new rcfilters.dm.FiltersViewModel(),
+			queriesModel = new rcfilters.dm.SavedQueriesModel( filtersModel ),
 			exampleQueryStructure = {
 				version: '2',
 				default: '1234',
@@ -204,7 +205,7 @@
 
 		filtersModel.initializeFilters( filterDefinition );
 
-		cases.forEach( function ( testCase ) {
+		cases.forEach( ( testCase ) => {
 			queriesModel.initialize( testCase.input );
 			assert.deepEqual(
 				queriesModel.getState(),
@@ -214,9 +215,9 @@
 		} );
 	} );
 
-	QUnit.test( 'Adding new queries', function ( assert ) {
-		var filtersModel = new mw.rcfilters.dm.FiltersViewModel(),
-			queriesModel = new mw.rcfilters.dm.SavedQueriesModel( filtersModel ),
+	QUnit.test( 'Adding new queries', ( assert ) => {
+		const filtersModel = new rcfilters.dm.FiltersViewModel(),
+			queriesModel = new rcfilters.dm.SavedQueriesModel( filtersModel ),
 			cases = [
 				{
 					methodParams: [
@@ -287,8 +288,8 @@
 		// Start with an empty saved queries model
 		queriesModel.initialize( {} );
 
-		cases.forEach( function ( testCase ) {
-			var itemID = queriesModel.addNewQuery.apply( queriesModel, testCase.methodParams ),
+		cases.forEach( ( testCase ) => {
+			const itemID = queriesModel.addNewQuery( ...testCase.methodParams ),
 				item = queriesModel.getItemByID( itemID );
 
 			assert.deepEqual(
@@ -313,11 +314,10 @@
 		} );
 	} );
 
-	QUnit.test( 'Manipulating queries', function ( assert ) {
-		var id1, id2, item1, matchingItem,
-			queriesStructure = {},
-			filtersModel = new mw.rcfilters.dm.FiltersViewModel(),
-			queriesModel = new mw.rcfilters.dm.SavedQueriesModel( filtersModel );
+	QUnit.test( 'Manipulating queries', ( assert ) => {
+		const queriesStructure = {},
+			filtersModel = new rcfilters.dm.FiltersViewModel(),
+			queriesModel = new rcfilters.dm.SavedQueriesModel( filtersModel );
 
 		filtersModel.initializeFilters( filterDefinition );
 
@@ -325,7 +325,7 @@
 		queriesModel.initialize( {} );
 
 		// Add items
-		id1 = queriesModel.addNewQuery(
+		const id1 = queriesModel.addNewQuery(
 			'New query 1',
 			{
 				group2: 'filter5',
@@ -333,7 +333,7 @@
 				group3__group3option1_color: 'c1'
 			}
 		);
-		id2 = queriesModel.addNewQuery(
+		const id2 = queriesModel.addNewQuery(
 			'New query 2',
 			{
 				filter1: '1',
@@ -341,7 +341,7 @@
 				invert: '1'
 			}
 		);
-		item1 = queriesModel.getItemByID( id1 );
+		const item1 = queriesModel.getItemByID( id1 );
 
 		assert.strictEqual(
 			item1.getID(),
@@ -411,7 +411,7 @@
 		);
 
 		// Find matching query
-		matchingItem = queriesModel.findMatchingQuery(
+		let matchingItem = queriesModel.findMatchingQuery(
 			{
 				group2: 'filter5',
 				group1__filter1_color: 'c5',
@@ -441,10 +441,9 @@
 		);
 	} );
 
-	QUnit.test( 'Testing invert property', function ( assert ) {
-		var itemID, item,
-			filtersModel = new mw.rcfilters.dm.FiltersViewModel(),
-			queriesModel = new mw.rcfilters.dm.SavedQueriesModel( filtersModel ),
+	QUnit.test( 'Testing invert property', ( assert ) => {
+		const filtersModel = new rcfilters.dm.FiltersViewModel(),
+			queriesModel = new rcfilters.dm.SavedQueriesModel( filtersModel ),
 			viewsDefinition = {
 				namespace: {
 					label: 'Namespaces',
@@ -490,13 +489,13 @@
 			group1__filter3: true,
 			invertGroup__invert: true
 		} );
-		itemID = queriesModel.addNewQuery(
+		let itemID = queriesModel.addNewQuery(
 			'label1', // Label
 			filtersModel.getMinimizedParamRepresentation(),
 			true, // isDefault
 			'2345' // ID
 		);
-		item = queriesModel.getItemByID( itemID );
+		let item = queriesModel.getItemByID( itemID );
 
 		assert.deepEqual(
 			item.getState(),

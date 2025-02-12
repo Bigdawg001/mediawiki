@@ -1,7 +1,5 @@
 <?php
 /**
- * Per-process memory cache for storing items.
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,12 +16,11 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup Cache
  */
 use Wikimedia\LightweightObjectStore\ExpirationAwareness;
 
 /**
- * Handles a simple LRU key/value map with a maximum number of entries
+ * Store key-value entries in a size-limited in-memory LRU cache.
  *
  * The last-modification timestamp of entries is internally tracked so that callers can
  * specify the maximum acceptable age of entries in calls to the has() method. As a convenience,
@@ -189,7 +186,7 @@ class MapCacheLRU implements ExpirationAwareness {
 			$this->ping( $key );
 
 			if ( !is_array( $this->cache[$key] ) ) {
-				$type = gettype( $this->cache[$key] );
+				$type = get_debug_type( $this->cache[$key] );
 				throw new UnexpectedValueException( "Cannot add field to non-array value ('$key' is $type)" );
 			}
 		} else {
@@ -277,6 +274,29 @@ class MapCacheLRU implements ExpirationAwareness {
 		}
 
 		return $value;
+	}
+
+	/**
+	 * Format a cache key string
+	 *
+	 * @since 1.41
+	 * @param string|int ...$components Key components
+	 * @return string
+	 */
+	public function makeKey( ...$components ) {
+		// Based on BagOStuff::makeKeyInternal, except without a required
+		// $keygroup prefix. While MapCacheLRU can and is used as cache for
+		// multiple groups of keys, it is equally common for the instance itself
+		// to represent a single group, and thus have keys where the first component
+		// can directly be a user-controlled variable.
+		$key = '';
+		foreach ( $components as $i => $component ) {
+			if ( $i > 0 ) {
+				$key .= ':';
+			}
+			$key .= strtr( $component, [ '%' => '%25', ':' => '%3A' ] );
+		}
+		return $key;
 	}
 
 	/**

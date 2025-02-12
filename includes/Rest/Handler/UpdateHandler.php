@@ -2,15 +2,15 @@
 
 namespace MediaWiki\Rest\Handler;
 
-use FormatJson;
-use IApiMessage;
-use MediaWiki\Rest\HttpException;
+use MediaWiki\Api\IApiMessage;
+use MediaWiki\Content\TextContent;
+use MediaWiki\Json\FormatJson;
+use MediaWiki\ParamValidator\TypeDef\ArrayDef;
+use MediaWiki\Rest\Handler;
 use MediaWiki\Rest\LocalizedHttpException;
-use MediaWiki\Rest\Validator\JsonBodyValidator;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
-use MWTimestamp;
-use TextContent;
+use MediaWiki\Utils\MWTimestamp;
 use Wikimedia\Message\MessageValue;
 use Wikimedia\ParamValidator\ParamValidator;
 
@@ -33,8 +33,6 @@ class UpdateHandler extends EditHandler {
 
 	/**
 	 * Sets the function to use for JSON diffs, for testing.
-	 *
-	 * @param callable $jsonDiffFunction
 	 */
 	public function setJsonDiffFunction( callable $jsonDiffFunction ) {
 		$this->jsonDiffFunction = $jsonDiffFunction;
@@ -49,43 +47,45 @@ class UpdateHandler extends EditHandler {
 				self::PARAM_SOURCE => 'path',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
+				self::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-update-title' ),
 			],
-		];
+		] + parent::getParamSettings();
 	}
 
 	/**
 	 * @inheritDoc
 	 */
-	public function getBodyValidator( $contentType ) {
-		if ( $contentType !== 'application/json' ) {
-			throw new HttpException( "Unsupported Content-Type",
-				415,
-				[ 'content_type' => $contentType ]
-			);
-		}
-
-		return new JsonBodyValidator( [
+	public function getBodyParamSettings(): array {
+		return [
 			'source' => [
 				self::PARAM_SOURCE => 'body',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-source' )
 			],
 			'comment' => [
 				self::PARAM_SOURCE => 'body',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => true,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-comment' )
 			],
 			'content_model' => [
 				self::PARAM_SOURCE => 'body',
 				ParamValidator::PARAM_TYPE => 'string',
 				ParamValidator::PARAM_REQUIRED => false,
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-contentmodel' )
 			],
 			'latest' => [
 				self::PARAM_SOURCE => 'body',
 				ParamValidator::PARAM_TYPE => 'array',
 				ParamValidator::PARAM_REQUIRED => false,
+				ArrayDef::PARAM_SCHEMA => ArrayDef::makeObjectSchema(
+					[ 'id' => 'integer' ],
+					[ 'timestamp' => 'string' ], // from GET response, will be ignored
+				),
+				Handler::PARAM_DESCRIPTION => new MessageValue( 'rest-param-desc-update-latest' )
 			],
-		] + $this->getTokenParamDefinition() );
+		] + $this->getTokenParamDefinition();
 	}
 
 	/**
@@ -93,6 +93,7 @@ class UpdateHandler extends EditHandler {
 	 */
 	protected function getActionModuleParameters() {
 		$body = $this->getValidatedBody();
+		'@phan-var array $body';
 
 		$title = $this->getTitleParameter();
 		$baseRevId = $body['latest']['id'] ?? 0;
@@ -105,7 +106,9 @@ class UpdateHandler extends EditHandler {
 			);
 		}
 
-		$token = $this->getToken() ?? $this->getUser()->getEditToken();
+		// Use a known good CSRF token if a token is not needed because we are
+		// using a method of authentication that protects against CSRF, like OAuth.
+		$token = $this->needsToken() ? $this->getToken() : $this->getUser()->getEditToken();
 
 		$params = [
 			'action' => 'edit',
@@ -165,10 +168,17 @@ class UpdateHandler extends EditHandler {
 
 		if ( $code === 'editconflict' ) {
 			$data = $this->getConflictData();
-			throw new LocalizedHttpException( $this->makeMessageValue( $msg ), 409, $data );
+			throw new LocalizedHttpException( MessageValue::newFromSpecifier( $msg ), 409, $data );
 		}
 
 		parent::throwHttpExceptionForActionModuleError( $msg, $statusCode );
+	}
+
+	protected function generateResponseSpec( string $method ): array {
+		$spec = parent::generateResponseSpec( $method );
+
+		$spec['404'] = [ '$ref' => '#/components/responses/GenericErrorResponse' ];
+		return $spec;
 	}
 
 	/**
@@ -186,6 +196,7 @@ class UpdateHandler extends EditHandler {
 	 */
 	private function getConflictData() {
 		$body = $this->getValidatedBody();
+		'@phan-var array $body';
 		$baseRevId = $body['latest']['id'] ?? 0;
 		$title = $this->titleParser->parseTitle( $this->getValidatedParams()['title'] );
 
@@ -252,5 +263,9 @@ class UpdateHandler extends EditHandler {
 
 		$json = ( $this->jsonDiffFunction )( $from->getText(), $to->getText(), 2 );
 		return FormatJson::decode( $json, true );
+	}
+
+	public function getResponseBodySchemaFileName( string $method ): ?string {
+		return 'includes/Rest/Handler/Schema/ExistingPageSource.json';
 	}
 }

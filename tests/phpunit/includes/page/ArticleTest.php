@@ -1,20 +1,20 @@
 <?php
 
+use MediaWiki\Context\RequestContext;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MainConfigSchema;
+use MediaWiki\Message\Message;
 use MediaWiki\Page\ParserOutputAccess;
-use MediaWiki\Parser\Parsoid\ParsoidOutputAccess;
+use MediaWiki\Parser\ParserOptions;
+use MediaWiki\Parser\ParserOutput;
+use MediaWiki\Status\Status;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
 
 /**
  * @group Database
  */
 class ArticleTest extends \MediaWikiIntegrationTestCase {
-
-	protected $tablesUsed = [
-		'revision',
-		'recentchanges',
-	];
 
 	/**
 	 * @param Title $title
@@ -22,7 +22,7 @@ class ArticleTest extends \MediaWikiIntegrationTestCase {
 	 *
 	 * @return Article
 	 */
-	private function newArticle( Title $title, User $user = null ): Article {
+	private function newArticle( Title $title, ?User $user = null ): Article {
 		if ( !$user ) {
 			$user = $this->getTestUser()->getUser();
 		}
@@ -37,32 +37,7 @@ class ArticleTest extends \MediaWikiIntegrationTestCase {
 	}
 
 	/**
-	 * @covers Article::__get
-	 * @covers Article::__set
-	 */
-	public function testGetOrSetOnNewProperty() {
-		$article = new Article( Title::newMainPage() );
-
-		$this->filterDeprecated(
-			'/Accessing Article::\$ext_someNewProperty/'
-		);
-		$this->filterDeprecated(
-			'/Setting Article::\$ext_someNewProperty/'
-		);
-		$article->ext_someNewProperty = 12;
-		$this->assertEquals( 12, $article->ext_someNewProperty,
-			"Article get/set magic on new field" );
-		$this->assertEquals( 12, $article->getPage()->ext_someNewProperty,
-			"Article get/set magic on new field" );
-		$article->ext_someNewProperty = -8;
-		$this->assertEquals( -8, $article->ext_someNewProperty,
-			"Article get/set magic on update to new field" );
-		$this->assertEquals( -8, $article->getPage()->ext_someNewProperty,
-			"Article get/set magic on new field" );
-	}
-
-	/**
-	 * @covers Article::__sleep
+	 * @covers \Article::__sleep
 	 */
 	public function testSerialization_fails() {
 		$article = new Article( Title::newMainPage() );
@@ -74,7 +49,7 @@ class ArticleTest extends \MediaWikiIntegrationTestCase {
 	/**
 	 * Tests that missing article page shows parser contents
 	 * of the well-known system message for NS_MEDIAWIKI pages
-	 * @covers Article::showMissingArticle
+	 * @covers \Article::showMissingArticle
 	 */
 	public function testMissingArticleMessage() {
 		// Use a well-known system message
@@ -91,7 +66,7 @@ class ArticleTest extends \MediaWikiIntegrationTestCase {
 
 	/**
 	 * Test if patrol footer is possible to show
-	 * @covers Article::showPatrolFooter
+	 * @covers \Article::showPatrolFooter
 	 * @dataProvider provideShowPatrolFooter
 	 */
 	public function testShowPatrolFooter( $group, $title, $editPageText, $isEditedBySameUser, $expectedResult ) {
@@ -145,7 +120,7 @@ class ArticleTest extends \MediaWikiIntegrationTestCase {
 	/**
 	 * Show patrol footer even if the page was moved (T162871).
 	 *
-	 * @covers Article::showPatrolFooter
+	 * @covers \Article::showPatrolFooter
 	 */
 	public function testShowPatrolFooterMovedPage() {
 		$oldTitle = Title::makeTitle( NS_USER, 'NewDraft' );
@@ -170,7 +145,7 @@ class ArticleTest extends \MediaWikiIntegrationTestCase {
 	/**
 	 * Ensure that content that is present in the parser cache will be used.
 	 *
-	 * @covers Article::generateContentOutput
+	 * @covers \Article::generateContentOutput
 	 */
 	public function testUsesCachedOutput() {
 		$title = $this->getExistingTestPage()->getTitle();
@@ -179,10 +154,7 @@ class ArticleTest extends \MediaWikiIntegrationTestCase {
 		$parserOutputAccess->method( 'getCachedParserOutput' )
 			->willReturn( new ParserOutput( 'Kittens' ) );
 
-		$parsoidOutputAccess = $this->createNoOpMock( ParsoidOutputAccess::class );
-
 		$this->setService( 'ParserOutputAccess', $parserOutputAccess );
-		$this->setService( 'ParsoidOutputAccess', $parsoidOutputAccess );
 
 		$article = $this->newArticle( $title );
 		$article->view();
@@ -192,7 +164,7 @@ class ArticleTest extends \MediaWikiIntegrationTestCase {
 	/**
 	 * Ensure that content that is present in the parser cache will be used.
 	 *
-	 * @covers Article::generateContentOutput
+	 * @covers \Article::generateContentOutput
 	 */
 	public function testOutputIsCached() {
 		$this->overrideConfigValue(
@@ -200,9 +172,11 @@ class ArticleTest extends \MediaWikiIntegrationTestCase {
 			[ 'WarmParsoidParserCache' => true ]
 			+ MainConfigSchema::getDefaultValue( MainConfigNames::ParsoidCacheConfig )
 		);
-
 		$title = $this->getExistingTestPage()->getTitle();
+		// Run any jobs enqueued by the creation of the test page
+		$this->runJobs( [ 'minJobs' => 0 ] );
 
+		$beforePreWarm = true;
 		$parserOutputAccess = $this->createNoOpMock(
 			ParserOutputAccess::class,
 			[ 'getCachedParserOutput', 'getParserOutput', ]
@@ -210,31 +184,93 @@ class ArticleTest extends \MediaWikiIntegrationTestCase {
 		$parserOutputAccess->method( 'getCachedParserOutput' )
 			->willReturn( null );
 		$parserOutputAccess
-			->expects( $this->once() ) // This is the key assertion in this test case.
+			->expects( $this->exactly( 2 ) ) // This is the key assertion in this test case.
 			->method( 'getParserOutput' )
-			->willReturn( Status::newGood( new ParserOutput( 'Old Kittens' ) ) );
-
-		$parsoidOutputAccess = $this->createNoOpMock(
-			ParsoidOutputAccess::class,
-			[ 'getParserOutput', 'supportsContentModel' ]
-		);
-		$parsoidOutputAccess->method( 'supportsContentModel' )
-			->willReturn( true );
-		$parsoidOutputAccess
-			->expects( $this->once() ) // This is the key assertion in this test case.
-			->method( 'getParserOutput' )
-			->willReturn( Status::newGood( new ParserOutput( 'New Kittens' ) ) );
+			->with(
+				$this->anything(),
+				$this->callback( function ( ParserOptions $parserOptions ) use ( &$beforePreWarm ) {
+					$expectedReason = $beforePreWarm ? 'page-view' : 'view';
+					$this->assertSame( $expectedReason, $parserOptions->getRenderReason() );
+					return true;
+				} ),
+				$this->anything(),
+				$this->callback( function ( $options ) use ( &$beforePreWarm ) {
+					if ( $beforePreWarm ) {
+						$this->assertTrue( (bool)( $options & ParserOutputAccess::OPT_NO_CHECK_CACHE ),
+							"The cache is not checked again" );
+						$this->assertTrue( (bool)( $options & ParserOutputAccess::OPT_LINKS_UPDATE ),
+							"WikiPage::triggerOpportunisticLinksUpdate is attempted" );
+					}
+					return true;
+				} )
+			)
+			->willReturnCallback( static function ( $page, $parserOptions, $revision, $options ) use ( &$beforePreWarm ) {
+				$content = $beforePreWarm ? 'Old Kittens' : 'New Kittens';
+				return Status::newGood( new ParserOutput( $content ) );
+			} );
 
 		$this->setService( 'ParserOutputAccess', $parserOutputAccess );
-		$this->setService( 'ParsoidOutputAccess', $parsoidOutputAccess );
 
 		$article = $this->newArticle( $title );
 		$article->view();
 
+		$beforePreWarm = false;
 		$this->runJobs( [ 'minJobs' => 1, 'maxJobs' => 1 ], [ 'type' => 'parsoidCachePrewarm' ] );
 
 		// This is just a sanity check, not the key assertion.
 		$this->assertStringContainsString( 'Old Kittens', $article->getContext()->getOutput()->getHTML() );
 	}
 
+	/**
+	 * Ensure that protection indicators are shown when the page is protected.
+	 * @covers \Article::showProtectionIndicator
+	 */
+	public function testShowProtectionIndicator() {
+		$this->overrideConfigValue(
+			MainConfigNames::EnableProtectionIndicators,
+			true
+		);
+		$title = $this->getExistingTestPage()->getTitle();
+		$article = $this->newArticle( $title );
+
+		$wikiPage = new WikiPage( $title );
+		$cascade = false;
+		$wikiPage->doUpdateRestrictions( [
+				'edit' => 'autoconfirmed',
+			],
+			[ 'edit' => 'infinity' ],
+			$cascade,
+			'Test reason',
+			$this->getTestSysop()->getUser()
+		);
+
+		$article->showProtectionIndicator();
+		$output = $article->getContext()->getOutput();
+		$this->assertArrayHasKey( 'protection-autoconfirmed', $output->getIndicators(), 'Protection indicators are shown when a page is protected' );
+
+		$templateTitle = Title::newFromText( 'CascadeProtectionTest', NS_TEMPLATE );
+		$this->editPage( $templateTitle, 'Some text here', 'Test', NS_TEMPLATE, $this->getTestSysop()->getUser() );
+		$articleTitle = $this->getExistingTestPage()->getTitle();
+		$this->editPage( $articleTitle, '{{CascadeProtectionTest}}', 'Test', NS_MAIN, $this->getTestSysop()->getUser() );
+		$wikiPage = new WikiPage( $articleTitle );
+		$cascade = true;
+		$wikiPage->doUpdateRestrictions( [
+				'edit' => 'sysop',
+			],
+			[ 'edit' => 'infinity' ],
+			$cascade,
+			'Test reason',
+			$this->getTestSysop()->getUser()
+		);
+
+		$template = $this->newArticle( $templateTitle );
+
+		$template->showProtectionIndicator();
+		$output = $template->getContext()->getOutput();
+		$this->assertArrayHasKey(
+			'protection-sysop-cascade',
+			$output->getIndicators(),
+			'Protection indicators are shown when a page protected using cascade protection'
+		);
+	}
 }

@@ -1,24 +1,26 @@
-( function () {
-	QUnit.module( 'mediawiki.api', QUnit.newMwEnvironment( {
-		beforeEach: function () {
-			this.server = this.sandbox.useFakeServer();
-			this.server.respondImmediately = true;
-		}
-	} ) );
+QUnit.module( 'mediawiki.api', ( hooks ) => {
+	const originalFormData = window.FormData;
+	hooks.beforeEach( function () {
+		this.server = this.sandbox.useFakeServer();
+		this.server.respondImmediately = true;
+	} );
+	hooks.afterEach( () => {
+		window.FormData = originalFormData;
+	} );
 
 	function sequence( responses ) {
-		var i = 0;
+		let i = 0;
 		return function ( request ) {
-			var response = responses[ i ];
+			const response = responses[ i ];
 			if ( response ) {
 				i++;
-				request.respond.apply( request, response );
+				request.respond( ...response );
 			}
 		};
 	}
 
 	function sequenceBodies( status, headers, bodies ) {
-		bodies.forEach( function ( body, i ) {
+		bodies.forEach( ( body, i ) => {
 			bodies[ i ] = [ status, headers, body ];
 		} );
 		return sequence( bodies );
@@ -26,142 +28,158 @@
 
 	// Utility to make inline use with an assert easier
 	function match( text, pattern ) {
-		var m = text.match( pattern );
-		return m && m[ 1 ] || null;
+		return text.match( pattern )?.[ 1 ];
 	}
 
 	QUnit.test( 'get()', function ( assert ) {
-		var api = new mw.Api();
+		const api = new mw.Api();
 
 		this.server.respond( [ 200, { 'Content-Type': 'application/json' }, '[]' ] );
 
-		return api.get( {} ).then( function ( data ) {
+		return api.get( {} ).then( ( data ) => {
 			assert.deepEqual( data, [], 'If request succeeds without errors, resolve deferred' );
 		} );
 	} );
 
-	QUnit.test( 'post()', function ( assert ) {
-		var api = new mw.Api();
+	QUnit.test( 'post()', async function ( assert ) {
+		const api = new mw.Api();
 
 		this.server.respond( [ 200, { 'Content-Type': 'application/json' }, '[]' ] );
 
-		return api.post( {} ).then( function ( data ) {
-			assert.deepEqual( data, [], 'Simple POST request' );
-		} );
+		const data = await api.post( {} );
+		assert.deepEqual( data, [], 'Simple POST request' );
 	} );
 
-	QUnit.test( 'API error errorformat=bc', function ( assert ) {
-		var api = new mw.Api();
+	QUnit.test( 'API error errorformat=bc', async function ( assert ) {
+		const api = new mw.Api();
 
 		this.server.respond( [ 200, { 'Content-Type': 'application/json' },
 			'{ "error": { "code": "unknown_action" } }'
 		] );
 
-		api.get( { action: 'doesntexist' } )
-			.fail( function ( errorCode ) {
-				assert.strictEqual( errorCode, 'unknown_action', 'API error should reject the deferred' );
-			} )
-			.always( assert.async() );
+		await assert.rejects(
+			api.get( { action: 'doesntexist' } ),
+			/^unknown_action$/,
+			'API error should reject the deferred'
+		);
 	} );
 
-	QUnit.test( 'API error errorformat!=bc', function ( assert ) {
-		var api = new mw.Api();
+	QUnit.test( 'API error errorformat!=bc', async function ( assert ) {
+		const api = new mw.Api();
 
 		this.server.respond( [ 200, { 'Content-Type': 'application/json' },
 			'{ "errors": [ { "code": "unknown_action", "key": "unknown-error", "params": [] } ] }'
 		] );
 
-		api.get( { action: 'doesntexist' } )
-			.fail( function ( errorCode ) {
-				assert.strictEqual( errorCode, 'unknown_action', 'API error should reject the deferred' );
-			} )
-			.always( assert.async() );
+		await assert.rejects(
+			api.get( { action: 'doesntexist' } ),
+			/^unknown_action$/,
+			'API error should reject the deferred'
+		);
 	} );
 
-	QUnit.test( 'FormData support', function ( assert ) {
-		var api = new mw.Api();
+	QUnit.test.if( 'FormData support [native]', !!window.FormData, async function ( assert ) {
+		const api = new mw.Api( { ajax: { url: '/FormData/api.php' } } );
 
-		this.server.respond( function ( request ) {
-			if ( window.FormData ) {
-				assert.false( /action=/.test( request.url ), 'Request has no query string' );
-				assert.true( request.requestBody instanceof FormData, 'Request uses FormData body' );
-			} else {
-				assert.false( /action=test/.test( request.url ), 'Request has no query string' );
-				assert.strictEqual( request.requestBody, 'action=test&format=json', 'Request uses query string body' );
-			}
+		let request;
+		this.server.respond( ( req ) => {
+			request = req;
+			req.respond( 200, { 'Content-Type': 'application/json' }, '[]' );
+		} );
+
+		await api.post( { action: 'test' }, { contentType: 'multipart/form-data' } );
+
+		assert.strictEqual( request.url, '/FormData/api.php', 'no query string' );
+		assert.true( request.requestBody instanceof FormData, 'Request uses FormData body' );
+	} );
+
+	QUnit.test( 'FormData support [fallback]', async function ( assert ) {
+		// Disable native (restored in afterEach)
+		window.FormData = undefined;
+
+		const api = new mw.Api( { ajax: { url: '/FormData/api.php' } } );
+
+		let request;
+		this.server.respond( ( req ) => {
+			request = req;
+			req.respond( 200, { 'Content-Type': 'application/json' }, '[]' );
+		} );
+
+		await api.post( { action: 'test' }, { contentType: 'multipart/form-data' } );
+
+		assert.strictEqual( request.url, '/FormData/api.php', 'no query string' );
+		assert.strictEqual( request.requestBody, 'action=test&format=json', 'Request uses query string body' );
+	} );
+
+	QUnit.test( 'Converting arrays to pipe-separated (string)', async function ( assert ) {
+		const api = new mw.Api();
+
+		let url;
+		this.server.respond( ( request ) => {
+			url = request.url;
 			request.respond( 200, { 'Content-Type': 'application/json' }, '[]' );
 		} );
 
-		return api.post( { action: 'test' }, { contentType: 'multipart/form-data' } );
+		await api.get( { test: [ 'foo', 'bar', 'baz' ] } );
+		assert.strictEqual( match( url, /test=([^&]+)/ ), 'foo%7Cbar%7Cbaz', 'Pipe-separated value was submitted' );
 	} );
 
-	QUnit.test( 'Converting arrays to pipe-separated (string)', function ( assert ) {
-		var api = new mw.Api();
+	QUnit.test( 'Converting arrays to pipe-separated (mw.Title)', async function ( assert ) {
+		const api = new mw.Api();
 
-		this.server.respond( function ( request ) {
-			assert.strictEqual( match( request.url, /test=([^&]+)/ ), 'foo%7Cbar%7Cbaz', 'Pipe-separated value was submitted' );
+		let url;
+		this.server.respond( ( request ) => {
+			url = request.url;
 			request.respond( 200, { 'Content-Type': 'application/json' }, '[]' );
 		} );
 
-		return api.get( { test: [ 'foo', 'bar', 'baz' ] } );
+		await api.get( { test: [ new mw.Title( 'Foo' ), new mw.Title( 'Bar' ) ] } );
+		assert.strictEqual( match( url, /test=([^&]+)/ ), 'Foo%7CBar', 'Pipe-separated value was submitted' );
 	} );
 
-	QUnit.test( 'Converting arrays to pipe-separated (mw.Title)', function ( assert ) {
-		var api = new mw.Api();
+	QUnit.test( 'Converting arrays to pipe-separated (misc primitives)', async function ( assert ) {
+		const api = new mw.Api();
 
-		this.server.respond( function ( request ) {
-			assert.strictEqual( match( request.url, /test=([^&]+)/ ), 'Foo%7CBar', 'Pipe-separated value was submitted' );
+		let url;
+		this.server.respond( ( request ) => {
+			url = request.url;
 			request.respond( 200, { 'Content-Type': 'application/json' }, '[]' );
 		} );
 
-		return api.get( { test: [ new mw.Title( 'Foo' ), new mw.Title( 'Bar' ) ] } );
+		// undefined/null should become empty string
+		await api.get( { test: [ true, false, undefined, null, 0, 1.2 ] } );
+		assert.strictEqual( match( url, /test=([^&]+)/ ), 'true%7Cfalse%7C%7C%7C0%7C1.2', 'Pipe-separated value was submitted' );
 	} );
 
-	QUnit.test( 'Converting arrays to pipe-separated (misc primitives)', function ( assert ) {
-		var api = new mw.Api();
+	QUnit.test( 'Omitting false booleans', async function ( assert ) {
+		const api = new mw.Api( { ajax: { url: '/booleans/api.php' } } );
 
-		this.server.respond( function ( request ) {
-			assert.strictEqual( match( request.url, /test=([^&]+)/ ), 'true%7Cfalse%7C%7C%7C0%7C1.2', 'Pipe-separated value was submitted' );
+		let url;
+		this.server.respond( ( request ) => {
+			url = request.url;
 			request.respond( 200, { 'Content-Type': 'application/json' }, '[]' );
 		} );
 
-		// undefined/null will become empty string
-		return api.get( { test: [ true, false, undefined, null, 0, 1.2 ] } );
+		// "foo" must be absent, "bar" must be present
+		await api.get( { foo: false, bar: true } );
+		assert.strictEqual( url, '/booleans/api.php?action=query&format=json&bar=true', 'url' );
 	} );
 
-	QUnit.test( 'Omitting false booleans', function ( assert ) {
-		var api = new mw.Api();
+	QUnit.test( 'getToken() - cached', async function ( assert ) {
+		mw.Api.resetTokenCacheForTest();
 
-		this.server.respond( function ( request ) {
-			assert.false( /foo/.test( request.url ), 'foo query parameter is not present' );
-			assert.true( /bar=true/.test( request.url ), 'bar query parameter is present with value true' );
-			request.respond( 200, { 'Content-Type': 'application/json' }, '[]' );
-		} );
-
-		return api.get( { foo: false, bar: true } );
-	} );
-
-	QUnit.test( 'getToken() - cached', function ( assert ) {
-		var api = new mw.Api(),
-			test = this;
+		const api = new mw.Api();
 
 		// Get csrfToken for local wiki, this should not make
 		// a request as it should be retrieved from mw.user.tokens.
-		return api.getToken( 'csrf' )
-			.then( function ( token ) {
-				assert.true( token.length > 0, 'Got a token' );
-			}, function ( err ) {
-				assert.strictEqual( err, '', 'API error' );
-			} )
-			.then( function () {
-				assert.strictEqual( test.server.requests.length, 0, 'Requests made' );
-			} );
+		const token = await api.getToken( 'csrf' );
+		assert.true( token.length > 0, 'token' );
+
+		assert.strictEqual( this.server.requests.length, 0, 'Requests made' );
 	} );
 
-	QUnit.test( 'getToken() - uncached', function ( assert ) {
-		var api = new mw.Api(),
-			firstDone = assert.async(),
-			secondDone = assert.async();
+	QUnit.test( 'getToken() - uncached', async function ( assert ) {
+		const api = new mw.Api();
 
 		this.server.respondWith( /type=testuncached/, [ 200, { 'Content-Type': 'application/json' },
 			'{ "query": { "tokens": { "testuncachedtoken": "good" } } }'
@@ -170,29 +188,17 @@
 		// Get a token of a type that isn't prepopulated by mw.user.tokens.
 		// Could use "block" or "delete" here, but those could in theory
 		// be added to mw.user.tokens, so use a fake one instead.
-		api.getToken( 'testuncached' )
-			.done( function ( token ) {
-				assert.strictEqual( token, 'good', 'The token' );
-			} )
-			.fail( function ( err ) {
-				assert.strictEqual( err, '', 'API error' );
-			} )
-			.always( firstDone );
+		const token = await api.getToken( 'testuncached' );
+		assert.strictEqual( token, 'good', 'token' );
 
-		api.getToken( 'testuncached' )
-			.done( function ( token ) {
-				assert.strictEqual( token, 'good', 'The cached token' );
-			} )
-			.fail( function ( err ) {
-				assert.strictEqual( err, '', 'API error' );
-			} )
-			.always( secondDone );
+		const token2 = await api.getToken( 'testuncached' );
+		assert.strictEqual( token2, 'good', 'token2' );
 
 		assert.strictEqual( this.server.requests.length, 1, 'Requests made' );
 	} );
 
-	QUnit.test( 'getToken() - error', function ( assert ) {
-		var api = new mw.Api();
+	QUnit.test( 'getToken() [api error]', async function ( assert ) {
+		const api = new mw.Api();
 
 		this.server.respondWith( /type=testerror/, sequenceBodies( 200, { 'Content-Type': 'application/json' },
 			[
@@ -201,66 +207,51 @@
 			]
 		) );
 
-		// Don't cache error (T67268)
-		return api.getToken( 'testerror' )
-			.catch( function ( err ) {
-				assert.strictEqual( err, 'bite-me', 'Expected error' );
+		// Error must not be cached, so that re-try may succeed (T67268)
+		await assert.rejects( api.getToken( 'testerror' ), /^bite-me$/, 'Expected error' );
 
-				return api.getToken( 'testerror' );
-			} )
-			.then( function ( token ) {
-				assert.strictEqual( token, 'good', 'The token' );
-			} );
+		const token = await api.getToken( 'testerror' );
+		assert.strictEqual( token, 'good', 'The token' );
 	} );
 
-	QUnit.test( 'getToken() - no query', function ( assert ) {
-		var api = new mw.Api(),
-			// Same-origin warning and missing query in response.
-			serverRsp = {
-				warnings: {
-					tokens: {
-						'*': 'Tokens may not be obtained when the same-origin policy is not applied.'
-					}
+	QUnit.test( 'getToken() [no query error]', async function ( assert ) {
+		const api = new mw.Api();
+		// Same-origin warning and missing query in response.
+		const serverRsp = {
+			warnings: {
+				tokens: {
+					'*': 'Tokens may not be obtained when the same-origin policy is not applied.'
 				}
-			};
+			}
+		};
 
 		this.server.respondWith( /type=testnoquery/, [ 200, { 'Content-Type': 'application/json' },
 			JSON.stringify( serverRsp )
 		] );
 
-		return api.getToken( 'testnoquery' )
-			.then( function () { assert.fail( 'Expected response missing a query to be rejected' ); } )
-			.catch( function ( err, rsp ) {
-				assert.strictEqual( err, 'query-missing', 'Expected no query error code' );
-				assert.deepEqual( rsp, serverRsp );
-			} );
+		const promise = api.getToken( 'testnoquery' );
+		await assert.rejects( promise, /^query-missing$/, 'Error code' );
+		const rspParam = await promise.catch( ( err, rsp ) => rsp );
+		assert.deepEqual( rspParam, serverRsp, 'response' );
 	} );
 
-	QUnit.test( 'getToken() - deprecated', function ( assert ) {
+	QUnit.test( 'getToken() [alias]', async function ( assert ) {
 		// Cache API endpoint from default to avoid cachehit in mw.user.tokens
-		var api = new mw.Api( { ajax: { url: '/postWithToken/api.php' } } ),
-			test = this;
+		const api = new mw.Api( { ajax: { url: '/postWithToken/api.php' } } );
 
 		this.server.respondWith( /type=csrf/, [ 200, { 'Content-Type': 'application/json' },
 			'{ "query": { "tokens": { "csrftoken": "csrfgood" } } }'
 		] );
 
-		// Get a token of a type that is in the legacy map.
-		return api.getToken( 'email' )
-			.done( function ( token ) {
-				assert.strictEqual( token, 'csrfgood', 'Token' );
-			} )
-			.fail( function ( err ) {
-				assert.strictEqual( err, '', 'API error' );
-			} )
-			.always( function () {
-				assert.strictEqual( test.server.requests.length, 1, 'Requests made' );
-			} );
+		// Try a type aliased by normalizeTokenType().
+		const token = await api.getToken( 'email' );
+		assert.strictEqual( token, 'csrfgood', 'Token' );
+
+		assert.strictEqual( this.server.requests.length, 1, 'Requests made' );
 	} );
 
-	QUnit.test( 'badToken()', function ( assert ) {
-		var api = new mw.Api(),
-			test = this;
+	QUnit.test( 'badToken() [custom]', async function ( assert ) {
+		const api = new mw.Api();
 
 		this.server.respondWith( /type=testbad/, sequenceBodies( 200, { 'Content-Type': 'application/json' },
 			[
@@ -269,21 +260,16 @@
 			]
 		) );
 
-		return api.getToken( 'testbad' )
-			.then( function () {
-				api.badToken( 'testbad' );
-				return api.getToken( 'testbad' );
-			} )
-			.then( function ( token ) {
-				assert.strictEqual( token, 'good', 'The token' );
-				assert.strictEqual( test.server.requests.length, 2, 'Requests made' );
-			} );
+		await api.getToken( 'testbad' );
+		api.badToken( 'testbad' );
 
+		const token = await api.getToken( 'testbad' );
+		assert.strictEqual( token, 'good', 'The token' );
+		assert.strictEqual( this.server.requests.length, 2, 'Requests made' );
 	} );
 
-	QUnit.test( 'badToken( legacy )', function ( assert ) {
-		var api = new mw.Api( { ajax: { url: '/badTokenLegacy/api.php' } } ),
-			test = this;
+	QUnit.test( 'badToken() [alias]', async function ( assert ) {
+		const api = new mw.Api( { ajax: { url: '/badTokenLegacy/api.php' } } );
 
 		this.server.respondWith( /type=csrf/, sequenceBodies( 200, { 'Content-Type': 'application/json' },
 			[
@@ -292,90 +278,75 @@
 			]
 		) );
 
-		return api.getToken( 'options' )
-			.then( function () {
-				api.badToken( 'options' );
-				return api.getToken( 'options' );
-			} )
-			.then( function ( token ) {
-				assert.strictEqual( token, 'goodlegacy', 'The token' );
-				assert.strictEqual( test.server.requests.length, 2, 'Request made' );
-			} );
+		await api.getToken( 'options' );
+		api.badToken( 'options' );
 
+		const token = await api.getToken( 'options' );
+		assert.strictEqual( token, 'goodlegacy', 'The token' );
+		assert.strictEqual( this.server.requests.length, 2, 'Request made' );
 	} );
 
-	QUnit.test( 'postWithToken( tokenType, params )', function ( assert ) {
-		var api = new mw.Api( { ajax: { url: '/postWithToken/api.php' } } );
+	QUnit.test( 'postWithToken( tokenType, params )', async function ( assert ) {
+		const api = new mw.Api( { ajax: { url: '/postWithToken/api.php' } } );
 
 		this.server.respondWith( 'GET', /type=testpost/, [ 200, { 'Content-Type': 'application/json' },
 			'{ "query": { "tokens": { "testposttoken": "good" } } }'
 		] );
-		this.server.respondWith( 'POST', /api/, function ( request ) {
-			if ( request.requestBody.indexOf( 'token=good' ) !== -1 ) {
+		this.server.respondWith( 'POST', /api/, ( request ) => {
+			if ( request.requestBody.includes( 'token=good' ) ) {
 				request.respond( 200, { 'Content-Type': 'application/json' },
 					'{ "example": { "foo": "quux" } }'
 				);
 			}
 		} );
 
-		return api.postWithToken( 'testpost', { action: 'example', key: 'foo' } )
-			.then( function ( data ) {
-				assert.deepEqual( data, { example: { foo: 'quux' } } );
-			} );
+		const data = await api.postWithToken( 'testpost', { action: 'example', key: 'foo' } );
+		assert.deepEqual( data, { example: { foo: 'quux' } } );
 	} );
 
-	QUnit.test( 'postWithToken( tokenType, params with assert )', function ( assert ) {
-		var api = new mw.Api( { ajax: { url: '/postWithToken/api.php' } } ),
-			test = this;
+	QUnit.test( 'postWithToken( tokenType, params with assert )', async function ( assert ) {
+		const api = new mw.Api( { ajax: { url: '/postWithToken/api.php' } } );
 
 		this.server.respondWith( /assert=user/, [ 200, { 'Content-Type': 'application/json' },
 			'{ "error": { "code": "assertuserfailed", "info": "Assertion failed" } }'
 		] );
 
-		return api.postWithToken( 'testassertpost', { action: 'example', key: 'foo', assert: 'user' } )
-			// Cast error to success and vice versa
-			.then( function () {
-				return $.Deferred().reject( 'Unexpected success' );
-			}, function ( errorCode ) {
-				assert.strictEqual( errorCode, 'assertuserfailed', 'getToken fails assert' );
-				return $.Deferred().resolve();
-			} )
-			.then( function () {
-				assert.strictEqual( test.server.requests.length, 1, 'Requests made' );
-			} );
+		await assert.rejects(
+			api.postWithToken( 'testassertpost', { action: 'example', key: 'foo', assert: 'user' } ),
+			/assertuserfailed/,
+			'errorcode'
+		);
 	} );
 
-	QUnit.test( 'postWithToken( tokenType, params, ajaxOptions )', function ( assert ) {
-		var api = new mw.Api(),
-			test = this;
+	QUnit.test( 'postWithToken( tokenType, params, ajaxOptions )', async function ( assert ) {
+		const api = new mw.Api();
 
 		this.server.respond( [ 200, { 'Content-Type': 'application/json' }, '{ "example": "quux" }' ] );
 
-		return api.postWithToken( 'csrf',
+		await api.postWithToken( 'csrf',
 			{ action: 'example' },
 			{
 				headers: {
 					'X-Foo': 'Bar'
 				}
 			}
-		).then( function () {
-			assert.strictEqual( test.server.requests[ 0 ].requestHeaders[ 'X-Foo' ], 'Bar', 'Header sent' );
+		);
+		assert.strictEqual( this.server.requests[ 0 ].requestHeaders[ 'X-Foo' ], 'Bar', 'Header sent' );
 
-			return api.postWithToken( 'csrf',
-				{ action: 'example' },
-				function () {
-					assert.true( false, 'This parameter cannot be a callback' );
-				}
-			);
-		} ).then( function ( data ) {
-			assert.strictEqual( data.example, 'quux' );
-
-			assert.strictEqual( test.server.requests.length, 2, 'Request made' );
-		} );
+		let called = 0;
+		const data = await api.postWithToken( 'csrf',
+			{ action: 'example' },
+			() => {
+				called++;
+			}
+		);
+		assert.strictEqual( called, 0, 'parameter cannot be a callback' );
+		assert.propEqual( data, { example: 'quux' }, 'data' );
+		assert.strictEqual( this.server.requests.length, 2, 'Request made' );
 	} );
 
-	QUnit.test( 'postWithToken() - badtoken', function ( assert ) {
-		var api = new mw.Api();
+	QUnit.test( 'postWithToken() - badtoken', async function ( assert ) {
+		const api = new mw.Api();
 
 		this.server.respondWith( /type=testbadtoken/, sequenceBodies( 200, { 'Content-Type': 'application/json' },
 			[
@@ -383,13 +354,13 @@
 				'{ "query": { "tokens": { "testbadtokentoken": "good" } } }'
 			]
 		) );
-		this.server.respondWith( 'POST', /api/, function ( request ) {
-			if ( request.requestBody.indexOf( 'token=bad' ) !== -1 ) {
+		this.server.respondWith( 'POST', /api/, ( request ) => {
+			if ( request.requestBody.includes( 'token=bad' ) ) {
 				request.respond( 200, { 'Content-Type': 'application/json' },
 					'{ "error": { "code": "badtoken" } }'
 				);
 			}
-			if ( request.requestBody.indexOf( 'token=good' ) !== -1 ) {
+			if ( request.requestBody.includes( 'token=good' ) ) {
 				request.respond( 200, { 'Content-Type': 'application/json' },
 					'{ "example": { "foo": "quux" } }'
 				);
@@ -400,15 +371,12 @@
 		// - Request: action=example -> badtoken error
 		// - Request: new token -> good
 		// - Request: action=example -> success
-		return api.postWithToken( 'testbadtoken', { action: 'example', key: 'foo' } )
-			.then( function ( data ) {
-				assert.deepEqual( data, { example: { foo: 'quux' } } );
-			} );
+		const data = await api.postWithToken( 'testbadtoken', { action: 'example', key: 'foo' } );
+		assert.deepEqual( data, { example: { foo: 'quux' } } );
 	} );
 
-	QUnit.test( 'postWithToken() - badtoken-cached', function ( assert ) {
-		var sequenceA,
-			api = new mw.Api();
+	QUnit.test( 'postWithToken() - badtoken-cached', async function ( assert ) {
+		const api = new mw.Api();
 
 		this.server.respondWith( /type=testonce/, sequenceBodies( 200, { 'Content-Type': 'application/json' },
 			[
@@ -416,16 +384,16 @@
 				'{ "query": { "tokens": { "testoncetoken": "good-B" } } }'
 			]
 		) );
-		sequenceA = sequenceBodies( 200, { 'Content-Type': 'application/json' },
+		const sequenceA = sequenceBodies( 200, { 'Content-Type': 'application/json' },
 			[
 				'{ "example": { "value": "A" } }',
 				'{ "error": { "code": "badtoken" } }'
 			]
 		);
-		this.server.respondWith( 'POST', /api/, function ( request ) {
-			if ( request.requestBody.indexOf( 'token=good-A' ) !== -1 ) {
+		this.server.respondWith( 'POST', /api/, ( request ) => {
+			if ( request.requestBody.includes( 'token=good-A' ) ) {
 				sequenceA( request );
-			} else if ( request.requestBody.indexOf( 'token=good-B' ) !== -1 ) {
+			} else if ( request.requestBody.includes( 'token=good-B' ) ) {
 				request.respond( 200, { 'Content-Type': 'application/json' },
 					'{ "example": { "value": "B" } }'
 				);
@@ -434,46 +402,118 @@
 
 		// - Request: new token -> A
 		// - Request: action=example
-		return api.postWithToken( 'testonce', { action: 'example', key: 'foo' } )
-			.then( function ( data ) {
-				assert.deepEqual( data, { example: { value: 'A' } } );
+		const data = await api.postWithToken( 'testonce', { action: 'example', key: 'foo' } );
+		assert.deepEqual( data, { example: { value: 'A' } } );
 
-				// - Request: action=example w/ token A -> badtoken error
-				// - Request: new token -> B
-				// - Request: action=example w/ token B -> success
-				return api.postWithToken( 'testonce', { action: 'example', key: 'bar' } );
-			} )
-			.then( function ( data ) {
-				assert.deepEqual( data, { example: { value: 'B' } } );
-			} );
-	} );
-
-	QUnit.module( 'mediawiki.api (2)', {
-		beforeEach: function () {
-			var self = this,
-				requests = this.requests = [];
-			this.api = new mw.Api();
-			this.sandbox.stub( $, 'ajax', function () {
-				var request = $.extend( {
-					abort: self.sandbox.spy()
-				}, $.Deferred() );
-				requests.push( request );
-				return request;
-			} );
-		}
+		// - Request: action=example w/ token A -> badtoken error
+		// - Request: new token -> B
+		// - Request: action=example w/ token B -> success
+		const data2 = await api.postWithToken( 'testonce', { action: 'example', key: 'bar' } );
+		assert.deepEqual( data2, { example: { value: 'B' } } );
 	} );
 
 	QUnit.test( '#abort', function ( assert ) {
-		this.api.get( {
-			a: 1
-		} );
-		this.api.post( {
-			b: 2
-		} );
-		this.api.abort();
-		assert.strictEqual( this.requests.length, 2, 'Check both requests triggered' );
-		this.requests.forEach( function ( request, i ) {
-			assert.true( request.abort.calledOnce, 'abort request number ' + i );
-		} );
+		this.sandbox.stub( $, 'ajax', ( options ) => $.Deferred().promise( {
+			abort: function () {
+				assert.step( options.type + ' aborted' );
+			}
+		} ) );
+		const api = new mw.Api();
+		api.get( { a: 1 } );
+		api.post( { b: 2 } );
+		api.abort();
+
+		assert.verifySteps( [
+			'GET aborted',
+			'POST aborted'
+		] );
 	} );
-}() );
+
+	function isAbortError( err ) {
+		return err instanceof DOMException && err.name === 'AbortError';
+	}
+
+	function assertErrorCodeEqualsDetails( assert, promise ) {
+		return promise.catch( ( code, details ) => {
+			assert.strictEqual( details, code, 'details and code are the same AbortError object' );
+		} );
+	}
+
+	function assertErrorTextStatus( assert, promise, expected ) {
+		return promise.catch( ( code, details ) => {
+			assert.strictEqual( details.textStatus, expected, 'details.textStatus' );
+		} );
+	}
+
+	const cases = {
+		'Simple promise': ( ajaxOptions ) => new mw.Api().get( {}, ajaxOptions ),
+		'Chained promise': ( ajaxOptions ) => new mw.Api().postWithToken( 'csrf', {}, ajaxOptions )
+	};
+
+	QUnit.test.each( 'Aborting using abortable promise', cases, async function ( assert, getPromise ) {
+		this.server.respondImmediately = false;
+		const promise = getPromise();
+		promise.abort();
+
+		await assert.rejects( promise, /^http$/, 'error code' );
+		await assertErrorTextStatus( assert, promise, 'abort' );
+	} );
+
+	QUnit.test.each( 'Aborting using abortable promise with mw.Api.AbortController', cases, async function ( assert, getPromise ) {
+		this.server.respondImmediately = false;
+		const abort = new mw.Api.AbortController();
+		const promise = getPromise( { signal: abort.signal } );
+		promise.abort();
+
+		await assert.rejects( promise, /^http$/, 'error code' );
+		await assertErrorTextStatus( assert, promise, 'abort' );
+	} );
+
+	QUnit.test.each( 'Aborting using abortable promise with native AbortController', cases, async function ( assert, getPromise ) {
+		this.server.respondImmediately = false;
+		const abort = new AbortController();
+		const promise = getPromise( { signal: abort.signal } );
+		promise.abort();
+
+		await assert.rejects( promise, /^http$/, 'error code' );
+		await assertErrorTextStatus( assert, promise, 'abort' );
+	} );
+
+	QUnit.test.each( 'Aborting using mw.Api.AbortController (pre-aborted signal)', cases, async ( assert, getPromise ) => {
+		const abort = new mw.Api.AbortController();
+		abort.abort();
+		const promise = getPromise( { signal: abort.signal } );
+
+		await assert.rejects( promise, isAbortError, 'AbortError instead of error code' );
+		await assertErrorCodeEqualsDetails( assert, promise );
+	} );
+
+	QUnit.test.each( 'Aborting using mw.Api.AbortController (signal abort event)', cases, async function ( assert, getPromise ) {
+		this.server.respondImmediately = false;
+		const abort = new mw.Api.AbortController();
+		const promise = getPromise( { signal: abort.signal } );
+		abort.abort();
+
+		await assert.rejects( promise, isAbortError, 'AbortError instead of error code' );
+		await assertErrorCodeEqualsDetails( assert, promise );
+	} );
+
+	QUnit.test.each( 'Aborting using Native AbortController (pre-aborted signal)', cases, async ( assert, getPromise ) => {
+		const abort = new AbortController();
+		abort.abort();
+		const promise = getPromise( { signal: abort.signal } );
+
+		await assert.rejects( promise, isAbortError, 'AbortError instead of error code' );
+		await assertErrorCodeEqualsDetails( assert, promise );
+	} );
+
+	QUnit.test.each( 'Aborting using Native AbortController (signal abort event)', cases, async function ( assert, getPromise ) {
+		this.server.respondImmediately = false;
+		const abort = new AbortController();
+		const promise = getPromise( { signal: abort.signal } );
+		abort.abort();
+
+		await assert.rejects( promise, isAbortError, 'AbortError instead of error code' );
+		await assertErrorCodeEqualsDetails( assert, promise );
+	} );
+} );

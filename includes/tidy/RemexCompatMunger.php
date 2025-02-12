@@ -2,6 +2,7 @@
 
 namespace MediaWiki\Tidy;
 
+use InvalidArgumentException;
 use Wikimedia\RemexHtml\HTMLData;
 use Wikimedia\RemexHtml\Serializer\Serializer;
 use Wikimedia\RemexHtml\Serializer\SerializerNode;
@@ -15,7 +16,7 @@ use Wikimedia\RemexHtml\TreeBuilder\TreeHandler;
  * @internal
  */
 class RemexCompatMunger implements TreeHandler {
-	private static $onlyInlineElements = [
+	private const ONLY_INLINE_ELEMENTS = [
 		"a" => true,
 		"abbr" => true,
 		"acronym" => true,
@@ -78,9 +79,8 @@ class RemexCompatMunger implements TreeHandler {
 	 * typically those that are themselves invisible in a browser's rendering.
 	 * This isn't a complete list, it's just the tags that we're likely to
 	 * encounter in practice.
-	 * @var array
 	 */
-	private static $metadataElements = [
+	private const METADATA_ELEMENTS = [
 		'style' => true,
 		'script' => true,
 		'link' => true,
@@ -89,7 +89,7 @@ class RemexCompatMunger implements TreeHandler {
 		'meta' => true,
 	];
 
-	private static $formattingElements = [
+	private const FORMATTING_ELEMENTS = [
 		'a' => true,
 		'b' => true,
 		'big' => true,
@@ -274,10 +274,10 @@ class RemexCompatMunger implements TreeHandler {
 		$parentData = $parent->snData;
 		$elementName = $element->htmlName;
 
-		$inline = isset( self::$onlyInlineElements[$elementName] );
+		$inline = isset( self::ONLY_INLINE_ELEMENTS[$elementName] );
 		$under = $preposition === TreeBuilder::UNDER;
 
-		if ( isset( self::$metadataElements[$elementName] )
+		if ( isset( self::METADATA_ELEMENTS[$elementName] )
 			&& !self::isTableOfContentsMarker( $element )
 		) {
 			// The element is a metadata element, that we allow to appear in
@@ -334,7 +334,7 @@ class RemexCompatMunger implements TreeHandler {
 			$elementData = $element->userData->snData;
 		}
 		if ( ( $parentData->isPWrapper || $parentData->isSplittable )
-			&& isset( self::$formattingElements[$elementName] )
+			&& isset( self::FORMATTING_ELEMENTS[$elementName] )
 		) {
 			$elementData->isSplittable = true;
 		}
@@ -382,7 +382,7 @@ class RemexCompatMunger implements TreeHandler {
 		while ( $node !== $cloneEnd ) {
 			$nextParent = $serializer->getParentNode( $node );
 			if ( $nextParent === $root ) {
-				throw new \Exception( 'Did not find end of clone range' );
+				throw new InvalidArgumentException( 'Did not find end of clone range' );
 			}
 			$nodes[] = $node;
 			if ( $node->snData->nonblankNodeCount === 0 ) {

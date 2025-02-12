@@ -29,10 +29,7 @@ use Wikimedia\Stats\Sample;
  * @since 1.41
  */
 interface MetricInterface {
-	/**
-	 * @param BaseMetricInterface $baseMetric
-	 * @param LoggerInterface $logger
-	 */
+
 	public function __construct( BaseMetricInterface $baseMetric, LoggerInterface $logger );
 
 	/** @return string */
@@ -55,12 +52,19 @@ interface MetricInterface {
 	public function getSamples(): array;
 
 	/**
+	 * Returns a count of samples recorded by the metric.
+	 *
+	 * @return int
+	 */
+	public function getSampleCount(): int;
+
+	/**
 	 * Sets sample rate on a new metric instance.
 	 *
 	 * @param float $sampleRate
-	 * @return CounterMetric|GaugeMetric|TimingMetric|NullMetric
+	 * @return self|NullMetric
 	 */
-	public function withSampleRate( float $sampleRate );
+	public function setSampleRate( float $sampleRate );
 
 	/**
 	 * Returns the list of defined label keys.
@@ -71,25 +75,46 @@ interface MetricInterface {
 
 	/**
 	 * Adds a label $key with $value.
+	 * Note that the order in which labels are added is significant for StatsD output.
+	 *
+	 * Example:
+	 * ```php
+	 * $statsFactory->getCounter( 'testMetric_total' )
+	 *     ->setLabel( 'first', 'foo' )
+	 *     ->setLabel( 'second', 'bar' )
+	 *     ->increment();
+	 * ```
+	 * statsd: "mediawiki.testMetric_total.foo.bar"
+	 * prometheus: "mediawiki_testMetric_total{ first='foo', second='bar' }
 	 *
 	 * @param string $key
 	 * @param string $value
-	 * @return CounterMetric|GaugeMetric|TimingMetric|NullMetric
+	 * @return self|NullMetric
 	 */
-	public function withLabel( string $key, string $value );
+	public function setLabel( string $key, string $value );
+
+	/**
+	 * Convenience function to set a number of labels at once.
+	 * @see ::setLabel
+	 * @param array<string,string> $labels
+	 * @return self|NullMetric
+	 */
+	public function setLabels( array $labels );
 
 	/**
 	 * Copies metric operation to StatsD at provided namespace.
 	 *
-	 * @param string $statsdNamespace
-	 * @return CounterMetric|GaugeMetric|TimingMetric|NullMetric
+	 * Takes a namespace or multiple namespaces.
+	 *
+	 * @param string|string[] $statsdNamespaces
+	 * @return self|NullMetric
 	 */
-	public function copyToStatsdAt( string $statsdNamespace );
+	public function copyToStatsdAt( $statsdNamespaces );
 
 	/**
 	 * Returns metric with cleared labels.
 	 *
-	 * @return CounterMetric|GaugeMetric|TimingMetric|NullMetric
+	 * @return self|NullMetric
 	 */
 	public function fresh();
 }

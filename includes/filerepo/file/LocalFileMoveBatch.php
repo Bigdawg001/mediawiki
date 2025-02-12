@@ -19,10 +19,13 @@
  */
 
 use MediaWiki\Logger\LoggerFactory;
+use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Status\Status;
 use MediaWiki\Title\Title;
 use Psr\Log\LoggerInterface;
 use Wikimedia\Rdbms\IDatabase;
+use Wikimedia\Rdbms\RawSQLValue;
 use Wikimedia\ScopedCallback;
 
 /**
@@ -37,13 +40,14 @@ class LocalFileMoveBatch {
 	/** @var Title */
 	protected $target;
 
+	/** @var string[] */
 	protected $cur;
 
+	/** @var string[][] */
 	protected $olds;
 
+	/** @var int */
 	protected $oldCount;
-
-	protected $archive;
 
 	/** @var IDatabase */
 	protected $db;
@@ -78,10 +82,6 @@ class LocalFileMoveBatch {
 	/** @var LocalFile|null */
 	private $targetFile;
 
-	/**
-	 * @param LocalFile $file
-	 * @param Title $target
-	 */
 	public function __construct( LocalFile $file, Title $target ) {
 		$this->file = $file;
 		$this->target = $target;
@@ -119,12 +119,12 @@ class LocalFileMoveBatch {
 		$this->oldCount = 0;
 		$archiveNames = [];
 
-		$result = $this->db->select( 'oldimage',
-			[ 'oi_archive_name', 'oi_deleted' ],
-			[ 'oi_name' => $this->oldName ],
-			__METHOD__,
-			[ 'FOR UPDATE' ] // ignore snapshot
-		);
+		$result = $this->db->newSelectQueryBuilder()
+			->select( [ 'oi_archive_name', 'oi_deleted' ] )
+			->forUpdate() // ignore snapshot
+			->from( 'oldimage' )
+			->where( [ 'oi_name' => $this->oldName ] )
+			->caller( __METHOD__ )->fetchResultSet();
 
 		foreach ( $result as $row ) {
 			$archiveNames[] = $row->oi_archive_name;
@@ -309,10 +309,10 @@ class LocalFileMoveBatch {
 
 		// Defer lock release until the transaction is committed.
 		if ( $this->db->trxLevel() ) {
-			$unlockScope->cancel();
+			ScopedCallback::cancel( $unlockScope );
 			$this->db->onTransactionResolution( function () {
 				$this->releaseLocks();
-			} );
+			}, __METHOD__ );
 		} else {
 			ScopedCallback::consume( $unlockScope );
 		}
@@ -373,25 +373,36 @@ class LocalFileMoveBatch {
 	protected function doDBUpdates() {
 		$dbw = $this->db;
 
-		// Update current image
-		$dbw->update(
-			'image',
-			[ 'img_name' => $this->newName ],
-			[ 'img_name' => $this->oldName ],
-			__METHOD__
+		$migrationStage = MediaWikiServices::getInstance()->getMainConfig()->get(
+			MainConfigNames::FileSchemaMigrationStage
 		);
+		if ( ( $migrationStage & SCHEMA_COMPAT_WRITE_NEW ) && $this->file->getFileIdFromName() ) {
+			$dbw->newUpdateQueryBuilder()
+				->update( 'file' )
+				->set( [ 'file_name' => $this->newName ] )
+				->where( [ 'file_id' => $this->file->getFileIdFromName() ] )
+				->caller( __METHOD__ )->execute();
+		}
+		// Update current image
+		$dbw->newUpdateQueryBuilder()
+			->update( 'image' )
+			->set( [ 'img_name' => $this->newName ] )
+			->where( [ 'img_name' => $this->oldName ] )
+			->caller( __METHOD__ )->execute();
 
 		// Update old images
-		$dbw->update(
-			'oldimage',
-			[
+		$dbw->newUpdateQueryBuilder()
+			->update( 'oldimage' )
+			->set( [
 				'oi_name' => $this->newName,
-				'oi_archive_name = ' . $dbw->strreplace( 'oi_archive_name',
-					$dbw->addQuotes( $this->oldName ), $dbw->addQuotes( $this->newName ) ),
-			],
-			[ 'oi_name' => $this->oldName ],
-			__METHOD__
-		);
+				'oi_archive_name' => new RawSQLValue( $dbw->strreplace(
+					'oi_archive_name',
+					$dbw->addQuotes( $this->oldName ),
+					$dbw->addQuotes( $this->newName )
+				) ),
+			] )
+			->where( [ 'oi_name' => $this->oldName ] )
+			->caller( __METHOD__ )->execute();
 	}
 
 	/**

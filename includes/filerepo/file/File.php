@@ -6,14 +6,25 @@
  * Represents files in a repository.
  */
 
+use MediaWiki\Config\ConfigException;
+use MediaWiki\Context\IContextSource;
 use MediaWiki\HookContainer\ProtectedHookAccessorTrait;
+use MediaWiki\Language\Language;
 use MediaWiki\Linker\LinkTarget;
+use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MainConfigNames;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\Page\PageIdentity;
 use MediaWiki\Permissions\Authority;
+use MediaWiki\PoolCounter\PoolCounterWorkViaCallback;
+use MediaWiki\Status\Status;
 use MediaWiki\Title\Title;
 use MediaWiki\User\UserIdentity;
+use Shellbox\Command\BoxedCommand;
+use Wikimedia\FileBackend\FileBackend;
+use Wikimedia\FileBackend\FSFile\FSFile;
+use Wikimedia\FileBackend\FSFile\TempFSFile;
+use Wikimedia\ObjectCache\WANObjectCache;
 
 /**
  * Base code for files.
@@ -65,7 +76,7 @@ use MediaWiki\User\UserIdentity;
  * @stable to extend
  * @ingroup FileAbstraction
  */
-abstract class File implements IDBAccessObject, MediaHandlerState {
+abstract class File implements MediaHandlerState {
 	use ProtectedHookAccessorTrait;
 
 	// Bitfield values akin to the revision deletion constants
@@ -120,48 +131,51 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	/** @var string Text of last error */
 	protected $lastError;
 
-	/** @var string Main part of the title, with underscores (Title::getDBkey) */
+	/** @var ?string The name that was used to access the file, before
+	 *       resolving redirects. Main part of the title, with underscores
+	 *       per Title::getDBkey().
+	 */
 	protected $redirected;
 
 	/** @var Title */
 	protected $redirectedTitle;
 
-	/** @var FSFile|false False if undefined */
+	/** @var FSFile|false|null False if undefined */
 	protected $fsFile;
 
-	/** @var MediaHandler */
+	/** @var MediaHandler|null */
 	protected $handler;
 
-	/** @var string The URL corresponding to one of the four basic zones */
+	/** @var string|null The URL corresponding to one of the four basic zones */
 	protected $url;
 
-	/** @var string File extension */
+	/** @var string|null File extension */
 	protected $extension;
 
 	/** @var string|null The name of a file from its title object */
 	protected $name;
 
-	/** @var string The storage path corresponding to one of the zones */
+	/** @var string|null The storage path corresponding to one of the zones */
 	protected $path;
 
 	/** @var string|null Relative path including trailing slash */
 	protected $hashPath;
 
-	/** @var int|false Number of pages of a multipage document, or false for
+	/** @var int|false|null Number of pages of a multipage document, or false for
 	 *    documents which aren't multipage documents
 	 */
 	protected $pageCount;
 
-	/** @var string|false URL of transformscript (for example thumb.php) */
+	/** @var string|false|null URL of transformscript (for example thumb.php) */
 	protected $transformScript;
 
 	/** @var Title */
 	protected $redirectTitle;
 
-	/** @var bool Whether the output of transform() for this file is likely to be valid. */
+	/** @var bool|null Whether the output of transform() for this file is likely to be valid. */
 	protected $canRender;
 
-	/** @var bool Whether this media file is in a format that is unlikely to
+	/** @var bool|null Whether this media file is in a format that is unlikely to
 	 *    contain viruses or malicious content
 	 */
 	protected $isSafeFile;
@@ -201,7 +215,6 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 *
 	 * @param PageIdentity|LinkTarget|string $title
 	 * @param string|false $exception Use 'exception' to throw an error on bad titles
-	 * @throws MWException
 	 * @return Title|null
 	 */
 	public static function normalizeTitle( $title, $exception = false ) {
@@ -228,7 +241,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 			$ret = Title::makeTitleSafe( NS_FILE, (string)$ret );
 		}
 		if ( !$ret && $exception !== false ) {
-			throw new MWException( "`$title` is not a valid file title." );
+			throw new RuntimeException( "`$title` is not a valid file title." );
 		}
 
 		return $ret;
@@ -347,7 +360,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 * @return string
 	 */
 	public function getExtension() {
-		if ( !isset( $this->extension ) ) {
+		if ( $this->extension === null ) {
 			$n = strrpos( $this->getName(), '.' );
 			$this->extension = self::normalizeExtension(
 				$n ? substr( $this->getName(), $n + 1 ) : '' );
@@ -371,7 +384,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 * @return Title
 	 */
 	public function getOriginalTitle() {
-		if ( $this->redirected ) {
+		if ( $this->redirected !== null ) {
 			return $this->getRedirectedTitle();
 		}
 
@@ -385,7 +398,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 * @return string
 	 */
 	public function getUrl() {
-		if ( !isset( $this->url ) ) {
+		if ( $this->url === null ) {
 			$this->assertRepoDefined();
 			$ext = $this->getExtension();
 			$this->url = $this->repo->getZoneUrl( 'public', $ext ) . '/' . $this->getUrlRel();
@@ -460,7 +473,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 * @return string|false ForeignAPIFile::getPath can return false
 	 */
 	public function getPath() {
-		if ( !isset( $this->path ) ) {
+		if ( $this->path === null ) {
 			$this->assertRepoDefined();
 			$this->path = $this->repo->getZonePath( 'public' ) . '/' . $this->getRel();
 		}
@@ -477,13 +490,15 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 */
 	public function getLocalRefPath() {
 		$this->assertRepoDefined();
-		if ( !isset( $this->fsFile ) ) {
-			$starttime = microtime( true );
+		if ( !$this->fsFile ) {
+			$timer = MediaWikiServices::getInstance()->getStatsFactory()
+				->getTiming( 'media_thumbnail_generate_fetchoriginal_seconds' )
+				->copyToStatsdAt( 'media.thumbnail.generate.fetchoriginal' )
+				->start();
+
 			$this->fsFile = $this->repo->getLocalReference( $this->getPath() );
 
-			$statTiming = microtime( true ) - $starttime;
-			MediaWikiServices::getInstance()->getStatsdDataFactory()->timing(
-				'media.thumbnail.generate.fetchoriginal', 1000 * $statTiming );
+			$timer->stop();
 
 			if ( !$this->fsFile ) {
 				$this->fsFile = false; // null => false; cache negative hits
@@ -493,6 +508,18 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 		return ( $this->fsFile )
 			? $this->fsFile->getPath()
 			: false;
+	}
+
+	/**
+	 * Add the file to a Shellbox command as an input file
+	 *
+	 * @since 1.43
+	 * @param BoxedCommand $command
+	 * @param string $boxedName
+	 * @return StatusValue
+	 */
+	public function addToShellboxCommand( BoxedCommand $command, string $boxedName ) {
+		return $this->repo->addShellboxInputFile( $command, $boxedName, $this->getVirtualUrl() );
 	}
 
 	/**
@@ -577,14 +604,13 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 * @param int $maxWidth Max width to display at
 	 * @param int $maxHeight Max height to display at
 	 * @param int $page
-	 * @throws MWException
 	 * @return array Array (width, height)
 	 * @since 1.35
 	 */
 	public function getDisplayWidthHeight( $maxWidth, $maxHeight, $page = 1 ) {
 		if ( !$maxWidth || !$maxHeight ) {
 			// should never happen
-			throw new MWException( 'Using a choice from $wgImageLimits that is 0x0' );
+			throw new ConfigException( 'Using a choice from $wgImageLimits that is 0x0' );
 		}
 
 		$width = $this->getWidth( $page );
@@ -851,19 +877,17 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	}
 
 	/**
-	 * Checks if the output of transform() for this file is likely
-	 * to be valid. If this is false, various user elements will
-	 * display a placeholder instead.
+	 * Checks if the output of transform() for this file is likely to be valid.
 	 *
-	 * Currently, this checks if the file is an image format
-	 * that can be converted to a format
-	 * supported by all browsers (namely GIF, PNG and JPEG),
-	 * or if it is an SVG image and SVG conversion is enabled.
+	 * In other words, this will return true if a thumbnail can be provided for this
+	 * image (e.g. if [[File:...|thumb]] produces a result on a wikitext page).
+	 *
+	 * If this is false, various user elements will display a placeholder instead.
 	 *
 	 * @return bool
 	 */
 	public function canRender() {
-		if ( !isset( $this->canRender ) ) {
+		if ( $this->canRender === null ) {
 			$this->canRender = $this->getHandler() && $this->handler->canRender( $this ) && $this->exists();
 		}
 
@@ -916,7 +940,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 * @return bool
 	 */
 	public function isSafeFile() {
-		if ( !isset( $this->isSafeFile ) ) {
+		if ( $this->isSafeFile === null ) {
 			$this->isSafeFile = $this->getIsSafeFileUncached();
 		}
 
@@ -995,7 +1019,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 * Overridden by LocalFile to actually query the DB
 	 *
 	 * @stable to override
-	 * @param int $flags Bitfield of File::READ_* constants
+	 * @param int $flags Bitfield of IDBAccessObject::READ_* constants
 	 */
 	public function load( $flags = 0 ) {
 	}
@@ -1027,7 +1051,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 * @return string|false
 	 */
 	private function getTransformScript() {
-		if ( !isset( $this->transformScript ) ) {
+		if ( $this->transformScript === null ) {
 			$this->transformScript = false;
 			if ( $this->repo ) {
 				$script = $this->repo->getThumbScriptUrl();
@@ -1230,7 +1254,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 						break;
 					}
 				} elseif ( $flags & self::RENDER_FORCE ) {
-					wfDebug( __METHOD__ . " forcing rendering per flag File::RENDER_FORCE" );
+					wfDebug( __METHOD__ . ": forcing rendering per flag File::RENDER_FORCE" );
 				}
 
 				// If the backend is ready-only, don't keep generating thumbnails
@@ -1242,6 +1266,8 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 
 				// Check to see if local transformation is disabled.
 				if ( !$this->repo->canTransformLocally() ) {
+					LoggerFactory::getInstance( 'thumbnail' )
+						->error( 'Local transform denied by configuration' );
 					$thumb = new MediaTransformError(
 						wfMessage(
 							'thumbnail_error',
@@ -1263,7 +1289,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 			}
 		} while ( false );
 
-		return is_object( $thumb ) ? $thumb : false;
+		return $thumb ?: false;
 	}
 
 	/**
@@ -1278,6 +1304,8 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 			->get( MainConfigNames::IgnoreImageErrors );
 
 		if ( !$this->repo->canTransformLocally() ) {
+			LoggerFactory::getInstance( 'thumbnail' )
+				->error( 'Local transform denied by configuration' );
 			return new MediaTransformError(
 				wfMessage(
 					'thumbnail_error',
@@ -1288,7 +1316,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 			);
 		}
 
-		$stats = MediaWikiServices::getInstance()->getStatsdDataFactory();
+		$statsFactory = MediaWikiServices::getInstance()->getStatsFactory();
 
 		$handler = $this->getHandler();
 
@@ -1309,14 +1337,20 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 			$this->generateBucketsIfNeeded( $normalisedParams, $flags );
 		}
 
+		# T367110
+		# Calls to doTransform() can recur back on $this->transform()
+		# depending on implementation. One such example is PagedTiffHandler.
+		# TimingMetric->start() and stop() cannot be used in this situation
+		# so we will track the time manually.
 		$starttime = microtime( true );
 
 		// Actually render the thumbnail...
 		$thumb = $handler->doTransform( $this, $tmpThumbPath, $thumbUrl, $transformParams );
 		$tmpFile->bind( $thumb ); // keep alive with $thumb
 
-		$statTiming = microtime( true ) - $starttime;
-		$stats->timing( 'media.thumbnail.generate.transform', 1000 * $statTiming );
+		$statsFactory->getTiming( 'media_thumbnail_generate_transform_seconds' )
+			->copyToStatsdAt( 'media.thumbnail.generate.transform' )
+			->observe( ( microtime( true ) - $starttime ) * 1000 );
 
 		if ( !$thumb ) { // bad params?
 			$thumb = false;
@@ -1331,8 +1365,11 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 		} elseif ( $this->repo && $thumb->hasFile() && !$thumb->fileIsSource() ) {
 			// Copy the thumbnail from the file system into storage...
 
-			$starttime = microtime( true );
+			$timer = $statsFactory->getTiming( 'media_thumbnail_generate_store_seconds' )
+				->copyToStatsdAt( 'media.thumbnail.generate.store' )
+				->start();
 
+			wfDebug( __METHOD__ . ": copying $tmpThumbPath to $thumbPath" );
 			$disposition = $this->getThumbDisposition( $thumbName );
 			$status = $this->repo->quickImport( $tmpThumbPath, $thumbPath, $disposition );
 			if ( $status->isOK() ) {
@@ -1341,8 +1378,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 				$thumb = $this->transformErrorOutput( $thumbPath, $thumbUrl, $transformParams, $flags );
 			}
 
-			$statTiming = microtime( true ) - $starttime;
-			$stats->timing( 'media.thumbnail.generate.store', 1000 * $statTiming );
+			$timer->stop();
 
 			// Give extensions a chance to do something with this thumbnail...
 			$this->getHookRunner()->onFileTransformed( $this, $thumb, $tmpThumbPath, $thumbPath );
@@ -1377,7 +1413,10 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 			return false;
 		}
 
-		$starttime = microtime( true );
+		$timer = MediaWikiServices::getInstance()->getStatsFactory()
+			->getTiming( 'media_thumbnail_generate_bucket_seconds' )
+			->copyToStatsdAt( 'media.thumbnail.generate.bucket' );
+		$timer->start();
 
 		$params['physicalWidth'] = $bucket;
 		$params['width'] = $bucket;
@@ -1392,19 +1431,16 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 
 		$thumb = $this->generateAndSaveThumb( $tmpFile, $params, $flags );
 
-		$buckettime = microtime( true ) - $starttime;
-
 		if ( !$thumb || $thumb->isError() ) {
 			return false;
 		}
+
+		$timer->stop();
 
 		$this->tmpBucketedThumbCache[$bucket] = $tmpFile->getPath();
 		// For the caching to work, we need to make the tmp file survive as long as
 		// this object exists
 		$tmpFile->bind( $this );
-
-		MediaWikiServices::getInstance()->getStatsdDataFactory()->timing(
-			'media.thumbnail.generate.bucket', 1000 * $buckettime );
 
 		return true;
 	}
@@ -1418,38 +1454,40 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 		if ( $this->repo
 			&& $this->getHandler()->supportsBucketing()
 			&& isset( $params['physicalWidth'] )
-			&& $bucket = $this->getThumbnailBucket( $params['physicalWidth'] )
 		) {
-			if ( $this->getWidth() != 0 ) {
-				$bucketHeight = round( $this->getHeight() * ( $bucket / $this->getWidth() ) );
-			} else {
-				$bucketHeight = 0;
-			}
-
-			// Try to avoid reading from storage if the file was generated by this script
-			if ( isset( $this->tmpBucketedThumbCache[$bucket] ) ) {
-				$tmpPath = $this->tmpBucketedThumbCache[$bucket];
-
-				if ( file_exists( $tmpPath ) ) {
-					return [
-						'path' => $tmpPath,
-						'width' => $bucket,
-						'height' => $bucketHeight
-					];
+			$bucket = $this->getThumbnailBucket( $params['physicalWidth'] );
+			if ( $bucket ) {
+				if ( $this->getWidth() != 0 ) {
+					$bucketHeight = round( $this->getHeight() * ( $bucket / $this->getWidth() ) );
+				} else {
+					$bucketHeight = 0;
 				}
-			}
 
-			$bucketPath = $this->getBucketThumbPath( $bucket );
+				// Try to avoid reading from storage if the file was generated by this script
+				if ( isset( $this->tmpBucketedThumbCache[$bucket] ) ) {
+					$tmpPath = $this->tmpBucketedThumbCache[$bucket];
 
-			if ( $this->repo->fileExists( $bucketPath ) ) {
-				$fsFile = $this->repo->getLocalReference( $bucketPath );
+					if ( file_exists( $tmpPath ) ) {
+						return [
+							'path' => $tmpPath,
+							'width' => $bucket,
+							'height' => $bucketHeight
+						];
+					}
+				}
 
-				if ( $fsFile ) {
-					return [
-						'path' => $fsFile->getPath(),
-						'width' => $bucket,
-						'height' => $bucketHeight
-					];
+				$bucketPath = $this->getBucketThumbPath( $bucket );
+
+				if ( $this->repo->fileExists( $bucketPath ) ) {
+					$fsFile = $this->repo->getLocalReference( $bucketPath );
+
+					if ( $fsFile ) {
+						return [
+							'path' => $fsFile->getPath(),
+							'width' => $bucket,
+							'height' => $bucketHeight
+						];
+					}
 				}
 			}
 		}
@@ -1523,22 +1561,13 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	}
 
 	/**
-	 * Hook into transform() to allow migration of thumbnail files
-	 * STUB
-	 * @stable to override
-	 * @param string $thumbName
-	 */
-	protected function migrateThumbFile( $thumbName ) {
-	}
-
-	/**
 	 * Get a MediaHandler instance for this file
 	 *
 	 * @return MediaHandler|false Registered MediaHandler for file's MIME type
 	 *   or false if none found
 	 */
 	public function getHandler() {
-		if ( !isset( $this->handler ) ) {
+		if ( !$this->handler ) {
 			$this->handler = MediaHandler::getHandler( $this->getMimeType() );
 		}
 
@@ -1644,7 +1673,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 * @param string|int|null $end Only revisions newer than $end will be returned
 	 * @param bool $inc Include the endpoints of the time range
 	 *
-	 * @return File[]
+	 * @return File[] Guaranteed to be in descending order
 	 */
 	public function getHistory( $limit = null, $start = null, $end = null, $inc = true ) {
 		return [];
@@ -1974,11 +2003,10 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	}
 
 	/**
-	 * @throws MWException
 	 * @return never
 	 */
 	protected function readOnlyError() {
-		throw new MWException( static::class . ': write operations are not supported' );
+		throw new LogicException( static::class . ': write operations are not supported' );
 	}
 
 	/**
@@ -2165,7 +2193,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 * @return int|false
 	 */
 	public function pageCount() {
-		if ( !isset( $this->pageCount ) ) {
+		if ( $this->pageCount === null ) {
 			if ( $this->getHandler() && $this->handler->isMultiPage( $this ) ) {
 				$this->pageCount = $this->handler->pageCount( $this );
 			} else {
@@ -2217,7 +2245,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 * @return string|false HTML
 	 * @return-taint escaped
 	 */
-	public function getDescriptionText( Language $lang = null ) {
+	public function getDescriptionText( ?Language $lang = null ) {
 		global $wgLang;
 
 		if ( !$this->repo || !$this->repo->fetchDescription ) {
@@ -2270,7 +2298,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 *   passed to the $audience parameter
 	 * @return UserIdentity|null
 	 */
-	public function getUploader( int $audience = self::FOR_PUBLIC, Authority $performer = null ): ?UserIdentity {
+	public function getUploader( int $audience = self::FOR_PUBLIC, ?Authority $performer = null ): ?UserIdentity {
 		return null;
 	}
 
@@ -2287,7 +2315,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 *   passed to the $audience parameter
 	 * @return null|string
 	 */
-	public function getDescription( $audience = self::FOR_PUBLIC, Authority $performer = null ) {
+	public function getDescription( $audience = self::FOR_PUBLIC, ?Authority $performer = null ) {
 		return null;
 	}
 
@@ -2406,9 +2434,10 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	}
 
 	/**
-	 * @return string
+	 * @return ?string The name that was used to access the file, before
+	 *         resolving redirects.
 	 */
-	public function getRedirected() {
+	public function getRedirected(): ?string {
 		return $this->redirected;
 	}
 
@@ -2416,7 +2445,7 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	 * @return Title|null
 	 */
 	protected function getRedirectedTitle() {
-		if ( $this->redirected ) {
+		if ( $this->redirected !== null ) {
 			if ( !$this->redirectTitle ) {
 				$this->redirectTitle = Title::makeTitle( NS_FILE, $this->redirected );
 			}
@@ -2428,10 +2457,10 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 	}
 
 	/**
-	 * @param string $from
-	 * @return void
+	 * @param string $from The name that was used to access the file, before
+	 *        resolving redirects.
 	 */
-	public function redirectedFrom( $from ) {
+	public function redirectedFrom( string $from ) {
 		$this->redirected = $from;
 	}
 
@@ -2454,21 +2483,19 @@ abstract class File implements IDBAccessObject, MediaHandlerState {
 
 	/**
 	 * Assert that $this->repo is set to a valid FileRepo instance
-	 * @throws MWException
 	 */
 	protected function assertRepoDefined() {
 		if ( !( $this->repo instanceof $this->repoClass ) ) {
-			throw new MWException( "A {$this->repoClass} object is not set for this File.\n" );
+			throw new LogicException( "A {$this->repoClass} object is not set for this File.\n" );
 		}
 	}
 
 	/**
 	 * Assert that $this->title is set to a Title
-	 * @throws MWException
 	 */
 	protected function assertTitleDefined() {
 		if ( !( $this->title instanceof Title ) ) {
-			throw new MWException( "A Title object is not set for this File.\n" );
+			throw new LogicException( "A Title object is not set for this File.\n" );
 		}
 	}
 

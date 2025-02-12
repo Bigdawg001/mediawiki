@@ -1,7 +1,5 @@
 <?php
 /**
- * Implements Special:ChangeEmail
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,13 +16,21 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
  */
 
+namespace MediaWiki\Specials;
+
+use ErrorPageError;
 use MediaWiki\Auth\AuthManager;
 use MediaWiki\Html\Html;
+use MediaWiki\HTMLForm\HTMLForm;
 use MediaWiki\Logger\LoggerFactory;
+use MediaWiki\Parser\Sanitizer;
+use MediaWiki\SpecialPage\FormSpecialPage;
+use MediaWiki\Status\Status;
 use MediaWiki\Title\Title;
+use MediaWiki\User\User;
+use PermissionsError;
 
 /**
  * Let users change their email address.
@@ -37,9 +43,6 @@ class SpecialChangeEmail extends FormSpecialPage {
 	 */
 	private $status;
 
-	/**
-	 * @param AuthManager $authManager
-	 */
 	public function __construct( AuthManager $authManager ) {
 		parent::__construct( 'ChangeEmail', 'editmyprivateinfo' );
 
@@ -77,7 +80,7 @@ class SpecialChangeEmail extends FormSpecialPage {
 			throw new ErrorPageError( 'changeemail', 'cannotchangeemail' );
 		}
 
-		$this->requireNamedUser( 'changeemail-no-info' );
+		$this->requireNamedUser( 'changeemail-no-info', 'exception-nologin', true );
 
 		// This could also let someone check the current email address, so
 		// require both permissions.
@@ -179,8 +182,12 @@ class SpecialChangeEmail extends FormSpecialPage {
 
 		// To prevent spam, rate limit adding a new address, but do
 		// not rate limit removing an address.
-		if ( $newAddr !== '' && $user->pingLimiter( 'changeemail' ) ) {
-			return Status::newFatal( 'actionthrottledtext' );
+		if ( $newAddr !== '' ) {
+			// Enforce permissions, user blocks, and rate limits
+			$status = $this->authorizeAction( 'changeemail' );
+			if ( !$status->isGood() ) {
+				return Status::wrap( $status );
+			}
 		}
 
 		$userLatest = $user->getInstanceForUpdate();
@@ -212,3 +219,6 @@ class SpecialChangeEmail extends FormSpecialPage {
 		return 'login';
 	}
 }
+
+/** @deprecated class alias since 1.41 */
+class_alias( SpecialChangeEmail::class, 'SpecialChangeEmail' );

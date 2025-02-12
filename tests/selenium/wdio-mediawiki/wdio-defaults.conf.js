@@ -15,6 +15,8 @@ const fs = require( 'fs' );
 const path = require( 'path' );
 const logPath = process.env.LOG_DIR || path.join( process.cwd(), 'tests/selenium/log' );
 const { makeFilenameDate, saveScreenshot, startVideo, stopVideo } = require( 'wdio-mediawiki' );
+// T355556: remove when T324766 is resolved
+const dns = require( 'dns' );
 
 if ( !process.env.MW_SERVER || !process.env.MW_SCRIPT_PATH ) {
 	throw new Error( 'MW_SERVER or MW_SCRIPT_PATH not defined.\nSee https://www.mediawiki.org/wiki/Selenium/How-to/Set_environment_variables\n' );
@@ -22,8 +24,8 @@ if ( !process.env.MW_SERVER || !process.env.MW_SCRIPT_PATH ) {
 
 /**
  * For more details documentation and available options:
- * - https://webdriver.io/docs/configurationfile/
- * - https://webdriver.io/docs/options/
+ * - https://webdriver.io/docs/configurationfile
+ * - https://webdriver.io/docs/configuration
  */
 exports.config = {
 	// ======
@@ -54,7 +56,7 @@ exports.config = {
 
 	maxInstances: 1,
 	capabilities: [ {
-		// For Chrome/Chromium https://sites.google.com/a/chromium.org/chromedriver/capabilities
+		// For Chrome/Chromium https://www.w3.org/TR/webdriver
 		browserName: 'chrome',
 		'goog:chromeOptions': {
 			// If DISPLAY is set, assume developer asked non-headless or CI with Xvfb.
@@ -64,7 +66,10 @@ exports.config = {
 				'--enable-automation',
 				...( process.env.DISPLAY ? [] : [ '--headless' ] ),
 				// Chrome sandbox does not work in Docker
-				...( fs.existsSync( '/.dockerenv' ) ? [ '--no-sandbox' ] : [] )
+				...( fs.existsSync( '/.dockerenv' ) ? [ '--no-sandbox' ] : [] ),
+				// Workaround inputs not working consistently post-navigation on Chrome 90
+				// https://issuetracker.google.com/issues/42322798
+				'--allow-pre-commit-input'
 			]
 		}
 	} ],
@@ -83,9 +88,9 @@ exports.config = {
 	bail: 0,
 	// Base for browser.url() and wdio-mediawiki/Page#openTitle()
 	baseUrl: process.env.MW_SERVER + process.env.MW_SCRIPT_PATH,
-	// See also: https://webdriver.io/docs/frameworks/
+	// See also: https://webdriver.io/docs/frameworks
 	framework: 'mocha',
-	// See also: https://mochajs.org/
+	// See also: https://mochajs.org
 	// The number of times to retry the entire specfile when it fails as a whole
 	specFileRetries: 1,
 	// Delay in seconds between the spec file retry attempts
@@ -97,15 +102,16 @@ exports.config = {
 		ui: 'bdd',
 		timeout: process.env.DEBUG ? ( 60 * 60 * 1000 ) : ( 60 * 1000 )
 	},
-	// See also: https://webdriver.io/docs/dot-reporter.html
+	// See also: https://webdriver.io/docs/dot-reporter
 	reporters: [
-		// See also: https://webdriver.io/docs/spec-reporter/
+		// See also: https://webdriver.io/docs/spec-reporter
 		'spec',
-		// See also: https://webdriver.io/docs/junit-reporter/
+		// See also: https://webdriver.io/docs/junit-reporter
 		[ 'junit', {
 			outputDir: logPath,
 			outputFileFormat: function () {
-				return `WDIO.xunit-${makeFilenameDate()}.xml`;
+				const random = Math.random().toString( 16 ).slice( 2, 10 );
+				return `WDIO.xunit-${ makeFilenameDate() }-${ random }.xml`;
 			}
 		} ]
 	],
@@ -115,12 +121,26 @@ exports.config = {
 	// =====
 
 	/**
+	 * Gets executed just before initializing the webdriver session and test framework.
+	 * It allows you to manipulate configurations depending on the capability or spec.
+	 *
+	 * @param {Object} config wdio configuration object
+	 * @param {Array.<Object>} capabilities list of capabilities details
+	 * @param {Array.<string>} specs List of spec file paths that are to be run
+	 */
+	// T355556: remove when T324766 is resolved
+	beforeSession: function () {
+		// eslint-disable-next-line n/no-unsupported-features/node-builtins
+		dns.setDefaultResultOrder( 'ipv4first' );
+	},
+
+	/**
 	 * Executed before a Mocha test starts.
 	 *
 	 * @param {Object} test Mocha Test object
 	 */
 	beforeTest: function ( test ) {
-		ffmpeg = startVideo( ffmpeg, `${test.parent}-${test.title}` );
+		ffmpeg = startVideo( ffmpeg, `${ test.parent }-${ test.title }` );
 	},
 
 	/**
@@ -128,8 +148,8 @@ exports.config = {
 	 *
 	 * @param {Object} test Mocha Test object
 	 */
-	afterTest: function ( test ) {
-		saveScreenshot( `${test.parent}-${test.title}` );
+	afterTest: async function ( test ) {
+		await saveScreenshot( `${ test.parent }-${ test.title }` );
 		stopVideo( ffmpeg );
 	}
 };

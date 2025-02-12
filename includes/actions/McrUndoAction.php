@@ -8,7 +8,10 @@
 use MediaWiki\CommentFormatter\CommentFormatter;
 use MediaWiki\CommentStore\CommentStore;
 use MediaWiki\CommentStore\CommentStoreComment;
+use MediaWiki\Config\Config;
+use MediaWiki\Context\IContextSource;
 use MediaWiki\Html\Html;
+use MediaWiki\HTMLForm\HTMLForm;
 use MediaWiki\Linker\Linker;
 use MediaWiki\MainConfigNames;
 use MediaWiki\Permissions\PermissionStatus;
@@ -17,7 +20,11 @@ use MediaWiki\Revision\RevisionLookup;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\RevisionRenderer;
 use MediaWiki\Revision\SlotRecord;
+use MediaWiki\SpecialPage\SpecialPage;
+use MediaWiki\Status\Status;
 use MediaWiki\Storage\EditResult;
+use MediaWiki\User\User;
+use Wikimedia\Rdbms\ReadOnlyMode;
 
 /**
  * Temporary action for MCR undos
@@ -36,25 +43,18 @@ use MediaWiki\Storage\EditResult;
  */
 class McrUndoAction extends FormAction {
 
-	protected $undo = 0, $undoafter = 0, $cur = 0;
+	protected int $undo = 0;
+	protected int $undoafter = 0;
+	protected int $cur = 0;
 
 	/** @var RevisionRecord|null */
 	protected $curRev = null;
 
-	/** @var ReadOnlyMode */
-	private $readOnlyMode;
-
-	/** @var RevisionLookup */
-	private $revisionLookup;
-
-	/** @var RevisionRenderer */
-	private $revisionRenderer;
-
-	/** @var CommentFormatter */
-	private $commentFormatter;
-
-	/** @var bool */
-	private $useRCPatrol;
+	private ReadOnlyMode $readOnlyMode;
+	private RevisionLookup $revisionLookup;
+	private RevisionRenderer $revisionRenderer;
+	private CommentFormatter $commentFormatter;
+	private bool $useRCPatrol;
 
 	/**
 	 * @param Article $article
@@ -105,12 +105,6 @@ class McrUndoAction extends FormAction {
 
 		$out = $this->getOutput();
 		$out->setRobotPolicy( 'noindex,nofollow' );
-		if ( $this->getContext()->getConfig()->get( MainConfigNames::UseMediaWikiUIEverywhere ) ) {
-			$out->addModuleStyles( [
-				'mediawiki.ui.input',
-				'mediawiki.ui.checkbox',
-			] );
-		}
 
 		// IP warning headers copied from EditPage
 		// (should more be copied?)
@@ -326,10 +320,11 @@ class McrUndoAction extends FormAction {
 			$parserOutput = $this->revisionRenderer
 				->getRenderedRevision( $rev, $parserOptions, $this->getAuthority() )
 				->getRevisionParserOutput();
-			$previewHTML = $parserOutput->getText( [
+			// TODO T371004 move runOutputPipeline out of $parserOutput
+			$previewHTML = $parserOutput->runOutputPipeline( $parserOptions, [
 				'enableSectionEditLinks' => false,
 				'includeDebugInfo' => true,
-			] );
+			] )->getContentHolderText();
 
 			$out->addParserOutputMetadata( $parserOutput );
 			if ( count( $parserOutput->getWarnings() ) ) {
@@ -354,11 +349,6 @@ class McrUndoAction extends FormAction {
 				$out->parseAsInterface( $note )
 			)
 		);
-
-		$pageViewLang = $this->getTitle()->getPageViewLanguage();
-		$attribs = [ 'lang' => $pageViewLang->getHtmlCode(), 'dir' => $pageViewLang->getDir(),
-			'class' => 'mw-content-' . $pageViewLang->getDir() ];
-		$previewHTML = Html::rawElement( 'div', $attribs, $previewHTML );
 
 		$out->addHTML( $previewhead . $previewHTML );
 	}
@@ -408,7 +398,7 @@ class McrUndoAction extends FormAction {
 
 					return $status;
 				} elseif ( !$status->isOK() ) {
-					if ( !$status->getErrors() ) {
+					if ( !$status->getMessages() ) {
 						$status->error( 'hookaborted' );
 					}
 					return $status;
@@ -480,7 +470,7 @@ class McrUndoAction extends FormAction {
 		];
 
 		if ( $request->getCheck( 'wpSummary' ) ) {
-			$ret['summarypreview']['default'] = Xml::tags(
+			$ret['summarypreview']['default'] = Html::rawElement(
 				'div',
 				[ 'class' => 'mw-summary-preview' ],
 				$this->commentFormatter->formatBlock(

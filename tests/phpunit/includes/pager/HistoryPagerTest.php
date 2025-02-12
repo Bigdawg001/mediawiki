@@ -1,5 +1,8 @@
 <?php
 
+use MediaWiki\Context\RequestContext;
+use MediaWiki\Output\OutputPage;
+use MediaWiki\Pager\HistoryPager;
 use MediaWiki\Request\FauxRequest;
 use MediaWiki\Revision\MutableRevisionRecord;
 use MediaWiki\Title\Title;
@@ -10,9 +13,9 @@ use Wikimedia\TestingAccessWrapper;
  * Test class for HistoryPager methods.
  *
  * @group Pager
+ * @group Database
  */
-class HistoryPagerTest extends MediaWikiLangTestCase {
-
+class HistoryPagerTest extends MediaWikiIntegrationTestCase {
 	/**
 	 * @param array $results for passing to FakeResultWrapper and deriving
 	 *  RevisionRecords and formatted comments.
@@ -87,7 +90,7 @@ class HistoryPagerTest extends MediaWikiLangTestCase {
 	}
 
 	/**
-	 * @covers HistoryPager::getBody
+	 * @covers \MediaWiki\Pager\HistoryPager::getBody
 	 */
 	public function testGetBodyEmpty() {
 		$pager = $this->getHistoryPager( [] );
@@ -97,7 +100,7 @@ class HistoryPagerTest extends MediaWikiLangTestCase {
 	}
 
 	/**
-	 * @covers HistoryPager::getBody
+	 * @covers \MediaWiki\Pager\HistoryPager::getBody
 	 */
 	public function testGetBodyOneHeading() {
 		$pager = $this->getHistoryPager(
@@ -122,7 +125,7 @@ class HistoryPagerTest extends MediaWikiLangTestCase {
 	}
 
 	/**
-	 * @covers HistoryPager::getBody
+	 * @covers \MediaWiki\Pager\HistoryPager::getBody
 	 */
 	public function testGetBodyTwoHeading() {
 		$pagerData = [
@@ -167,7 +170,7 @@ class HistoryPagerTest extends MediaWikiLangTestCase {
 	}
 
 	/**
-	 * @covers HistoryPager::getBody
+	 * @covers \MediaWiki\Pager\HistoryPager::getBody
 	 */
 	public function testGetBodyLastItem() {
 		$pagerData = [

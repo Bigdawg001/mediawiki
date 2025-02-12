@@ -1,7 +1,5 @@
 <?php
 /**
- * Implements Special:RunJobs
- *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -18,28 +16,31 @@
  * http://www.gnu.org/copyleft/gpl.html
  *
  * @file
- * @ingroup SpecialPage
  */
 
+namespace MediaWiki\Specials;
+
+use HttpStatus;
+use JobRunner;
+use MediaWiki\Deferred\DeferredUpdates;
+use MediaWiki\Deferred\TransactionRoundDefiningUpdate;
+use MediaWiki\Json\FormatJson;
 use MediaWiki\MainConfigNames;
+use MediaWiki\SpecialPage\UnlistedSpecialPage;
+use Wikimedia\Rdbms\ReadOnlyMode;
 
 /**
  * Special page designed for running background tasks (internal use only)
  *
+ * @internal
  * @ingroup SpecialPage
+ * @ingroup JobQueue
  */
 class SpecialRunJobs extends UnlistedSpecialPage {
 
-	/** @var JobRunner */
-	private $jobRunner;
+	private JobRunner $jobRunner;
+	private ReadOnlyMode $readOnlyMode;
 
-	/** @var ReadOnlyMode */
-	private $readOnlyMode;
-
-	/**
-	 * @param JobRunner $jobRunner
-	 * @param ReadOnlyMode $readOnlyMode
-	 */
 	public function __construct(
 		JobRunner $jobRunner,
 		ReadOnlyMode $readOnlyMode
@@ -142,3 +143,9 @@ class SpecialRunJobs extends UnlistedSpecialPage {
 		return hash_hmac( 'sha1', wfArrayToCgi( $query ), $secretKey );
 	}
 }
+
+/**
+ * Retain the old class name for backwards compatibility.
+ * @deprecated since 1.41
+ */
+class_alias( SpecialRunJobs::class, 'SpecialRunJobs' );

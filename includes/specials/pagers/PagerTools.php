@@ -1,5 +1,8 @@
 <?php
 
+namespace MediaWiki\Pager;
+
+use MediaWiki\Context\IContextSource;
 use MediaWiki\HookContainer\HookRunner;
 use MediaWiki\Html\Html;
 use MediaWiki\Linker\Linker;
@@ -12,12 +15,14 @@ use MediaWiki\Revision\RevisionRecord;
  * @since 1.40
  */
 class PagerTools {
+	/** @var bool */
 	private $preventClickjacking = false;
+	/** @var array */
 	private $tools = [];
 
 	/**
 	 * Generate a set of tools for a revision.
-	 * Will performs permission checks where necessary.
+	 * Will perform permission checks where necessary.
 	 * @param RevisionRecord $revRecord The revision to generate tools for.
 	 * @param RevisionRecord|null $previousRevRecord The previous revision (if any). Optional.
 	 *   Used to produce undo links.
@@ -42,9 +47,11 @@ class PagerTools {
 		$tools = [];
 		$authority = $context->getAuthority();
 		# Rollback and undo links
-		$userCanEditTitle = $authority->probablyCan( 'edit', $title );
-		if ( $showRollbackLink && $userCanEditTitle ) {
-			if ( $authority->probablyCan( 'rollback', $title ) ) {
+		if ( ( $showRollbackLink || $previousRevRecord )
+			// probablyCan loads page restriction data, call only when needed
+			&& $authority->probablyCan( 'edit', $title )
+		) {
+			if ( $showRollbackLink && $authority->probablyCan( 'rollback', $title ) ) {
 				// Get a rollback link without the brackets
 				$rollbackLink = Linker::generateRollback(
 					$revRecord,
@@ -53,12 +60,11 @@ class PagerTools {
 				);
 				if ( $rollbackLink ) {
 					$this->preventClickjacking = true;
-					$tools[] = $rollbackLink;
+					$tools['mw-rollback'] = $rollbackLink;
 				}
 			}
-		}
-		if ( $userCanEditTitle && $previousRevRecord ) {
-			if ( !$revRecord->isDeleted( RevisionRecord::DELETED_TEXT )
+			if ( $previousRevRecord
+				&& !$revRecord->isDeleted( RevisionRecord::DELETED_TEXT )
 				&& !$previousRevRecord->isDeleted( RevisionRecord::DELETED_TEXT )
 			) {
 				# Create undo tooltip for the first (=latest) line only
@@ -75,7 +81,7 @@ class PagerTools {
 						'undo' => $revRecord->getId()
 					]
 				);
-				$tools[] = "<span class=\"mw-history-undo\">{$undolink}</span>";
+				$tools['mw-undo'] = "<span class=\"mw-history-undo\">{$undolink}</span>";
 			}
 		}
 		// Allow extension to add their own links here
@@ -107,3 +113,9 @@ class PagerTools {
 		return $s2;
 	}
 }
+
+/**
+ * Retain the old class name for backwards compatibility.
+ * @deprecated since 1.41
+ */
+class_alias( PagerTools::class, 'PagerTools' );

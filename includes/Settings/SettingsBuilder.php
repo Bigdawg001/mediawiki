@@ -2,13 +2,12 @@
 
 namespace MediaWiki\Settings;
 
-use BagOStuff;
-use Config;
-use ExtensionRegistry;
-use HashConfig;
+use MediaWiki\Config\Config;
+use MediaWiki\Config\HashConfig;
 use MediaWiki\Config\IterableConfig;
 use MediaWiki\HookContainer\HookContainer;
 use MediaWiki\MainConfigNames;
+use MediaWiki\Registration\ExtensionRegistry;
 use MediaWiki\Settings\Cache\CacheableSource;
 use MediaWiki\Settings\Cache\CachedSource;
 use MediaWiki\Settings\Config\ConfigBuilder;
@@ -21,7 +20,9 @@ use MediaWiki\Settings\Source\FileSource;
 use MediaWiki\Settings\Source\SettingsFileUtils;
 use MediaWiki\Settings\Source\SettingsIncludeLocator;
 use MediaWiki\Settings\Source\SettingsSource;
+use RuntimeException;
 use StatusValue;
+use Wikimedia\ObjectCache\BagOStuff;
 use function array_key_exists;
 
 /**
@@ -131,6 +132,8 @@ class SettingsBuilder {
 	/** @var string[] */
 	private $warnings = [];
 
+	private static bool $accessDisabledForUnitTests = false;
+
 	/**
 	 * Accessor for the global SettingsBuilder instance.
 	 *
@@ -142,6 +145,10 @@ class SettingsBuilder {
 	 */
 	public static function getInstance(): self {
 		static $instance = null;
+
+		if ( self::$accessDisabledForUnitTests ) {
+			throw new RuntimeException( 'Access is disabled in unit tests' );
+		}
 
 		if ( !$instance ) {
 			// NOTE: SettingsBuilder is used during bootstrap, before MediaWikiServices
@@ -161,6 +168,26 @@ class SettingsBuilder {
 	}
 
 	/**
+	 * @internal
+	 */
+	public static function disableAccessForUnitTests(): void {
+		if ( !defined( 'MW_PHPUNIT_TEST' ) ) {
+			throw new RuntimeException( 'Can only be called in tests' );
+		}
+		self::$accessDisabledForUnitTests = true;
+	}
+
+	/**
+	 * @internal
+	 */
+	public static function enableAccessAfterUnitTests(): void {
+		if ( !defined( 'MW_PHPUNIT_TEST' ) ) {
+			throw new RuntimeException( 'Can only be called in tests' );
+		}
+		self::$accessDisabledForUnitTests = false;
+	}
+
+	/**
 	 * @param string $baseDir
 	 * @param ExtensionRegistry $extensionRegistry
 	 * @param ConfigBuilder $configSink
@@ -175,7 +202,7 @@ class SettingsBuilder {
 		ExtensionRegistry $extensionRegistry,
 		ConfigBuilder $configSink,
 		PhpIniSink $phpIniSink,
-		BagOStuff $cache = null
+		?BagOStuff $cache = null
 	) {
 		$this->baseDir = $baseDir;
 		$this->extensionRegistry = $extensionRegistry;
@@ -258,11 +285,6 @@ class SettingsBuilder {
 		return file_exists( $path );
 	}
 
-	/**
-	 * @param SettingsSource $source
-	 *
-	 * @return SettingsSource
-	 */
 	private function wrapSource( SettingsSource $source ): SettingsSource {
 		if ( $this->cache !== null && $source instanceof CacheableSource ) {
 			$source = new CachedSource( $this->cache, $source );
@@ -560,8 +582,6 @@ class SettingsBuilder {
 
 	/**
 	 * Apply the settings array.
-	 *
-	 * @param array $settings
 	 */
 	private function applySettings( array $settings ) {
 		// First extract config variables that change the behavior of SettingsBuilder.
@@ -808,8 +828,6 @@ class SettingsBuilder {
 	 * In addition, the updater will fail if it finds any warnings.
 	 * This allows us to warn about deprecated settings, and make sure they are
 	 * replaced before the update proceeds.
-	 *
-	 * @param string $msg
 	 */
 	public function warning( string $msg ) {
 		$this->assertNotReadOnly( __METHOD__ );
